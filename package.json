@@ -1,0 +1,27 @@
+{
+  "name": "solvernet-dex",
+  "private": true,
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "type-check": "turbo type-check",
+    "generate:plutus-types": "turbo generate:plutus-types --filter=@solvernet/shared",
+    "db:migrate": "pnpm --filter backend exec prisma migrate dev",
+    "db:generate": "pnpm --filter backend exec prisma generate",
+    "db:studio": "pnpm --filter backend exec prisma studio",
+    "db:seed": "pnpm --filter backend exec tsx src/infrastructure/database/seed.ts",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "prettier": "^3.4.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

@@ -1,0 +1,99 @@
+# ═══════════════════════════════════════════════════════════════
+# SolverNet DEX — Docker Compose (Development)
+# Full local development stack:
+#   PostgreSQL + Cardano Node (preprod) + Ogmios + Kupo + Backend
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  # ─────────────────────────────────────────
+  # PostgreSQL Database
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: solvernet-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: solvernet
+      POSTGRES_USER: solvernet
+      POSTGRES_PASSWORD: solvernet_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U solvernet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # Cardano Node (Preprod Testnet)
+  # First sync takes ~4-8 hours
+  # ─────────────────────────────────────────
+  cardano-node:
+    image: ghcr.io/intersectmbo/cardano-node:10.4.1
+    container_name: solvernet-cardano-node
+    restart: unless-stopped
+    environment:
+      NETWORK: preprod
+    volumes:
+      - cardano_data:/data
+      - cardano_ipc:/ipc
+    # Node exposes socket at /ipc/node.socket
+
+  # ─────────────────────────────────────────
+  # Ogmios — Cardano Node WebSocket Bridge
+  # ─────────────────────────────────────────
+  ogmios:
+    image: cardanosolutions/ogmios:v6.11.2
+    container_name: solvernet-ogmios
+    restart: unless-stopped
+    depends_on:
+      cardano-node:
+        condition: service_started
+    ports:
+      - "1337:1337"
+    volumes:
+      - cardano_ipc:/ipc
+    command:
+      [
+        "--host", "0.0.0.0",
+        "--node-socket", "/ipc/node.socket",
+        "--node-config", "/config/cardano-node/config.json"
+      ]
+
+  # ─────────────────────────────────────────
+  # Kupo — Fast UTxO Indexer
+  # ─────────────────────────────────────────
+  kupo:
+    image: cardanosolutions/kupo:v2.9.0
+    container_name: solvernet-kupo
+    restart: unless-stopped
+    depends_on:
+      cardano-node:
+        condition: service_started
+    ports:
+      - "1442:1442"
+    volumes:
+      - cardano_ipc:/ipc
+      - kupo_data:/db
+    command:
+      [
+        "--host", "0.0.0.0",
+        "--port", "1442",
+        "--node-socket", "/ipc/node.socket",
+        "--node-config", "/config/cardano-node/config.json",
+        "--since", "origin",
+        "--match", "*",
+        "--workdir", "/db"
+      ]
+
+volumes:
+  postgres_data:
+    driver: local
+  cardano_data:
+    driver: local
+  cardano_ipc:
+    driver: local
+  kupo_data:
+    driver: local

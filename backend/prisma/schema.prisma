@@ -1,0 +1,241 @@
+// ═══════════════════════════════════════════
+// SolverNet DEX — Prisma Database Schema
+// ═══════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")  // <--- Thêm dòng này vào
+}
+// ─── Intent (Escrow) ─────────────────────────
+model Intent {
+  id               String       @id @default(cuid())
+  status           IntentStatus @default(CREATED)
+  creator          String       @db.VarChar(200)
+  inputPolicyId    String       @db.VarChar(64)
+  inputAssetName   String       @db.VarChar(128)
+  inputAmount      Decimal      @db.Decimal(38, 0) // BigInt as Decimal
+  outputPolicyId   String       @db.VarChar(64)
+  outputAssetName  String       @db.VarChar(128)
+  minOutput        Decimal      @db.Decimal(38, 0)
+  actualOutput     Decimal?     @db.Decimal(38, 0)
+  deadline         BigInt
+  partialFill      Boolean      @default(false)
+  maxPartialFills  Int          @default(1)
+  fillCount        Int          @default(0)
+  remainingInput   Decimal      @db.Decimal(38, 0)
+  escrowTxHash     String?      @db.VarChar(64)
+  escrowOutputIdx  Int?
+  settlementTxHash String?      @db.VarChar(64)
+  solverAddress    String?      @db.VarChar(200)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  settledAt        DateTime?
+
+  @@index([creator])
+  @@index([status])
+  @@index([deadline])
+  @@index([escrowTxHash, escrowOutputIdx])
+  @@map("intents")
+}
+
+enum IntentStatus {
+  CREATED
+  PENDING
+  ACTIVE
+  FILLING
+  FILLED
+  CANCELLED
+  EXPIRED
+  RECLAIMED
+}
+
+// ─── Liquidity Pool ──────────────────────────
+model Pool {
+  id                 String    @id @default(cuid())
+  poolNftPolicyId    String    @db.VarChar(64)
+  poolNftAssetName   String    @db.VarChar(128)
+  assetAPolicyId     String    @db.VarChar(64)
+  assetAAssetName    String    @db.VarChar(128)
+  assetADecimals     Int       @default(0)
+  assetATicker       String?   @db.VarChar(32)
+  assetBPolicyId     String    @db.VarChar(64)
+  assetBAssetName    String    @db.VarChar(128)
+  assetBDecimals     Int       @default(0)
+  assetBTicker       String?   @db.VarChar(32)
+  reserveA           Decimal   @db.Decimal(38, 0)
+  reserveB           Decimal   @db.Decimal(38, 0)
+  totalLpTokens      Decimal   @db.Decimal(38, 0)
+  feeNumerator       Int
+  protocolFeeAccA    Decimal   @default(0) @db.Decimal(38, 0)
+  protocolFeeAccB    Decimal   @default(0) @db.Decimal(38, 0)
+  tvlAda             Decimal   @default(0) @db.Decimal(38, 0)
+  volume24h          Decimal   @default(0) @db.Decimal(38, 0)
+  fees24h            Decimal   @default(0) @db.Decimal(38, 0)
+  txHash             String    @db.VarChar(64)
+  outputIndex        Int
+  state              PoolState @default(ACTIVE)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  history PoolHistory[]
+  swaps   Swap[]
+
+  @@unique([poolNftPolicyId, poolNftAssetName])
+  @@unique([assetAPolicyId, assetAAssetName, assetBPolicyId, assetBAssetName])
+  @@index([state])
+  @@map("pools")
+}
+
+enum PoolState {
+  ACTIVE
+  INACTIVE
+  CREATING
+}
+
+// ─── Pool History Snapshots ──────────────────
+model PoolHistory {
+  id        String   @id @default(cuid())
+  poolId    String
+  pool      Pool     @relation(fields: [poolId], references: [id])
+  reserveA  Decimal  @db.Decimal(38, 0)
+  reserveB  Decimal  @db.Decimal(38, 0)
+  tvlAda    Decimal  @db.Decimal(38, 0)
+  volume    Decimal  @db.Decimal(38, 0)
+  fees      Decimal  @db.Decimal(38, 0)
+  price     Decimal  @db.Decimal(30, 15)
+  timestamp DateTime @default(now())
+
+  @@index([poolId, timestamp])
+  @@map("pool_history")
+}
+
+// ─── Swap Records ────────────────────────────
+model Swap {
+  id              String   @id @default(cuid())
+  poolId          String
+  pool            Pool     @relation(fields: [poolId], references: [id])
+  txHash          String   @db.VarChar(64)
+  direction       String   @db.VarChar(4) // AToB or BToA
+  inputAmount     Decimal  @db.Decimal(38, 0)
+  outputAmount    Decimal  @db.Decimal(38, 0)
+  fee             Decimal  @db.Decimal(38, 0)
+  priceImpact     Float
+  senderAddress   String   @db.VarChar(200)
+  intentId        String?
+  timestamp       DateTime @default(now())
+
+  @@index([poolId, timestamp])
+  @@index([senderAddress])
+  @@index([txHash])
+  @@map("swaps")
+}
+
+// ─── Orders (Limit, DCA, StopLoss) ───────────
+model Order {
+  id                String      @id @default(cuid())
+  type              OrderType
+  creator           String      @db.VarChar(200)
+  inputPolicyId     String      @db.VarChar(64)
+  inputAssetName    String      @db.VarChar(128)
+  outputPolicyId    String      @db.VarChar(64)
+  outputAssetName   String      @db.VarChar(128)
+  inputAmount       Decimal?    @db.Decimal(38, 0)
+  priceNumerator    Decimal?    @db.Decimal(38, 0)
+  priceDenominator  Decimal?    @db.Decimal(38, 0)
+  totalBudget       Decimal?    @db.Decimal(38, 0)
+  amountPerInterval Decimal?    @db.Decimal(38, 0)
+  intervalSlots     Int?
+  remainingBudget   Decimal?    @db.Decimal(38, 0)
+  executedIntervals Int?        @default(0)
+  deadline          BigInt
+  status            OrderStatus @default(CREATED)
+  escrowTxHash      String?     @db.VarChar(64)
+  escrowOutputIdx   Int?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([creator])
+  @@index([status])
+  @@index([type])
+  @@map("orders")
+}
+
+enum OrderType {
+  LIMIT
+  DCA
+  STOP_LOSS
+}
+
+enum OrderStatus {
+  CREATED
+  PENDING
+  ACTIVE
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+// ─── Analytics ───────────────────────────────
+model ProtocolStats {
+  id             String   @id @default(cuid())
+  tvl            Decimal  @db.Decimal(38, 0)
+  volume24h      Decimal  @db.Decimal(38, 0)
+  volume7d       Decimal  @db.Decimal(38, 0)
+  fees24h        Decimal  @db.Decimal(38, 0)
+  totalPools     Int
+  totalIntents   Int
+  intentsFilled  Int
+  uniqueTraders  Int
+  timestamp      DateTime @default(now())
+
+  @@index([timestamp])
+  @@map("protocol_stats")
+}
+
+// ─── OHLCV Candlestick Data ──────────────────
+// Stores aggregated candlestick (OHLCV) data for TradingView-style charts.
+// Each row = one candle for a specific pool + time interval.
+model Candle {
+  id         String         @id @default(cuid())
+  poolId     String         @db.VarChar(64)
+  interval   CandleInterval
+  openTime   DateTime       // Start of the candle period
+  closeTime  DateTime       // End of the candle period
+  open       Decimal        @db.Decimal(30, 15) // Price at period start
+  high       Decimal        @db.Decimal(30, 15) // Highest price in period
+  low        Decimal        @db.Decimal(30, 15) // Lowest price in period
+  close      Decimal        @db.Decimal(30, 15) // Price at period end
+  volume     Decimal        @db.Decimal(38, 0)  // Total input volume (lovelace)
+  txCount    Int            @default(0)         // Number of swaps in period
+
+  @@unique([poolId, interval, openTime])
+  @@index([poolId, interval, openTime])
+  @@index([openTime])
+  @@map("candles")
+}
+
+enum CandleInterval {
+  H4     // 4 hours  (smallest stored interval — free tier storage optimization)
+  D1     // 1 day
+  W1     // 1 week
+}
+
+// ─── Price Tick (raw trade prices) ───────────
+// Stores every swap price for real-time aggregation.
+// Smaller than full Swap record — only what charts need.
+model PriceTick {
+  id        String   @id @default(cuid())
+  poolId    String   @db.VarChar(64)
+  price     Decimal  @db.Decimal(30, 15) // Asset A price in terms of Asset B
+  volume    Decimal  @db.Decimal(38, 0)  // Trade volume
+  timestamp DateTime @default(now())
+
+  @@index([poolId, timestamp])
+  @@map("price_ticks")
+}

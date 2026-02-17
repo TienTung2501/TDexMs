@@ -1,0 +1,10 @@
+node_modules
+dist
+.git
+.env
+*.md
+.prettierrc
+.eslintrc*
+*.log
+cardano-data
+kupo-data

@@ -1,0 +1,27 @@
+# ═══════════════════════════════════════════════════════════════
+# SolverNet DEX — Minimal Docker Compose (Database Only)
+# Use this for fast local development (without Cardano node)
+# ═══════════════════════════════════════════════════════════════
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: solvernet-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: solvernet
+      POSTGRES_USER: solvernet
+      POSTGRES_PASSWORD: solvernet_dev
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U solvernet"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
