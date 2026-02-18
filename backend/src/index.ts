@@ -80,7 +80,7 @@ async function main(): Promise<void> {
   });
 
   // Chain abstractions
-  const _chainProvider = new ChainProvider(blockfrost);
+  const chainProvider = new ChainProvider(blockfrost);
   const txBuilder = new TxBuilder(
     env.CARDANO_NETWORK as 'preprod' | 'preview' | 'mainnet',
     env.BLOCKFROST_URL,
@@ -140,6 +140,7 @@ async function main(): Promise<void> {
       maxRetries: env.SOLVER_MAX_RETRIES,
       minProfitLovelace: BigInt(env.SOLVER_MIN_PROFIT_LOVELACE),
       enabled: env.SOLVER_ENABLED,
+      solverAddress: env.SOLVER_ADDRESS,
     },
     intentCollector,
     routeOptimizer,
@@ -147,6 +148,8 @@ async function main(): Promise<void> {
     blockfrost,
     intentRepo,
     wsServer,
+    txBuilder,
+    chainProvider,
   );
 
   // ──────────────────────────────────────────────

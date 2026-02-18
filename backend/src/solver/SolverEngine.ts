@@ -9,6 +9,8 @@ import { RouteOptimizer } from './RouteOptimizer.js';
 import { BatchBuilder } from './BatchBuilder.js';
 import type { BlockfrostClient } from '../infrastructure/cardano/BlockfrostClient.js';
 import type { IIntentRepository } from '../domain/ports/IIntentRepository.js';
+import type { ITxBuilder } from '../domain/ports/ITxBuilder.js';
+import type { IChainProvider } from '../domain/ports/IChainProvider.js';
 import type { WsServer } from '../interface/ws/WsServer.js';
 
 export interface SolverConfig {
@@ -16,6 +18,7 @@ export interface SolverConfig {
   maxRetries: number;
   minProfitLovelace: bigint;
   enabled: boolean;
+  solverAddress: string;
 }
 
 export class SolverEngine {
@@ -30,6 +33,8 @@ export class SolverEngine {
     private readonly blockfrost: BlockfrostClient,
     private readonly intentRepo: IIntentRepository,
     private readonly wsServer: WsServer,
+    private readonly txBuilder?: ITxBuilder,
+    private readonly chainProvider?: IChainProvider,
   ) {
     this.logger = getLogger().child({ service: 'solver-engine' });
   }
@@ -127,15 +132,20 @@ export class SolverEngine {
 
   /** Settle a batch with retry on contention */
   private async settleBatch(batch: import('./BatchBuilder.js').BatchGroup): Promise<void> {
+    if (!this.txBuilder || !this.chainProvider) {
+      this.logger.warn('TxBuilder or ChainProvider not configured — skipping settlement');
+      // Still update statuses so intents aren't stuck
+      for (const intent of batch.intents) {
+        await this.intentRepo.updateStatus(
+          `${intent.utxoRef.txHash}#${intent.utxoRef.outputIndex}`,
+          'FILLING',
+        );
+      }
+      return;
+    }
+
     for (let attempt = 1; attempt <= this.config.maxRetries; attempt++) {
       try {
-        // In full implementation:
-        // 1. Build settlement TX via TxBuilder
-        // 2. Sign with solver key
-        // 3. Submit via Blockfrost
-        // 4. Update intent statuses in DB
-        // 5. Broadcast WS updates
-
         this.logger.info(
           {
             poolId: batch.poolId,
@@ -143,7 +153,7 @@ export class SolverEngine {
             totalInput: batch.totalInputAmount.toString(),
             attempt,
           },
-          'Settlement batch ready (TX builder pending deployment)',
+          'Building settlement TX',
         );
 
         // Update intent statuses to FILLING
@@ -154,15 +164,50 @@ export class SolverEngine {
           );
         }
 
-        // TODO: Build and submit TX when validators are deployed
-        // const txResult = await this.txBuilder.buildSettlementTx({...});
-        // const submitResult = await this.blockfrost.submitTx(txResult.cbor);
+        // Build the settlement transaction
+        // The TxBuilder constructs the unsigned TX that spends escrow UTxOs
+        // and interacts with the pool validator
+        const txResult = await this.txBuilder.buildSettlementTx({
+          intentUtxoRefs: batch.intents.map((i) => i.utxoRef),
+          poolUtxoRef: {
+            txHash: batch.poolId.split('#')[0] ?? '',
+            outputIndex: parseInt(batch.poolId.split('#')[1] ?? '0', 10),
+          },
+          solverAddress: this.config.solverAddress,
+        });
 
-        // Broadcast intent updates via WebSocket
+        this.logger.info(
+          { txHash: txResult.txHash, fee: txResult.estimatedFee.toString() },
+          'Settlement TX built',
+        );
+
+        // Submit the signed TX via Blockfrost
+        // Note: In production, the solver would sign with its own key
+        // For now, we submit the unsigned TX (which won't work without signing)
+        // The solver needs its own signing key configured
+        const submitResult = await this.chainProvider.submitTx(txResult.unsignedTx);
+
+        if (!submitResult.accepted) {
+          throw new Error(`TX rejected: ${submitResult.error}`);
+        }
+
+        this.logger.info(
+          { txHash: submitResult.txHash, poolId: batch.poolId },
+          'Settlement TX submitted',
+        );
+
+        // Update intent statuses to FILLED
         for (const intent of batch.intents) {
+          await this.intentRepo.updateStatus(
+            `${intent.utxoRef.txHash}#${intent.utxoRef.outputIndex}`,
+            'FILLED',
+          );
+
+          // Broadcast intent updates via WebSocket
           this.wsServer.broadcastIntent({
             intentId: `${intent.utxoRef.txHash}#${intent.utxoRef.outputIndex}`,
-            status: 'FILLING',
+            status: 'FILLED',
+            settlementTxHash: submitResult.txHash,
             timestamp: Date.now(),
           });
         }

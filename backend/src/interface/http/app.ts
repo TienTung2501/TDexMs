@@ -14,6 +14,7 @@ import { createIntentRouter } from '../http/routes/intents.js';
 import { createPoolRouter } from '../http/routes/pools.js';
 import { createAnalyticsRouter } from '../http/routes/analytics.js';
 import { createChartRouter } from '../http/routes/chart.js';
+import { createTxRouter } from '../http/routes/tx.js';
 import type { GetQuote } from '../../application/use-cases/GetQuote.js';
 import type { CreateIntent } from '../../application/use-cases/CreateIntent.js';
 import type { CancelIntent } from '../../application/use-cases/CancelIntent.js';
@@ -75,6 +76,7 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createPoolRouter(deps.getPoolInfo, deps.createPool, deps.depositLiquidity, deps.withdrawLiquidity));
   v1.use(createAnalyticsRouter());
   v1.use(createChartRouter(deps.candlestickService));
+  v1.use(createTxRouter(deps.blockfrost, deps.intentRepo));
 
   app.use('/v1', v1);
 

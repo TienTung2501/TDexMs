@@ -34,6 +34,7 @@ const envSchema = z.object({
 
   // Solver
   SOLVER_SEED_PHRASE: z.string().default(''),
+  SOLVER_ADDRESS: z.string().default(''),
   SOLVER_BATCH_WINDOW_MS: z.coerce.number().int().positive().default(5000),
   SOLVER_MAX_RETRIES: z.coerce.number().int().positive().default(3),
   SOLVER_MIN_PROFIT_LOVELACE: z.coerce.number().int().default(100_000),
