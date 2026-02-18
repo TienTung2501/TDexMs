@@ -6,7 +6,7 @@ import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import type { ITxBuilder, BuildTxResult } from '../../domain/ports/ITxBuilder.js';
 import { PoolAlreadyExistsError, InvalidSwapParamsError } from '../../domain/errors/index.js';
 import { AssetId } from '../../domain/value-objects/Asset.js';
-import { MIN_POOL_LIQUIDITY, MIN_FEE_NUMERATOR, MAX_FEE_NUMERATOR } from '@solvernet/shared';
+import { MIN_POOL_LIQUIDITY, MIN_FEE_NUMERATOR, MAX_FEE_NUMERATOR } from '../../shared/index.js';
 
 export interface CreatePoolInput {
   assetA: string;

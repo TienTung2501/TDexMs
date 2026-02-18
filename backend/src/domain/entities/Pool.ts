@@ -2,8 +2,7 @@
  * Domain Entity: Pool
  * Represents a liquidity pool with AMM state.
  */
-import { FEE_DENOMINATOR, MINIMUM_LIQUIDITY } from '@solvernet/shared';
-import type { PoolState } from '@solvernet/shared';
+import { FEE_DENOMINATOR, MINIMUM_LIQUIDITY, type PoolState } from '../../shared/index.js';
 
 export interface PoolProps {
   id: string;

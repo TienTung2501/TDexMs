@@ -6,7 +6,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { validate } from '../middleware/validation.js';
 import { writeLimiter } from '../middleware/rate-limiter.js';
-import { intentSchema, intentListSchema } from '@solvernet/shared';
+import { intentSchema, intentListSchema } from '../../../shared/index.js';
 import type { CreateIntent } from '../../../application/use-cases/CreateIntent.js';
 import type { CancelIntent } from '../../../application/use-cases/CancelIntent.js';
 import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.js';

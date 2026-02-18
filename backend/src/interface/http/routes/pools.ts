@@ -12,7 +12,7 @@ import {
   withdrawSchema,
   poolListSchema,
   FEE_DENOMINATOR,
-} from '@solvernet/shared';
+} from '../../../shared/index.js';
 import type { GetPoolInfo } from '../../../application/use-cases/GetPoolInfo.js';
 import type { CreatePool } from '../../../application/use-cases/CreatePool.js';
 import type { DepositLiquidity } from '../../../application/use-cases/DepositLiquidity.js';

@@ -2,7 +2,7 @@
  * Intent Repository — Prisma implementation
  */
 import type { PrismaClient, Intent as PrismaIntent } from '@prisma/client';
-import type { IntentStatus } from '@solvernet/shared';
+import type { IntentStatus } from '../../shared/index.js';
 import { Intent, type IntentProps } from '../../domain/entities/Intent.js';
 import type {
   IIntentRepository,

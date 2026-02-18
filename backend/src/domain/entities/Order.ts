@@ -2,7 +2,7 @@
  * Domain Entity: Order
  * Represents advanced order types (Limit, DCA, StopLoss).
  */
-import type { OrderType, OrderStatus } from '@solvernet/shared';
+import type { OrderType, OrderStatus } from '../../shared/index.js';
 
 export interface OrderProps {
   id: string;

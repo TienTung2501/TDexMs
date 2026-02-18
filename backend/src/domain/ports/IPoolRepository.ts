@@ -2,7 +2,7 @@
  * Port: Pool Repository Interface
  */
 import type { Pool } from '../entities/Pool.js';
-import type { PoolState } from '@solvernet/shared';
+import type { PoolState } from '../../shared/index.js';
 
 export interface PoolFilters {
   sortBy?: 'tvl' | 'volume24h' | 'apy' | 'createdAt';

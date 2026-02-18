@@ -3,7 +3,7 @@
  * Calculates optimal swap route and expected output.
  */
 import { v4 as uuid } from 'uuid';
-import { FEE_DENOMINATOR, DEFAULT_SLIPPAGE_BPS } from '@solvernet/shared';
+import { FEE_DENOMINATOR, DEFAULT_SLIPPAGE_BPS } from '../../shared/index.js';
 import { Pool } from '../../domain/entities/Pool.js';
 import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import { InvalidSwapParamsError, InsufficientLiquidityError } from '../../domain/errors/index.js';

@@ -8,7 +8,7 @@ import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js'
 import type { ITxBuilder, BuildTxResult } from '../../domain/ports/ITxBuilder.js';
 import { InvalidSwapParamsError } from '../../domain/errors/index.js';
 import { AssetId } from '../../domain/value-objects/Asset.js';
-import { MAX_DEADLINE_MS } from '@solvernet/shared';
+import { MAX_DEADLINE_MS } from '../../shared/index.js';
 
 export interface CreateIntentInput {
   quoteId?: string;

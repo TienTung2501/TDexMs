@@ -2,7 +2,7 @@
  * Cardano network configuration helper
  * Stack: Blockfrost as primary chain provider (replaces self-hosted Ogmios/Kupo)
  */
-import { NETWORK_CONFIG, type NetworkConfig } from '@solvernet/shared';
+import { NETWORK_CONFIG, type NetworkConfig } from '../shared/index.js';
 import { env } from './env.js';
 
 export function getNetworkConfig(): NetworkConfig {

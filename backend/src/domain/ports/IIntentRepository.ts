@@ -3,7 +3,7 @@
  * Domain layer defines the contract; infrastructure implements it.
  */
 import type { Intent } from '../entities/Intent.js';
-import type { IntentStatus } from '@solvernet/shared';
+import type { IntentStatus } from '../../shared/index.js';
 
 export interface IntentFilters {
   address?: string;

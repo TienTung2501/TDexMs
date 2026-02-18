@@ -3,7 +3,7 @@
  * Represents a user's swap intent throughout its lifecycle.
  * Pure domain logic — no framework dependencies.
  */
-import type { IntentStatus } from '@solvernet/shared';
+import type { IntentStatus } from '../../shared/index.js';
 
 export interface IntentProps {
   id: string;

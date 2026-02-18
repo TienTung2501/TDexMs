@@ -5,7 +5,7 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { validate } from '../middleware/validation.js';
-import { quoteSchema } from '@solvernet/shared';
+import { quoteSchema } from '../../../shared/index.js';
 import type { GetQuote } from '../../../application/use-cases/GetQuote.js';
 
 export function createQuoteRouter(getQuote: GetQuote): Router {

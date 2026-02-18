@@ -2,7 +2,7 @@
  * Route Optimizer
  * Finds optimal execution routes for intents across liquidity pools.
  */
-import { FEE_DENOMINATOR } from '@solvernet/shared';
+import { FEE_DENOMINATOR } from '../shared/index.js';
 import { getLogger } from '../config/logger.js';
 import type { IPoolRepository } from '../domain/ports/IPoolRepository.js';
 import { Pool } from '../domain/entities/Pool.js';
