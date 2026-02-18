@@ -14,12 +14,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/providers/wallet-provider";
+import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import { useIntents, usePools } from "@/lib/hooks";
 import { TOKENS } from "@/lib/mock-data";
 import { formatCompact, cn } from "@/lib/utils";
 
 export default function PortfolioPage() {
-  const { isConnected, address, balances, connect } = useWallet();
+  const { isConnected, address, balances } = useWallet();
   const { intents, loading: intentsLoading } = useIntents({
     address: isConnected ? address ?? undefined : undefined,
   });
@@ -39,10 +40,7 @@ export default function PortfolioPage() {
           Connect your Cardano wallet to view your portfolio, positions, and
           order history.
         </p>
-        <Button variant="trade" size="lg" onClick={connect}>
-          <Wallet className="h-4 w-4" />
-          Connect Wallet
-        </Button>
+        <WalletConnectDialog />
       </div>
     );
   }

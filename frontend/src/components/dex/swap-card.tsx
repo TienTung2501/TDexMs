@@ -22,6 +22,7 @@ import {
   TokenSelectDialog,
   TokenButton,
 } from "@/components/dex/token-select";
+import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import { useWallet } from "@/providers/wallet-provider";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
@@ -43,7 +44,7 @@ export function SwapCard({
   onOutputTokenChange,
   pools: externalPools,
 }: SwapCardProps = {}) {
-  const { isConnected, address, balances, connect } = useWallet();
+  const { isConnected, address, changeAddress, balances, signAndSubmitTx } = useWallet();
 
   const [internalInputToken, setInternalInputToken] = useState<Token>(TOKENS.ADA);
   const [internalOutputToken, setInternalOutputToken] = useState<Token>(TOKENS.HOSKY);
@@ -139,7 +140,8 @@ export function SwapCard({
       ).toString();
       const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
 
-      await createIntent({
+      // 1. Build unsigned TX on backend
+      const result = await createIntent({
         senderAddress: address,
         inputAsset,
         inputAmount: inputAmount,
@@ -147,15 +149,22 @@ export function SwapCard({
         minOutput: minOut,
         deadline,
         partialFill: false,
-        changeAddress: address,
+        changeAddress: changeAddress || address,
       });
+
+      // 2. Sign and submit via CIP-30 wallet
+      if (result.unsignedTx) {
+        const txHash = await signAndSubmitTx(result.unsignedTx);
+        console.log("Swap TX submitted:", txHash);
+      }
+
       setInputAmount("");
     } catch (err) {
       console.error("Swap intent failed:", err);
     } finally {
       setIsSwapping(false);
     }
-  }, [pool, address, inputToken, outputToken, inputAmount, quote.output, slippage]);
+  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, signAndSubmitTx]);
 
   // Price impact color
   const impactColor =
@@ -311,14 +320,9 @@ export function SwapCard({
 
           {/* Swap button */}
           {!isConnected ? (
-            <Button
-              variant="trade"
-              size="xl"
-              className="w-full"
-              onClick={connect}
-            >
-              Connect Wallet
-            </Button>
+            <div className="w-full">
+              <WalletConnectDialog />
+            </div>
           ) : !inputAmount || parseFloat(inputAmount) <= 0 ? (
             <Button variant="trade" size="xl" className="w-full" disabled>
               Enter an amount

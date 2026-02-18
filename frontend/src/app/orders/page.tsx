@@ -8,7 +8,6 @@ import {
   XCircle,
   AlertCircle,
   ExternalLink,
-  Wallet,
   Loader2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
+import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import { useIntents, type NormalizedIntent } from "@/lib/hooks";
 import { truncateAddress, cn } from "@/lib/utils";
 
@@ -38,7 +38,7 @@ const STATUS_CONFIG: Record<
 };
 
 export default function OrdersPage() {
-  const { isConnected, address, connect } = useWallet();
+  const { isConnected, address } = useWallet();
   const [tab, setTab] = useState("all");
 
   const { intents, total, loading } = useIntents({
@@ -73,10 +73,7 @@ export default function OrdersPage() {
         <p className="text-sm text-muted-foreground max-w-sm mx-auto">
           Connect your wallet to view your trade intents and order history.
         </p>
-        <Button variant="trade" size="lg" onClick={connect}>
-          <Wallet className="h-4 w-4" />
-          Connect Wallet
-        </Button>
+        <WalletConnectDialog />
       </div>
     );
   }

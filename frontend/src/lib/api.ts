@@ -259,7 +259,13 @@ export interface DepositRequest {
   changeAddress: string;
 }
 
-export async function depositLiquidity(poolId: string, body: DepositRequest) {
+export interface DepositResponse {
+  unsignedTx: string;
+  txHash: string;
+  estimatedLpTokens: string;
+}
+
+export async function depositLiquidity(poolId: string, body: DepositRequest): Promise<DepositResponse> {
   return apiFetch(`/pools/${poolId}/deposit`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -274,7 +280,14 @@ export interface WithdrawRequest {
   changeAddress: string;
 }
 
-export async function withdrawLiquidity(poolId: string, body: WithdrawRequest) {
+export interface WithdrawResponse {
+  unsignedTx: string;
+  txHash: string;
+  estimatedAmountA: string;
+  estimatedAmountB: string;
+}
+
+export async function withdrawLiquidity(poolId: string, body: WithdrawRequest): Promise<WithdrawResponse> {
   return apiFetch(`/pools/${poolId}/withdraw`, {
     method: "POST",
     body: JSON.stringify(body),

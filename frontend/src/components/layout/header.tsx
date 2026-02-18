@@ -16,8 +16,7 @@ import {
 import { useTheme } from "next-themes";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useWallet } from "@/providers/wallet-provider";
-import { truncateAddress } from "@/lib/utils";
+import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -31,7 +30,6 @@ const NAV_ITEMS = [
 export function Header() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
-  const { isConnected, address, connect, disconnect } = useWallet();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
@@ -87,22 +85,7 @@ export function Header() {
           </Button>
 
           {/* Wallet */}
-          {isConnected ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={disconnect}
-              className="font-mono text-xs"
-            >
-              <Wallet className="h-3.5 w-3.5 mr-1" />
-              {truncateAddress(address || "")}
-            </Button>
-          ) : (
-            <Button variant="trade" size="sm" onClick={connect}>
-              <Wallet className="h-3.5 w-3.5" />
-              Connect
-            </Button>
-          )}
+          <WalletConnectDialog />
 
           {/* Mobile menu toggle */}
           <Button

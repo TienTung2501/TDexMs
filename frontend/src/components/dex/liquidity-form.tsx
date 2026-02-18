@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
+import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import type { NormalizedPool } from "@/lib/hooks";
 import { depositLiquidity, withdrawLiquidity } from "@/lib/api";
 import { formatAmount, formatCompact } from "@/lib/utils";
@@ -15,7 +16,7 @@ interface LiquidityFormProps {
 }
 
 export function LiquidityForm({ pool }: LiquidityFormProps) {
-  const { isConnected, address, balances, connect } = useWallet();
+  const { isConnected, address, changeAddress, balances, signAndSubmitTx } = useWallet();
   const [amountA, setAmountA] = useState("");
   const [amountB, setAmountB] = useState("");
   const [withdrawPercent, setWithdrawPercent] = useState("");
@@ -36,13 +37,18 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
     if (!address) return;
     setIsSubmitting(true);
     try {
-      await depositLiquidity(pool.id, {
+      const result = await depositLiquidity(pool.id, {
         amountA: amountA,
         amountB: amountB,
         minLpTokens: "0",
         senderAddress: address,
-        changeAddress: address,
+        changeAddress: changeAddress || address,
       });
+      // Sign and submit via wallet
+      if (result.unsignedTx) {
+        const txHash = await signAndSubmitTx(result.unsignedTx);
+        console.log("Deposit TX submitted:", txHash);
+      }
       setAmountA("");
       setAmountB("");
     } catch (err) {
@@ -50,7 +56,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
     } finally {
       setIsSubmitting(false);
     }
-  }, [pool.id, amountA, amountB, address]);
+  }, [pool.id, amountA, amountB, address, changeAddress, signAndSubmitTx]);
 
   const handleWithdraw = useCallback(async () => {
     if (!address || !withdrawPercent) return;
@@ -59,20 +65,25 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
       const lpAmount = Math.floor(
         pool.totalLpTokens * (parseFloat(withdrawPercent) / 100)
       ).toString();
-      await withdrawLiquidity(pool.id, {
+      const result = await withdrawLiquidity(pool.id, {
         lpTokenAmount: lpAmount,
         minAmountA: "0",
         minAmountB: "0",
         senderAddress: address,
-        changeAddress: address,
+        changeAddress: changeAddress || address,
       });
+      // Sign and submit via wallet
+      if (result.unsignedTx) {
+        const txHash = await signAndSubmitTx(result.unsignedTx);
+        console.log("Withdraw TX submitted:", txHash);
+      }
       setWithdrawPercent("");
     } catch (err) {
       console.error("Withdraw failed:", err);
     } finally {
       setIsSubmitting(false);
     }
-  }, [pool.id, pool.totalLpTokens, withdrawPercent, address]);
+  }, [pool.id, pool.totalLpTokens, withdrawPercent, address, changeAddress, signAndSubmitTx]);
 
   return (
     <Tabs defaultValue="deposit" className="w-full">
@@ -153,9 +164,9 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
         )}
 
         {!isConnected ? (
-          <Button variant="trade" className="w-full" onClick={connect}>
-            Connect Wallet
-          </Button>
+          <div className="w-full">
+            <WalletConnectDialog />
+          </div>
         ) : (
           <Button
             variant="trade"
@@ -230,9 +241,9 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
         )}
 
         {!isConnected ? (
-          <Button variant="trade" className="w-full" onClick={connect}>
-            Connect Wallet
-          </Button>
+          <div className="w-full">
+            <WalletConnectDialog />
+          </div>
         ) : (
           <Button
             variant="destructive"
