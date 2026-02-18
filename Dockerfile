@@ -44,7 +44,6 @@ COPY --from=builder /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/backend/prisma ./backend/prisma
-COPY --from=builder /app/backend/node_modules/.prisma ./backend/node_modules/.prisma
 COPY --from=builder /app/node_modules ./node_modules
 
 USER solvernet
