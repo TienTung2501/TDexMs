@@ -275,7 +275,7 @@ Render Free tier spin down sau 15 phút không có request. Giải pháp:
 1. **Chấp nhận cold start** (~30s khởi động lại)
 2. **Hoặc** sử dụng UptimeRobot (free) ping health endpoint mỗi 5 phút:
    ```
-   GET https://your-app.onrender.com/v1/health
+   GET https://tdexms.onrender.com/v1/health
    ```
 
 ---
