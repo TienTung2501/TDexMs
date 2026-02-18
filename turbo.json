@@ -16,10 +16,6 @@
     "lint": {},
     "type-check": {
       "dependsOn": ["^build"]
-    },
-    "generate:plutus-types": {
-      "inputs": ["../../smartcontract/build/plutus.json"],
-      "outputs": ["src/plutus/**"]
     }
   }
 }

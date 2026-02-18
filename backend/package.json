@@ -21,6 +21,7 @@
     "@lucid-evolution/lucid": "^0.4.0",
     "@lucid-evolution/provider": "^0.1.0",
     "@prisma/client": "^6.2.0",
+    "prisma": "^6.2.0",
     "@upstash/redis": "^1.36.2",
     "cors": "^2.8.5",
     "cron": "^3.3.0",
@@ -39,7 +40,6 @@
     "@types/express": "^5.0.0",
     "@types/uuid": "^10.0.0",
     "@types/ws": "^8.5.0",
-    "prisma": "^6.2.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"

@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm install -g pnpm@9.15.0 && pnpm install",
-  "buildCommand": "pnpm turbo build",
+  "installCommand": "npm install -g pnpm@9.15.0 && pnpm install --filter frontend",
+  "buildCommand": "pnpm --filter frontend build",
   "framework": "nextjs"
 }

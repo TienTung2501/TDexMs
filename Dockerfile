@@ -1,36 +1,37 @@
 # ═══════════════════════════════════════════════════════
 # SolverNet Backend — Production Dockerfile
-# Multi-stage build for minimal image size
+# Multi-stage build using "pnpm deploy" for clean output
 # ═══════════════════════════════════════════════════════
 
-# ── Stage 1: Install dependencies ──
-FROM node:20-alpine AS deps
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
-WORKDIR /app
-
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY backend/package.json ./backend/package.json
-
-RUN pnpm install --frozen-lockfile
-
-# ── Stage 2: Build ──
+# ── Stage 1: Install & Build ──
 FROM node:20-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
 
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/backend/node_modules ./backend/node_modules
-COPY . .
+# Install dependencies
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY backend/package.json ./backend/package.json
+COPY frontend/package.json ./frontend/package.json
+RUN pnpm install --frozen-lockfile
 
-# Generate Prisma client
-RUN cd backend && ./node_modules/.bin/prisma generate
+# Copy source
+COPY backend/ ./backend/
+COPY tsconfig.base.json ./
 
-# Build backend
-RUN pnpm --filter backend build
+# Generate Prisma client & build TypeScript
+RUN cd backend && npx prisma generate && pnpm build
 
-# ── Stage 3: Production image ──
+# Use "pnpm deploy" to create a self-contained production directory
+# This resolves all symlinks and bundles only production dependencies
+RUN pnpm deploy --filter backend --prod /app/pruned
+
+# Copy prisma schema, dist, and re-generate Prisma client in pruned dir
+RUN cp -r /app/backend/prisma /app/pruned/prisma \
+    && cp -r /app/backend/dist /app/pruned/dist \
+    && cd /app/pruned && npx prisma generate
+
+# ── Stage 2: Production image ──
 FROM node:20-alpine AS runner
-RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
 # Security: non-root user
 RUN addgroup --system --gid 1001 solvernet \
@@ -38,14 +39,11 @@ RUN addgroup --system --gid 1001 solvernet \
 
 WORKDIR /app
 
-# Copy built artifacts
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/backend/package.json ./backend/package.json
-COPY --from=builder /app/backend/dist ./backend/dist
-COPY --from=builder /app/backend/prisma ./backend/prisma
-COPY --from=builder /app/backend/node_modules ./backend/node_modules
-COPY --from=builder /app/node_modules ./node_modules
+# Copy the self-contained pruned directory (no symlinks)
+COPY --from=builder /app/pruned/package.json ./
+COPY --from=builder /app/pruned/node_modules ./node_modules
+COPY --from=builder /app/pruned/dist ./dist
+COPY --from=builder /app/pruned/prisma ./prisma
 
 USER solvernet
 
@@ -55,4 +53,4 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 # Run Prisma migrations then start server
-CMD ["sh", "-c", "cd /app/backend && ./node_modules/.bin/prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && node dist/index.js"]

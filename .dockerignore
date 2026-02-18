@@ -10,6 +10,7 @@ cardano-data
 kupo-data
 .next
 frontend/
+!frontend/package.json
 smartcontract/
 .github/
 .turbo/
