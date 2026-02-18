@@ -23,7 +23,7 @@ COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY . .
 
 # Generate Prisma client
-RUN cd backend && npx prisma generate
+RUN cd backend && ./node_modules/.bin/prisma generate
 
 # Build backend
 RUN pnpm --filter backend build
@@ -44,6 +44,7 @@ COPY --from=builder /app/pnpm-workspace.yaml ./
 COPY --from=builder /app/backend/package.json ./backend/package.json
 COPY --from=builder /app/backend/dist ./backend/dist
 COPY --from=builder /app/backend/prisma ./backend/prisma
+COPY --from=builder /app/backend/node_modules ./backend/node_modules
 COPY --from=builder /app/node_modules ./node_modules
 
 USER solvernet
@@ -54,4 +55,4 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 # Run Prisma migrations then start server
-CMD ["sh", "-c", "cd /app/backend && /app/node_modules/.bin/prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "cd /app/backend && ./node_modules/.bin/prisma migrate deploy && node dist/index.js"]

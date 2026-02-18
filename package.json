@@ -7,7 +7,6 @@
     "test": "turbo test",
     "lint": "turbo lint",
     "type-check": "turbo type-check",
-    "generate:plutus-types": "turbo generate:plutus-types --filter=@solvernet/shared",
     "db:migrate": "pnpm --filter backend exec prisma migrate dev",
     "db:generate": "pnpm --filter backend exec prisma generate",
     "db:studio": "pnpm --filter backend exec prisma studio",
@@ -21,7 +20,6 @@
   },
   "engines": {
     "node": ">=20.0.0",
-    "pnpm": ">=9.0.0"
-  },
-  "packageManager": "pnpm@9.15.0"
+    "pnpm": ">=6.0.0"
+  }
 }
