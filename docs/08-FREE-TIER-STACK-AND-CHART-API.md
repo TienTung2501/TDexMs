@@ -288,7 +288,7 @@ Render Free tier spin down sau 15 phút không có request. Giải pháp:
 2. Copy `DATABASE_URL` từ Settings → Database → Connection String (Transaction mode, port 6543)
 3. Chạy migration:
    ```bash
-   cd packages/backend
+   cd /backend
    npx prisma migrate deploy
    ```
 

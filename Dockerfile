@@ -54,4 +54,4 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 # Run Prisma migrations then start server
-CMD ["sh", "-c", "cd backend && npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "cd /app/backend && /app/node_modules/.bin/prisma migrate deploy && node dist/index.js"]

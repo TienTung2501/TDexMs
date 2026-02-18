@@ -1,5 +1,5 @@
 {
-  "installCommand": "corepack enable && corepack prepare pnpm@9.15.0 --activate && pnpm install",
+  "installCommand": "npm install -g pnpm@9.15.0 && pnpm install",
   "buildCommand": "cd frontend && pnpm build",
   "outputDirectory": "frontend/.next",
   "framework": "nextjs"
