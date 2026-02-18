@@ -3,22 +3,25 @@
 import React, { useState, useMemo } from "react";
 import {
   ClipboardList,
-  Filter,
   Clock,
   CheckCircle,
   XCircle,
   AlertCircle,
   ExternalLink,
   Wallet,
+  Loader2,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
 import { useWallet } from "@/providers/wallet-provider";
-import { MOCK_INTENTS, type IntentStatus } from "@/lib/mock-data";
+import { useIntents, type NormalizedIntent } from "@/lib/hooks";
 import { truncateAddress, cn } from "@/lib/utils";
+
+type IntentStatus =
+  | "CREATED" | "PENDING" | "ACTIVE" | "FILLING"
+  | "FILLED" | "CANCELLED" | "EXPIRED" | "RECLAIMED";
 
 const STATUS_CONFIG: Record<
   IntentStatus,
@@ -35,13 +38,17 @@ const STATUS_CONFIG: Record<
 };
 
 export default function OrdersPage() {
-  const { isConnected, connect } = useWallet();
+  const { isConnected, address, connect } = useWallet();
   const [tab, setTab] = useState("all");
 
+  const { intents, total, loading } = useIntents({
+    address: isConnected ? address ?? undefined : undefined,
+  });
+
   const filtered = useMemo(() => {
-    if (tab === "all") return MOCK_INTENTS;
+    if (tab === "all") return intents;
     if (tab === "active")
-      return MOCK_INTENTS.filter(
+      return intents.filter(
         (i) =>
           i.status === "ACTIVE" ||
           i.status === "PENDING" ||
@@ -49,14 +56,14 @@ export default function OrdersPage() {
           i.status === "FILLING"
       );
     if (tab === "filled")
-      return MOCK_INTENTS.filter((i) => i.status === "FILLED");
-    return MOCK_INTENTS.filter(
+      return intents.filter((i) => i.status === "FILLED");
+    return intents.filter(
       (i) =>
         i.status === "CANCELLED" ||
         i.status === "EXPIRED" ||
         i.status === "RECLAIMED"
     );
-  }, [tab]);
+  }, [tab, intents]);
 
   if (!isConnected) {
     return (
@@ -79,7 +86,7 @@ export default function OrdersPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Orders</h1>
         <Badge variant="secondary">
-          {MOCK_INTENTS.length} total intents
+          {total} total intents
         </Badge>
       </div>
 
@@ -88,24 +95,24 @@ export default function OrdersPage() {
         {[
           {
             label: "Active",
-            count: MOCK_INTENTS.filter(
+            count: intents.filter(
               (i) => i.status === "ACTIVE" || i.status === "PENDING"
             ).length,
             color: "text-primary",
           },
           {
             label: "Filled",
-            count: MOCK_INTENTS.filter((i) => i.status === "FILLED").length,
+            count: intents.filter((i) => i.status === "FILLED").length,
             color: "text-primary",
           },
           {
             label: "Cancelled",
-            count: MOCK_INTENTS.filter((i) => i.status === "CANCELLED").length,
+            count: intents.filter((i) => i.status === "CANCELLED").length,
             color: "text-muted-foreground",
           },
           {
             label: "Total",
-            count: MOCK_INTENTS.length,
+            count: intents.length,
             color: "text-foreground",
           },
         ].map((s) => (
@@ -115,7 +122,7 @@ export default function OrdersPage() {
           >
             <div className="text-xs text-muted-foreground">{s.label}</div>
             <div className={cn("text-xl font-bold mt-1", s.color)}>
-              {s.count}
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
             </div>
           </div>
         ))}
@@ -131,14 +138,18 @@ export default function OrdersPage() {
         </TabsList>
 
         <TabsContent value={tab} className="mt-4 space-y-3">
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-sm text-muted-foreground">
               <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-30" />
               No intents found for this filter.
             </div>
           ) : (
             filtered.map((intent) => {
-              const cfg = STATUS_CONFIG[intent.status];
+              const cfg = STATUS_CONFIG[intent.status as IntentStatus] || STATUS_CONFIG.PENDING;
               const StatusIcon = cfg.icon;
 
               return (

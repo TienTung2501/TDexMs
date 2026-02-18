@@ -1,140 +1,140 @@
-# SolverNet DEX — Hướng dẫn Thiết lập Hạ tầng
+﻿# SolverNet DEX â€” HÆ°á»›ng dáº«n Thiáº¿t láº­p Háº¡ táº§ng
 
-> Hướng dẫn chi tiết từng bước: đăng ký dịch vụ cloud (free tier), cấu hình environment, chạy local development, và deploy lên production.
+> HÆ°á»›ng dáº«n chi tiáº¿t tá»«ng bÆ°á»›c: Ä‘Äƒng kÃ½ dá»‹ch vá»¥ cloud (free tier), cáº¥u hÃ¬nh environment, cháº¡y local development, vÃ  deploy lÃªn production.
 
-**Stack hiện tại:**
+**Stack hiá»‡n táº¡i:**
 
-| Dịch vụ | Vai trò | Free Tier |
+| Dá»‹ch vá»¥ | Vai trÃ² | Free Tier |
 |---|---|---|
-| **Blockfrost** | Cardano API (thay Ogmios + Kupo) | 50.000 requests/ngày |
+| **Blockfrost** | Cardano API (thay Ogmios + Kupo) | 50.000 requests/ngÃ y |
 | **Supabase** | PostgreSQL database | 500 MB storage, 2 projects |
-| **Upstash** | Redis cache (serverless) | 10.000 cmds/ngày, 256 MB |
-| **Render** | Node.js backend hosting | 512 MB RAM, spin-down sau 15 phút |
+| **Upstash** | Redis cache (serverless) | 10.000 cmds/ngÃ y, 256 MB |
+| **Render** | Node.js backend hosting | 512 MB RAM, spin-down sau 15 phÃºt |
 | **Vercel** | Next.js frontend hosting | 100 GB bandwidth |
-| **UptimeRobot** | Keep-alive ping cho Render | 50 monitors miễn phí |
+| **UptimeRobot** | Keep-alive ping cho Render | 50 monitors miá»…n phÃ­ |
 
 ---
 
-## Mục lục
+## Má»¥c lá»¥c
 
-1. [Yêu cầu hệ thống](#1-yêu-cầu-hệ-thống)
-2. [Đăng ký dịch vụ Cloud](#2-đăng-ký-dịch-vụ-cloud)
-3. [Cài đặt công cụ Local](#3-cài-đặt-công-cụ-local)
-4. [Cấu hình Environment](#4-cấu-hình-environment)
-5. [Chạy Local Development](#5-chạy-local-development)
-6. [Deploy Backend lên Render](#6-deploy-backend-lên-render)
-7. [Deploy Frontend lên Vercel](#7-deploy-frontend-lên-vercel)
-8. [Thiết lập UptimeRobot Keep-Alive](#8-thiết-lập-uptimerobot-keep-alive)
+1. [YÃªu cáº§u há»‡ thá»‘ng](#1-yÃªu-cáº§u-há»‡-thá»‘ng)
+2. [ÄÄƒng kÃ½ dá»‹ch vá»¥ Cloud](#2-Ä‘Äƒng-kÃ½-dá»‹ch-vá»¥-cloud)
+3. [CÃ i Ä‘áº·t cÃ´ng cá»¥ Local](#3-cÃ i-Ä‘áº·t-cÃ´ng-cá»¥-local)
+4. [Cáº¥u hÃ¬nh Environment](#4-cáº¥u-hÃ¬nh-environment)
+5. [Cháº¡y Local Development](#5-cháº¡y-local-development)
+6. [Deploy Backend lÃªn Render](#6-deploy-backend-lÃªn-render)
+7. [Deploy Frontend lÃªn Vercel](#7-deploy-frontend-lÃªn-vercel)
+8. [Thiáº¿t láº­p UptimeRobot Keep-Alive](#8-thiáº¿t-láº­p-uptimerobot-keep-alive)
 9. [Database Migration (Production)](#9-database-migration-production)
 10. [Monitoring & Health Check](#10-monitoring--health-check)
-11. [Tối ưu Free Tier](#11-tối-ưu-free-tier)
+11. [Tá»‘i Æ°u Free Tier](#11-tá»‘i-Æ°u-free-tier)
 12. [Troubleshooting](#12-troubleshooting)
 13. [Quick Start Checklist](#13-quick-start-checklist)
 
 ---
 
-## 1. Yêu cầu hệ thống
+## 1. YÃªu cáº§u há»‡ thá»‘ng
 
 ### Local Development
-| Thành phần | Yêu cầu |
+| ThÃ nh pháº§n | YÃªu cáº§u |
 |---|---|
 | OS | Windows 10/11, macOS, Ubuntu 22.04+ |
 | CPU | 2+ cores |
-| RAM | 4 GB (không cần Cardano Node) |
+| RAM | 4 GB (khÃ´ng cáº§n Cardano Node) |
 | Disk | 5 GB SSD |
-| Node.js | ≥ 20.x LTS |
-| pnpm | ≥ 9.x |
-| Docker | Tùy chọn (cho local PostgreSQL) |
+| Node.js | â‰¥ 20.x LTS |
+| pnpm | â‰¥ 9.x |
+| Docker | TÃ¹y chá»n (cho local PostgreSQL) |
 
-### Production (Cloud — Free Tier)
-| Thành phần | Dịch vụ |
+### Production (Cloud â€” Free Tier)
+| ThÃ nh pháº§n | Dá»‹ch vá»¥ |
 |---|---|
 | Backend | Render Free (512 MB RAM, 0.1 CPU) |
 | Database | Supabase Free (500 MB PostgreSQL) |
-| Cache | Upstash Free (256 MB Redis, 10K cmds/ngày) |
-| Blockchain | Blockfrost Free (50K requests/ngày) |
+| Cache | Upstash Free (256 MB Redis, 10K cmds/ngÃ y) |
+| Blockchain | Blockfrost Free (50K requests/ngÃ y) |
 | Frontend | Vercel Free (Serverless) |
 
-> **Lưu ý:** Không cần chạy Cardano Node. Blockfrost API thay thế hoàn toàn Ogmios + Kupo, tiết kiệm ~32 GB RAM và ~120 GB disk.
+> **LÆ°u Ã½:** KhÃ´ng cáº§n cháº¡y Cardano Node. Blockfrost API thay tháº¿ hoÃ n toÃ n Ogmios + Kupo, tiáº¿t kiá»‡m ~32 GB RAM vÃ  ~120 GB disk.
 
 ---
 
-## 2. Đăng ký dịch vụ Cloud
+## 2. ÄÄƒng kÃ½ dá»‹ch vá»¥ Cloud
 
 ### 2.1 Blockfrost (Cardano API)
 
-1. Truy cập [blockfrost.io](https://blockfrost.io) → **Sign up**
-2. Tạo project → Chọn network **Preprod** (testnet)
-3. Copy **Project ID** — dạng `preprodXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
+1. Truy cáº­p [blockfrost.io](https://blockfrost.io) â†’ **Sign up**
+2. Táº¡o project â†’ Chá»n network **Preprod** (testnet)
+3. Copy **Project ID** â€” dáº¡ng `preprodXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
 4. Base URL cho Preprod: `https://cardano-preprod.blockfrost.io/api/v0`
 
-> **Giới hạn Free:** 50.000 requests/ngày, 10 requests/giây.  
-> Cache giúp giảm ~60-70% requests (xem mục Tối ưu Free Tier).
+> **Giá»›i háº¡n Free:** 50.000 requests/ngÃ y, 10 requests/giÃ¢y.  
+> Cache giÃºp giáº£m ~60-70% requests (xem má»¥c Tá»‘i Æ°u Free Tier).
 
 ### 2.2 Supabase (PostgreSQL Database)
 
-1. Truy cập [supabase.com](https://supabase.com) → **Start your project**
-2. Tạo organization → Tạo project
-3. Chọn **Region** gần Render (ví dụ: Southeast Asia hoặc US East)
-4. Đặt **Database password** (lưu cẩn thận!)
-5. Vào **Settings → Database** → Copy connection strings:
+1. Truy cáº­p [supabase.com](https://supabase.com) â†’ **Start your project**
+2. Táº¡o organization â†’ Táº¡o project
+3. Chá»n **Region** gáº§n Render (vÃ­ dá»¥: Southeast Asia hoáº·c US East)
+4. Äáº·t **Database password** (lÆ°u cáº©n tháº­n!)
+5. VÃ o **Settings â†’ Database** â†’ Copy connection strings:
 
 ```
-# Connection Pooler (Transaction mode) — dùng cho app
+# Connection Pooler (Transaction mode) â€” dÃ¹ng cho app
 postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true
 
-# Direct Connection — dùng cho Prisma migrate
+# Direct Connection â€” dÃ¹ng cho Prisma migrate
 postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
 ```
 
-> **Lưu ý quan trọng:**
-> - `DATABASE_URL` dùng **port 6543** (pooler, cho app runtime)
-> - `DIRECT_URL` dùng **port 5432** (direct, cho Prisma migrate)
-> - Free tier: **500 MB** storage, **2 GB** transfer/tháng
+> **LÆ°u Ã½ quan trá»ng:**
+> - `DATABASE_URL` dÃ¹ng **port 6543** (pooler, cho app runtime)
+> - `DIRECT_URL` dÃ¹ng **port 5432** (direct, cho Prisma migrate)
+> - Free tier: **500 MB** storage, **2 GB** transfer/thÃ¡ng
 
 ### 2.3 Upstash Redis (Cache)
 
-1. Truy cập [console.upstash.com](https://console.upstash.com) → **Create Database**
-2. Chọn **Region** gần Render backend (cùng region tối ưu latency)
-3. Chọn plan **Free** → Create
-4. Copy credentials từ tab **REST API**:
-   - **UPSTASH_REDIS_REST_URL** — dạng `https://xxx.upstash.io`
-   - **UPSTASH_REDIS_REST_TOKEN** — dạng `AXxxYY...`
+1. Truy cáº­p [console.upstash.com](https://console.upstash.com) â†’ **Create Database**
+2. Chá»n **Region** gáº§n Render backend (cÃ¹ng region tá»‘i Æ°u latency)
+3. Chá»n plan **Free** â†’ Create
+4. Copy credentials tá»« tab **REST API**:
+   - **UPSTASH_REDIS_REST_URL** â€” dáº¡ng `https://xxx.upstash.io`
+   - **UPSTASH_REDIS_REST_TOKEN** â€” dáº¡ng `AXxxYY...`
 
-> **Giới hạn Free:** 10.000 commands/ngày, 256 MB storage, 1 database.  
-> App sử dụng `@upstash/redis` (HTTP-based) — không cần TCP connection.
+> **Giá»›i háº¡n Free:** 10.000 commands/ngÃ y, 256 MB storage, 1 database.  
+> App sá»­ dá»¥ng `@upstash/redis` (HTTP-based) â€” khÃ´ng cáº§n TCP connection.
 
 ### 2.4 Render (Backend Hosting)
 
-1. Truy cập [render.com](https://render.com) → **Sign up** (nên dùng GitHub account)
-2. Chưa cần tạo service ngay — sẽ tạo ở bước Deploy
+1. Truy cáº­p [render.com](https://render.com) â†’ **Sign up** (nÃªn dÃ¹ng GitHub account)
+2. ChÆ°a cáº§n táº¡o service ngay â€” sáº½ táº¡o á»Ÿ bÆ°á»›c Deploy
 
 > **Render Free tier:**
 > - 512 MB RAM, 0.1 CPU
-> - **Spin-down sau 15 phút idle** → dùng UptimeRobot để keep-alive
-> - 750 giờ/tháng (đủ chạy 24/7 cho 1 service)
-> - Outbound bandwidth: 100 GB/tháng
+> - **Spin-down sau 15 phÃºt idle** â†’ dÃ¹ng UptimeRobot Ä‘á»ƒ keep-alive
+> - 750 giá»/thÃ¡ng (Ä‘á»§ cháº¡y 24/7 cho 1 service)
+> - Outbound bandwidth: 100 GB/thÃ¡ng
 
 ### 2.5 Vercel (Frontend Hosting)
 
-1. Truy cập [vercel.com](https://vercel.com) → **Sign up** (GitHub account)
-2. Chưa cần import project — sẽ làm ở bước Deploy Frontend
+1. Truy cáº­p [vercel.com](https://vercel.com) â†’ **Sign up** (GitHub account)
+2. ChÆ°a cáº§n import project â€” sáº½ lÃ m á»Ÿ bÆ°á»›c Deploy Frontend
 
 ### 2.6 UptimeRobot (Keep-Alive)
 
-1. Truy cập [uptimerobot.com](https://uptimerobot.com) → **Register** (free)
-2. Chưa cần tạo monitor — sẽ cấu hình sau khi deploy Render
+1. Truy cáº­p [uptimerobot.com](https://uptimerobot.com) â†’ **Register** (free)
+2. ChÆ°a cáº§n táº¡o monitor â€” sáº½ cáº¥u hÃ¬nh sau khi deploy Render
 
 ---
 
-## 3. Cài đặt công cụ Local
+## 3. CÃ i Ä‘áº·t cÃ´ng cá»¥ Local
 
 ### 3.1 Node.js (v20 LTS)
 
 **Windows (winget):**
 ```powershell
 winget install OpenJS.NodeJS.LTS
-# Hoặc sử dụng nvm-windows:
+# Hoáº·c sá»­ dá»¥ng nvm-windows:
 winget install CoreyButler.NVMforWindows
 nvm install 20
 nvm use 20
@@ -151,7 +151,7 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-Kiểm tra:
+Kiá»ƒm tra:
 ```bash
 node --version   # v20.x.x
 npm --version    # 10.x.x
@@ -164,11 +164,11 @@ npm install -g pnpm@9
 pnpm --version   # 9.x.x
 ```
 
-### 3.3 Docker (Tùy chọn — cho local PostgreSQL)
+### 3.3 Docker (TÃ¹y chá»n â€” cho local PostgreSQL)
 
-Chỉ cần nếu muốn chạy PostgreSQL local thay vì kết nối trực tiếp Supabase.
+Chá»‰ cáº§n náº¿u muá»‘n cháº¡y PostgreSQL local thay vÃ¬ káº¿t ná»‘i trá»±c tiáº¿p Supabase.
 
-**Windows:** Tải [Docker Desktop](https://www.docker.com/products/docker-desktop/) → Bật WSL 2 backend.
+**Windows:** Táº£i [Docker Desktop](https://www.docker.com/products/docker-desktop/) â†’ Báº­t WSL 2 backend.
 
 **Ubuntu:**
 ```bash
@@ -185,112 +185,112 @@ git --version  # 2.x.x
 
 ---
 
-## 4. Cấu hình Environment
+## 4. Cáº¥u hÃ¬nh Environment
 
-### 4.1 Cấu trúc file .env
+### 4.1 Cáº¥u trÃºc file .env
 
 ```bash
-cd packages/backend
+cd backend
 cp .env.example .env
 ```
 
-### 4.2 Nội dung .env đầy đủ
+### 4.2 Ná»™i dung .env Ä‘áº§y Ä‘á»§
 
 ```dotenv
-# ═══════════════════════════════════════════
-# SolverNet DEX Backend — Environment Config
-# ═══════════════════════════════════════════
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# SolverNet DEX Backend â€” Environment Config
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 # Stack: Render (Node.js) + Supabase (PostgreSQL) + Blockfrost (Cardano) + Upstash (Redis)
 
-# ─── Server ───────────────────────────────
+# â”€â”€â”€ Server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 NODE_ENV=development
 PORT=3001
 HOST=0.0.0.0
-LOG_LEVEL=info          # Dùng "warn" trên Render Free (tiết kiệm RAM)
+LOG_LEVEL=info          # DÃ¹ng "warn" trÃªn Render Free (tiáº¿t kiá»‡m RAM)
 
-# ─── Database (Supabase PostgreSQL) ──────
-# Transaction mode (port 6543) — cho app runtime
+# â”€â”€â”€ Database (Supabase PostgreSQL) â”€â”€â”€â”€â”€â”€
+# Transaction mode (port 6543) â€” cho app runtime
 DATABASE_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true"
-# Direct connection (port 5432) — cho Prisma migrate
+# Direct connection (port 5432) â€” cho Prisma migrate
 DIRECT_URL="postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
 
-# ─── Upstash Redis (Cache) ───────────────
-# Lấy từ Upstash Console → REST API tab
-# Để trống nếu chạy không cache (graceful degradation)
+# â”€â”€â”€ Upstash Redis (Cache) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Láº¥y tá»« Upstash Console â†’ REST API tab
+# Äá»ƒ trá»‘ng náº¿u cháº¡y khÃ´ng cache (graceful degradation)
 UPSTASH_REDIS_URL=https://xxx.upstash.io
 UPSTASH_REDIS_TOKEN=AXxxYY...
 
-# ─── Cardano Network ─────────────────────
+# â”€â”€â”€ Cardano Network â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CARDANO_NETWORK=preprod
 
-# ─── Blockfrost ──────────────────────────
+# â”€â”€â”€ Blockfrost â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 BLOCKFROST_URL=https://cardano-preprod.blockfrost.io/api/v0
 BLOCKFROST_PROJECT_ID=preprodXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-# ─── Smart Contract ──────────────────────
+# â”€â”€â”€ Smart Contract â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 ESCROW_SCRIPT_ADDRESS=
 POOL_SCRIPT_ADDRESS=
 
-# ─── Solver ───────────────────────────────
+# â”€â”€â”€ Solver â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 SOLVER_SEED_PHRASE=
 SOLVER_BATCH_WINDOW_MS=5000
 SOLVER_MAX_RETRIES=3
 SOLVER_MIN_PROFIT_LOVELACE=100000
-SOLVER_ENABLED=false     # Bật sau khi deploy smart contract
+SOLVER_ENABLED=false     # Báº­t sau khi deploy smart contract
 
-# ─── CORS ─────────────────────────────────
+# â”€â”€â”€ CORS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CORS_ORIGIN=http://localhost:3000,https://your-app.vercel.app
 
-# ─── Rate Limiting ────────────────────────
+# â”€â”€â”€ Rate Limiting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 RATE_LIMIT_WINDOW_MS=60000
 RATE_LIMIT_MAX=100
 
-# ─── JWT ──────────────────────────────────
+# â”€â”€â”€ JWT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 JWT_SECRET=change-this-in-production-to-a-random-64-char-hex-string
 JWT_EXPIRES_IN=24h
 
-# ─── Chart / OHLCV ───────────────────────
-CHART_SNAPSHOT_INTERVAL_MS=60000   # 1 phút — cron aggregation
+# â”€â”€â”€ Chart / OHLCV â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+CHART_SNAPSHOT_INTERVAL_MS=60000   # 1 phÃºt â€” cron aggregation
 CHART_MAX_CANDLES=500              # Max candles per request
 ```
 
-### 4.3 Giải thích các biến quan trọng
+### 4.3 Giáº£i thÃ­ch cÃ¡c biáº¿n quan trá»ng
 
-| Biến | Mô tả | Lưu ý |
+| Biáº¿n | MÃ´ táº£ | LÆ°u Ã½ |
 |---|---|---|
-| `DATABASE_URL` | Supabase connection qua PgBouncer (port 6543) | Bắt buộc |
-| `DIRECT_URL` | Direct connection (port 5432) cho Prisma migrate | Chỉ cần khi migrate |
-| `UPSTASH_REDIS_URL` | REST endpoint của Upstash Redis | Tùy chọn — app chạy được không cache |
-| `UPSTASH_REDIS_TOKEN` | Auth token cho Upstash REST API | Tùy chọn |
-| `BLOCKFROST_PROJECT_ID` | API key từ Blockfrost | Bắt buộc |
-| `SOLVER_ENABLED` | Bật/tắt solver engine | Tắt cho đến khi deploy contract |
-| `LOG_LEVEL` | `info` (dev), `warn` (production) | `warn` tiết kiệm RAM |
-| `CHART_SNAPSHOT_INTERVAL_MS` | Bao lâu cron chạy 1 lần | 60000 = 1 phút |
+| `DATABASE_URL` | Supabase connection qua PgBouncer (port 6543) | Báº¯t buá»™c |
+| `DIRECT_URL` | Direct connection (port 5432) cho Prisma migrate | Chá»‰ cáº§n khi migrate |
+| `UPSTASH_REDIS_URL` | REST endpoint cá»§a Upstash Redis | TÃ¹y chá»n â€” app cháº¡y Ä‘Æ°á»£c khÃ´ng cache |
+| `UPSTASH_REDIS_TOKEN` | Auth token cho Upstash REST API | TÃ¹y chá»n |
+| `BLOCKFROST_PROJECT_ID` | API key tá»« Blockfrost | Báº¯t buá»™c |
+| `SOLVER_ENABLED` | Báº­t/táº¯t solver engine | Táº¯t cho Ä‘áº¿n khi deploy contract |
+| `LOG_LEVEL` | `info` (dev), `warn` (production) | `warn` tiáº¿t kiá»‡m RAM |
+| `CHART_SNAPSHOT_INTERVAL_MS` | Bao lÃ¢u cron cháº¡y 1 láº§n | 60000 = 1 phÃºt |
 
 ---
 
-## 5. Chạy Local Development
+## 5. Cháº¡y Local Development
 
-### 5.1 Clone và cài đặt
+### 5.1 Clone vÃ  cÃ i Ä‘áº·t
 
 ```bash
 git clone https://github.com/your-repo/decentralize.git
 cd decentralize
 
-# Cài dependencies cho toàn bộ monorepo
+# CÃ i dependencies cho toÃ n bá»™ monorepo
 pnpm install
 
 # Build shared packages
 pnpm build
 ```
 
-### 5.2 Thiết lập Database
+### 5.2 Thiáº¿t láº­p Database
 
-**Option A: Kết nối trực tiếp Supabase (Khuyên dùng)**
-- Điền `DATABASE_URL` và `DIRECT_URL` trong `.env` bằng credentials từ Supabase
-- Không cần Docker
+**Option A: Káº¿t ná»‘i trá»±c tiáº¿p Supabase (KhuyÃªn dÃ¹ng)**
+- Äiá»n `DATABASE_URL` vÃ  `DIRECT_URL` trong `.env` báº±ng credentials tá»« Supabase
+- KhÃ´ng cáº§n Docker
 
-**Option B: Local PostgreSQL với Docker**
+**Option B: Local PostgreSQL vá»›i Docker**
 ```bash
 docker run -d \
   --name solvernet-db \
@@ -305,18 +305,18 @@ DATABASE_URL="postgresql://solvernet:solvernet@localhost:5432/solvernet_dev"
 DIRECT_URL="postgresql://solvernet:solvernet@localhost:5432/solvernet_dev"
 ```
 
-### 5.3 Chạy Prisma Migration
+### 5.3 Cháº¡y Prisma Migration
 
 ```bash
-cd packages/backend
+cd backend
 
 # Generate Prisma client
 npx prisma generate
 
-# Chạy migrations
+# Cháº¡y migrations
 npx prisma migrate dev --name init
 
-# (Tùy chọn) Mở Prisma Studio để xem data
+# (TÃ¹y chá»n) Má»Ÿ Prisma Studio Ä‘á»ƒ xem data
 npx prisma studio
 ```
 
@@ -326,12 +326,12 @@ npx prisma studio
 # Development mode (hot reload)
 pnpm dev
 
-# Hoặc build & run
+# Hoáº·c build & run
 pnpm build
 node dist/index.js
 ```
 
-### 5.5 Kiểm tra Health
+### 5.5 Kiá»ƒm tra Health
 
 ```bash
 curl http://localhost:3001/v1/health
@@ -350,44 +350,44 @@ Response:
 }
 ```
 
-### 5.6 Start Frontend (Tùy chọn)
+### 5.6 Start Frontend (TÃ¹y chá»n)
 
 ```bash
 cd frontend-etf-factory-protocol
 pnpm dev
-# → http://localhost:3000
+# â†’ http://localhost:3000
 ```
 
 ---
 
-## 6. Deploy Backend lên Render
+## 6. Deploy Backend lÃªn Render
 
-### 6.1 Chuẩn bị Repository
+### 6.1 Chuáº©n bá»‹ Repository
 
-Đảm bảo code đã push lên GitHub. Render sẽ kết nối trực tiếp với repo.
+Äáº£m báº£o code Ä‘Ã£ push lÃªn GitHub. Render sáº½ káº¿t ná»‘i trá»±c tiáº¿p vá»›i repo.
 
-### 6.2 Tạo Web Service trên Render
+### 6.2 Táº¡o Web Service trÃªn Render
 
-1. Truy cập [dashboard.render.com](https://dashboard.render.com) → **New +** → **Web Service**
-2. Kết nối GitHub repo
-3. Cấu hình:
+1. Truy cáº­p [dashboard.render.com](https://dashboard.render.com) â†’ **New +** â†’ **Web Service**
+2. Káº¿t ná»‘i GitHub repo
+3. Cáº¥u hÃ¬nh:
 
 | Setting | Value |
 |---|---|
-| **Name** | `solvernet-api` |
-| **Region** | Singapore (hoặc gần Supabase nhất) |
+| **Name** | `tdexms` (hoáº·c tÃªn báº¡n chá»n) |
+| **Region** | Singapore (hoáº·c gáº§n Supabase nháº¥t) |
 | **Branch** | `main` |
-| **Root Directory** | `packages/backend` |
-| **Runtime** | Node |
-| **Build Command** | `cd ../.. && pnpm install && pnpm build` |
-| **Start Command** | `node dist/index.js` |
+| **Root Directory** | (Ä‘á»ƒ trá»‘ng â€” repo root) |
+| **Environment** | **Docker** |
+| **Dockerfile Path** | `Dockerfile` |
 | **Instance Type** | Free |
 
-> **Lưu ý Build Command:** Do monorepo structure, cần `cd ../..` để install từ root.
+> **LÆ°u Ã½:** Sá»­ dá»¥ng Docker runtime (khÃ´ng pháº£i Node runtime). Dockerfile á»Ÿ root repo
+> dÃ¹ng multi-stage build vá»›i `pnpm deploy --filter backend --prod` Ä‘á»ƒ tá»‘i Æ°u image size.
 
-### 6.3 Cấu hình Environment Variables
+### 6.3 Cáº¥u hÃ¬nh Environment Variables
 
-Vào **Environment** tab, thêm các biến sau:
+VÃ o **Environment** tab, thÃªm cÃ¡c biáº¿n sau:
 
 ```
 NODE_ENV=production
@@ -410,7 +410,7 @@ POOL_SCRIPT_ADDRESS=
 SOLVER_ENABLED=false
 SOLVER_SEED_PHRASE=
 
-CORS_ORIGIN=https://your-app.vercel.app
+CORS_ORIGIN=https://your-app.vercel.app,http://localhost:3000
 RATE_LIMIT_WINDOW_MS=60000
 RATE_LIMIT_MAX=100
 JWT_SECRET=<random-64-char-hex>
@@ -422,149 +422,152 @@ CHART_MAX_CANDLES=500
 
 ### 6.4 Deploy
 
-1. Click **Create Web Service** → Render tự build và deploy
-2. Đợi build complete (thường 2-5 phút)
-3. Render gán URL dạng: `https://solvernet-api.onrender.com`
+1. Click **Create Web Service** â†’ Render tá»± build vÃ  deploy
+2. Äá»£i build complete (thÆ°á»ng 2-5 phÃºt)
+3. Render gÃ¡n URL dáº¡ng: `https://tdexms.onrender.com` (hoáº·c tÃªn báº¡n Ä‘áº·t)
 
-### 6.5 Chạy Migration trên Production
+### 6.5 Cháº¡y Migration trÃªn Production
 
-Sau khi deploy lần đầu, cần chạy Prisma migrate:
+Sau khi deploy láº§n Ä‘áº§u, cáº§n cháº¡y Prisma migrate:
 
-**Cách 1: Từ local machine (kết nối Supabase trực tiếp)**
+**CÃ¡ch 1: Tá»« local machine (káº¿t ná»‘i Supabase trá»±c tiáº¿p)**
 ```bash
-cd packages/backend
+cd backend
 
-# Đặt DIRECT_URL trong .env trỏ đến Supabase production
+# Äáº·t DIRECT_URL trong .env trá» Ä‘áº¿n Supabase production
 npx prisma migrate deploy
 ```
 
-**Cách 2: Thêm vào Render build command**
+**CÃ¡ch 2: ThÃªm vÃ o Render build command**
 ```
-cd ../.. && pnpm install && pnpm build && cd packages/backend && npx prisma migrate deploy
+cd ../.. && pnpm install && pnpm build && cd backend && npx prisma migrate deploy
 ```
 
-> **Lưu ý:** `prisma migrate deploy` chỉ apply migrations đã tạo, không tạo migration mới. An toàn cho production.
+> **LÆ°u Ã½:** `prisma migrate deploy` chá»‰ apply migrations Ä‘Ã£ táº¡o, khÃ´ng táº¡o migration má»›i. An toÃ n cho production.
 
-### 6.6 Kiểm tra Deploy
+### 6.6 Kiá»ƒm tra Deploy
 
 ```bash
-curl https://solvernet-api.onrender.com/v1/health
+curl https://tdexms.onrender.com/v1/health
 ```
 
 ---
 
-## 7. Deploy Frontend lên Vercel
+## 7. Deploy Frontend lÃªn Vercel
 
 ### 7.1 Import Project
 
-1. Truy cập [vercel.com/new](https://vercel.com/new)
+1. Truy cáº­p [vercel.com/new](https://vercel.com/new)
 2. Import GitHub repo
-3. Cấu hình:
+3. Cáº¥u hÃ¬nh:
 
 | Setting | Value |
 |---|---|
 | **Framework** | Next.js |
-| **Root Directory** | `frontend-etf-factory-protocol` |
-| **Build Command** | (auto-detect) |
+| **Root Directory** | `frontend` |
+| **Install Command** | `npm install -g pnpm@9.15.0 && pnpm install --filter frontend` |
+| **Build Command** | `pnpm --filter frontend build` |
 | **Output Directory** | (auto-detect) |
+
+> **LÆ°u Ã½:** CÃ³ thá»ƒ cáº¥u hÃ¬nh qua `vercel.json` á»Ÿ root directory thay vÃ¬ UI.
 
 ### 7.2 Environment Variables
 
 ```
-NEXT_PUBLIC_API_URL=https://solvernet-api.onrender.com
+NEXT_PUBLIC_API_URL=https://tdexms.onrender.com
 NEXT_PUBLIC_NETWORK=preprod
 ```
 
 ### 7.3 Deploy
 
-Click **Deploy** → Vercel tự build và gán URL dạng `https://your-app.vercel.app`.
+Click **Deploy** â†’ Vercel tá»± build vÃ  gÃ¡n URL dáº¡ng `https://your-app.vercel.app`.
 
-### 7.4 Cập nhật CORS
+### 7.4 Cáº­p nháº­t CORS
 
-Quay lại Render → Environment → Cập nhật `CORS_ORIGIN`:
+Quay láº¡i Render â†’ Environment â†’ Cáº­p nháº­t `CORS_ORIGIN`:
 ```
-CORS_ORIGIN=https://your-app.vercel.app
+CORS_ORIGIN=https://your-app.vercel.app,http://localhost:3000
 ```
 
 ---
 
-## 8. Thiết lập UptimeRobot Keep-Alive
+## 8. Thiáº¿t láº­p UptimeRobot Keep-Alive
 
-### 8.1 Vấn đề
+### 8.1 Váº¥n Ä‘á»
 
-Render Free tier **tự động spin-down** service sau **15 phút không có request**. Khi có request mới, service phải cold-start (~30-60 giây). Điều này gây:
+Render Free tier **tá»± Ä‘á»™ng spin-down** service sau **15 phÃºt khÃ´ng cÃ³ request**. Khi cÃ³ request má»›i, service pháº£i cold-start (~30-60 giÃ¢y). Äiá»u nÃ y gÃ¢y:
 
-- Trải nghiệm user xấu (chờ lâu sau idle)
-- Solver engine bị tắt → mất intent processing
-- Chain sync bị gián đoạn → data không cập nhật
-- Cron jobs (price aggregation) bị dừng
+- Tráº£i nghiá»‡m user xáº¥u (chá» lÃ¢u sau idle)
+- Solver engine bá»‹ táº¯t â†’ máº¥t intent processing
+- Chain sync bá»‹ giÃ¡n Ä‘oáº¡n â†’ data khÃ´ng cáº­p nháº­t
+- Cron jobs (price aggregation) bá»‹ dá»«ng
 
-### 8.2 Giải pháp: UptimeRobot Ping
+### 8.2 Giáº£i phÃ¡p: UptimeRobot Ping
 
-UptimeRobot sẽ gửi HTTP request đến endpoint `/v1/health` mỗi **5 phút**, đảm bảo Render không bao giờ idle quá 15 phút.
+UptimeRobot sáº½ gá»­i HTTP request Ä‘áº¿n endpoint `/v1/health` má»—i **5 phÃºt**, Ä‘áº£m báº£o Render khÃ´ng bao giá» idle quÃ¡ 15 phÃºt.
 
-### 8.3 Cấu hình
+### 8.3 Cáº¥u hÃ¬nh
 
-1. Đăng nhập [uptimerobot.com](https://uptimerobot.com)
+1. ÄÄƒng nháº­p [uptimerobot.com](https://uptimerobot.com)
 2. Click **+ Add New Monitor**
-3. Cấu hình:
+3. Cáº¥u hÃ¬nh:
 
 | Field | Value |
 |---|---|
 | **Monitor Type** | HTTP(s) |
 | **Friendly Name** | `SolverNet API` |
-| **URL** | `https://solvernet-api.onrender.com/v1/health` |
+| **URL** | `https://tdexms.onrender.com/v1/health` |
 | **Monitoring Interval** | **5 minutes** |
 
-4. (Tùy chọn) Cấu hình **Alert Contacts** để nhận email khi service down
+4. (TÃ¹y chá»n) Cáº¥u hÃ¬nh **Alert Contacts** Ä‘á»ƒ nháº­n email khi service down
 5. Click **Create Monitor**
 
-### 8.4 Kiểm tra hoạt động
+### 8.4 Kiá»ƒm tra hoáº¡t Ä‘á»™ng
 
-- Vào UptimeRobot dashboard → Monitor hiển thị **UP** (màu xanh)
-- Response time trung bình: ~100-300ms (khi service đã warm)
-- Nếu thấy response time > 30s → đó là cold-start, bình thường cho lần đầu
+- VÃ o UptimeRobot dashboard â†’ Monitor hiá»ƒn thá»‹ **UP** (mÃ u xanh)
+- Response time trung bÃ¬nh: ~100-300ms (khi service Ä‘Ã£ warm)
+- Náº¿u tháº¥y response time > 30s â†’ Ä‘Ã³ lÃ  cold-start, bÃ¬nh thÆ°á»ng cho láº§n Ä‘áº§u
 
-### 8.5 Tối ưu Keep-Alive
-
-```
-Interval 5 phút × 24 giờ × 30 ngày = 8.640 pings/tháng
-```
-
-- **UptimeRobot Free:** 50 monitors, interval tối thiểu 5 phút → đủ dùng
-- **Render Free:** 750 giờ/tháng = ~31 ngày liên tục → đủ chạy 24/7 cho 1 service
-- Health endpoint nhẹ (~1-5ms xử lý) → không tốn tài nguyên đáng kể
-
-### 8.6 Lịch trình hoạt động
+### 8.5 Tá»‘i Æ°u Keep-Alive
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Timeline: Render Free + UptimeRobot                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  t=0        t=5m       t=10m      t=15m      t=20m             │
-│  │──────────│──────────│──────────│──────────│─────            │
-│  ▲ ping     ▲ ping     ▲ ping     ▲ ping     ▲ ping           │
-│  │          │          │          │          │                  │
-│  └── Service luôn warm, không bao giờ spin-down ──┘            │
-│                                                                 │
-│  Nếu KHÔNG có UptimeRobot:                                     │
-│  t=0    t=15m (spin-down) ─── t=? (cold start 30-60s) ───     │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+Interval 5 phÃºt Ã— 24 giá» Ã— 30 ngÃ y = 8.640 pings/thÃ¡ng
+```
+
+- **UptimeRobot Free:** 50 monitors, interval tá»‘i thiá»ƒu 5 phÃºt â†’ Ä‘á»§ dÃ¹ng
+- **Render Free:** 750 giá»/thÃ¡ng = ~31 ngÃ y liÃªn tá»¥c â†’ Ä‘á»§ cháº¡y 24/7 cho 1 service
+- Health endpoint nháº¹ (~1-5ms xá»­ lÃ½) â†’ khÃ´ng tá»‘n tÃ i nguyÃªn Ä‘Ã¡ng ká»ƒ
+
+### 8.6 Lá»‹ch trÃ¬nh hoáº¡t Ä‘á»™ng
+
+```
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚ Timeline: Render Free + UptimeRobot                             â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚                                                                 â”‚
+â”‚  t=0        t=5m       t=10m      t=15m      t=20m             â”‚
+â”‚  â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”‚â”€â”€â”€â”€â”€            â”‚
+â”‚  â–² ping     â–² ping     â–² ping     â–² ping     â–² ping           â”‚
+â”‚  â”‚          â”‚          â”‚          â”‚          â”‚                  â”‚
+â”‚  â””â”€â”€ Service luÃ´n warm, khÃ´ng bao giá» spin-down â”€â”€â”˜            â”‚
+â”‚                                                                 â”‚
+â”‚  Náº¿u KHÃ”NG cÃ³ UptimeRobot:                                     â”‚
+â”‚  t=0    t=15m (spin-down) â”€â”€â”€ t=? (cold start 30-60s) â”€â”€â”€     â”‚
+â”‚                                                                 â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
 
 ## 9. Database Migration (Production)
 
-### 9.1 Tạo Migration mới
+### 9.1 Táº¡o Migration má»›i
 
 ```bash
-# Trên local machine
-cd packages/backend
+# TrÃªn local machine
+cd backend
 
-# Tạo migration (dev only)
+# Táº¡o migration (dev only)
 npx prisma migrate dev --name add_new_feature
 
 # Commit migration files
@@ -573,17 +576,17 @@ git commit -m "feat: add new migration"
 git push
 ```
 
-### 9.2 Apply Migration lên Production
+### 9.2 Apply Migration lÃªn Production
 
 ```bash
-# Dùng DIRECT_URL (port 5432) — không qua PgBouncer
+# DÃ¹ng DIRECT_URL (port 5432) â€” khÃ´ng qua PgBouncer
 DIRECT_URL="postgresql://..." npx prisma migrate deploy
 ```
 
-### 9.3 Reset Database (nếu cần)
+### 9.3 Reset Database (náº¿u cáº§n)
 
 ```bash
-# ⚠️ XÓA TOÀN BỘ DATA — chỉ dùng trên dev/preprod
+# âš ï¸ XÃ“A TOÃ€N Bá»˜ DATA â€” chá»‰ dÃ¹ng trÃªn dev/preprod
 npx prisma migrate reset
 ```
 
@@ -591,7 +594,7 @@ npx prisma migrate reset
 
 ```bash
 npx prisma studio
-# → http://localhost:5555
+# â†’ http://localhost:5555
 ```
 
 ---
@@ -604,7 +607,7 @@ npx prisma studio
 GET /v1/health
 ```
 
-Response chi tiết:
+Response chi tiáº¿t:
 ```json
 {
   "status": "ok",
@@ -619,31 +622,31 @@ Response chi tiết:
 
 | Service | Healthy khi | Unhealthy khi |
 |---|---|---|
-| `database` | Prisma `$queryRaw` thành công | Connection timeout / error |
-| `blockfrost` | `/health` trả `{ is_healthy: true }` | API unreachable |
-| `cache` | Redis PING thành công | Upstash unreachable |
+| `database` | Prisma `$queryRaw` thÃ nh cÃ´ng | Connection timeout / error |
+| `blockfrost` | `/health` tráº£ `{ is_healthy: true }` | API unreachable |
+| `cache` | Redis PING thÃ nh cÃ´ng | Upstash unreachable |
 
-> Nếu Upstash chưa cấu hình, `cache` trả `"not_configured"` (không phải error).
+> Náº¿u Upstash chÆ°a cáº¥u hÃ¬nh, `cache` tráº£ `"not_configured"` (khÃ´ng pháº£i error).
 
 ### 10.2 Render Dashboard
 
-- **Logs:** Render Dashboard → Service → **Logs** tab → Real-time log stream
-- **Metrics:** CPU, Memory, Request count (cơ bản)
+- **Logs:** Render Dashboard â†’ Service â†’ **Logs** tab â†’ Real-time log stream
+- **Metrics:** CPU, Memory, Request count (cÆ¡ báº£n)
 - **Events:** Deploy history, restart events
 
 ### 10.3 Supabase Dashboard
 
-- **Table Editor:** Xem data trực tiếp
-- **SQL Editor:** Chạy query ad-hoc
-- **Database → Reports:** Connection count, query performance
+- **Table Editor:** Xem data trá»±c tiáº¿p
+- **SQL Editor:** Cháº¡y query ad-hoc
+- **Database â†’ Reports:** Connection count, query performance
 
 ### 10.4 Upstash Dashboard
 
 - **Data Browser:** Xem Redis keys
-- **Usage:** Commands/ngày, memory usage
-- **Slowlog:** Các command chậm
+- **Usage:** Commands/ngÃ y, memory usage
+- **Slowlog:** CÃ¡c command cháº­m
 
-### 10.5 Kiểm tra nhanh từ Terminal
+### 10.5 Kiá»ƒm tra nhanh tá»« Terminal
 
 ```bash
 # Health check
@@ -655,119 +658,119 @@ curl -s https://solvernet-api.onrender.com/v1/chart/intervals | jq .
 # Latest price
 curl -s https://solvernet-api.onrender.com/v1/chart/price/POOL_ID | jq .
 
-# Pool thông tin
+# Pool thÃ´ng tin
 curl -s https://solvernet-api.onrender.com/v1/pools | jq .
 ```
 
 ---
 
-## 11. Tối ưu Free Tier
+## 11. Tá»‘i Æ°u Free Tier
 
-### 11.1 Blockfrost: Giảm API Calls bằng Cache
+### 11.1 Blockfrost: Giáº£m API Calls báº±ng Cache
 
-**Vấn đề:** Free tier giới hạn 50.000 requests/ngày (~35/phút).
+**Váº¥n Ä‘á»:** Free tier giá»›i háº¡n 50.000 requests/ngÃ y (~35/phÃºt).
 
-**Giải pháp:** Upstash Redis cache với TTL phù hợp:
+**Giáº£i phÃ¡p:** Upstash Redis cache vá»›i TTL phÃ¹ há»£p:
 
-| Endpoint | Không cache | Với cache (TTL) | Tiết kiệm |
+| Endpoint | KhÃ´ng cache | Vá»›i cache (TTL) | Tiáº¿t kiá»‡m |
 |---|---|---|---|
-| Chain Tip | ~2/phút | ~4/phút (15s TTL) | ~50% |
+| Chain Tip | ~2/phÃºt | ~4/phÃºt (15s TTL) | ~50% |
 | UTxO query | ~1/request | Cache 30s | ~80% |
-| Protocol Params | ~1/phút | Cache 5 phút | ~80% |
+| Protocol Params | ~1/phÃºt | Cache 5 phÃºt | ~80% |
 
-**Ước tính:**
-- Không cache: ~20.000-30.000 requests/ngày
-- Có cache: ~5.000-10.000 requests/ngày → **an toàn trong free tier**
+**Æ¯á»›c tÃ­nh:**
+- KhÃ´ng cache: ~20.000-30.000 requests/ngÃ y
+- CÃ³ cache: ~5.000-10.000 requests/ngÃ y â†’ **an toÃ n trong free tier**
 
-### 11.2 Supabase: Giảm Storage bằng H4+ Candles
+### 11.2 Supabase: Giáº£m Storage báº±ng H4+ Candles
 
-**Vấn đề:** Free tier giới hạn 500 MB storage.
+**Váº¥n Ä‘á»:** Free tier giá»›i háº¡n 500 MB storage.
 
-**Giải pháp:** Chỉ lưu candles khung lớn (H4, D1, W1):
+**Giáº£i phÃ¡p:** Chá»‰ lÆ°u candles khung lá»›n (H4, D1, W1):
 
-| Strategy | Candles/ngày/pool | Storage/tháng (5 pools) |
+| Strategy | Candles/ngÃ y/pool | Storage/thÃ¡ng (5 pools) |
 |---|---|---|
-| M1 → W1 (8 intervals) | ~1.446 rows | ~200 MB |
+| M1 â†’ W1 (8 intervals) | ~1.446 rows | ~200 MB |
 | **H4 + D1 + W1** (3 intervals) | ~7 rows | **~5 MB** |
 
-- PriceTick tự động cleanup sau 2 ngày
-- Candle data giữ vĩnh viễn (chỉ 3 intervals → rất nhẹ)
-- **Ước tính 6 tháng:** < 50 MB cho 5 pools → an toàn 500 MB
+- PriceTick tá»± Ä‘á»™ng cleanup sau 2 ngÃ y
+- Candle data giá»¯ vÄ©nh viá»…n (chá»‰ 3 intervals â†’ ráº¥t nháº¹)
+- **Æ¯á»›c tÃ­nh 6 thÃ¡ng:** < 50 MB cho 5 pools â†’ an toÃ n 500 MB
 
-### 11.3 Upstash: Quản lý 10K Commands/ngày
+### 11.3 Upstash: Quáº£n lÃ½ 10K Commands/ngÃ y
 
-**Phân bổ ước tính commands/ngày:**
+**PhÃ¢n bá»• Æ°á»›c tÃ­nh commands/ngÃ y:**
 
-| Loại | Commands | Ghi chú |
+| Loáº¡i | Commands | Ghi chÃº |
 |---|---|---|
 | Blockfrost cache | ~3.000 | GET + SET chain data |
 | Chart cache | ~2.000 | Candle queries |
-| Health check | ~300 | UptimeRobot ping mỗi 5 phút |
+| Health check | ~300 | UptimeRobot ping má»—i 5 phÃºt |
 | User requests | ~2.000 | Frontend chart/price queries |
-| **Tổng** | **~7.300** | Còn dư ~2.700/ngày |
+| **Tá»•ng** | **~7.300** | CÃ²n dÆ° ~2.700/ngÃ y |
 
-### 11.4 Render: Tối ưu Memory 512 MB
+### 11.4 Render: Tá»‘i Æ°u Memory 512 MB
 
 ```dotenv
-# Giảm log level → ít object allocation
+# Giáº£m log level â†’ Ã­t object allocation
 LOG_LEVEL=warn
 
-# Giới hạn candles per request
+# Giá»›i háº¡n candles per request
 CHART_MAX_CANDLES=500
 
-# Node.js memory limit (Render tự set, nhưng có thể override)
+# Node.js memory limit (Render tá»± set, nhÆ°ng cÃ³ thá»ƒ override)
 NODE_OPTIONS=--max-old-space-size=450
 ```
 
 **Tips:**
-- Dùng `warn` log level trên production (tiết kiệm ~50 MB RAM)
-- Prisma connection pool mặc định: 2 connections (Supabase free cho tối đa 60)
-- Graceful degradation: nếu cache down, app vẫn chạy
+- DÃ¹ng `warn` log level trÃªn production (tiáº¿t kiá»‡m ~50 MB RAM)
+- Prisma connection pool máº·c Ä‘á»‹nh: 2 connections (Supabase free cho tá»‘i Ä‘a 60)
+- Graceful degradation: náº¿u cache down, app váº«n cháº¡y
 
 ---
 
 ## 12. Troubleshooting
 
-### 12.1 Lỗi thường gặp
+### 12.1 Lá»—i thÆ°á»ng gáº·p
 
-| Lỗi | Nguyên nhân | Giải pháp |
+| Lá»—i | NguyÃªn nhÃ¢n | Giáº£i phÃ¡p |
 |---|---|---|
-| `ECONNREFUSED` PostgreSQL | Sai DATABASE_URL hoặc firewall | Kiểm tra URL + port (6543 cho pooler) |
-| `P1001: Can't reach database` | Supabase paused (free tier) | Vào Supabase dashboard → Resume project |
-| Blockfrost `402 Payment Required` | Hết quota 50K/ngày | Chờ reset (UTC midnight) hoặc upgrade |
-| Blockfrost `418 IP banned` | Rate limit exceeded | Giảm request rate, kiểm tra cache |
-| `UPSTASH_REDIS_URL not set` | Chưa cấu hình Redis | Thêm env vars hoặc bỏ qua (graceful) |
-| Render cold start chậm | Service đã spin-down | Cấu hình UptimeRobot (mục 8) |
-| `prisma migrate` fail | Dùng pooler URL thay vì direct | Dùng `DIRECT_URL` (port 5432) |
-| Build fail trên Render | Monorepo path sai | Build command: `cd ../.. && pnpm install && pnpm build` |
-| `BigInt serialization` | JSON.stringify BigInt | App đã handle — kiểm tra serializer |
-| CORS error | Frontend URL không match | Cập nhật `CORS_ORIGIN` trên Render env |
+| `ECONNREFUSED` PostgreSQL | Sai DATABASE_URL hoáº·c firewall | Kiá»ƒm tra URL + port (6543 cho pooler) |
+| `P1001: Can't reach database` | Supabase paused (free tier) | VÃ o Supabase dashboard â†’ Resume project |
+| Blockfrost `402 Payment Required` | Háº¿t quota 50K/ngÃ y | Chá» reset (UTC midnight) hoáº·c upgrade |
+| Blockfrost `418 IP banned` | Rate limit exceeded | Giáº£m request rate, kiá»ƒm tra cache |
+| `UPSTASH_REDIS_URL not set` | ChÆ°a cáº¥u hÃ¬nh Redis | ThÃªm env vars hoáº·c bá» qua (graceful) |
+| Render cold start cháº­m | Service Ä‘Ã£ spin-down | Cáº¥u hÃ¬nh UptimeRobot (má»¥c 8) |
+| `prisma migrate` fail | DÃ¹ng pooler URL thay vÃ¬ direct | DÃ¹ng `DIRECT_URL` (port 5432) |
+| Build fail trÃªn Render | Monorepo path sai | Build command: `cd ../.. && pnpm install && pnpm build` |
+| `BigInt serialization` | JSON.stringify BigInt | App Ä‘Ã£ handle â€” kiá»ƒm tra serializer |
+| CORS error | Frontend URL khÃ´ng match | Cáº­p nháº­t `CORS_ORIGIN` trÃªn Render env |
 
 ### 12.2 Debug Commands
 
 ```bash
-# Kiểm tra kết nối Supabase từ local
+# Kiá»ƒm tra káº¿t ná»‘i Supabase tá»« local
 npx prisma db pull
 
-# Kiểm tra Blockfrost
+# Kiá»ƒm tra Blockfrost
 curl -H "project_id: YOUR_KEY" \
   https://cardano-preprod.blockfrost.io/api/v0/health
 
-# Kiểm tra Upstash Redis
+# Kiá»ƒm tra Upstash Redis
 curl https://xxx.upstash.io/ping \
   -H "Authorization: Bearer YOUR_TOKEN"
 
 # Xem Render logs (real-time)
-# → Render Dashboard → Service → Logs
+# â†’ Render Dashboard â†’ Service â†’ Logs
 
 # Test health endpoint
 curl -s https://solvernet-api.onrender.com/v1/health | jq .
 ```
 
-### 12.3 Reset hoàn toàn (Development)
+### 12.3 Reset hoÃ n toÃ n (Development)
 
 ```bash
-cd packages/backend
+cd backend
 
 # Reset database
 npx prisma migrate reset
@@ -784,42 +787,42 @@ pnpm dev
 
 ### 12.4 Supabase Pause/Resume
 
-Supabase **tự động pause** project free tier sau **7 ngày không hoạt động**:
+Supabase **tá»± Ä‘á»™ng pause** project free tier sau **7 ngÃ y khÃ´ng hoáº¡t Ä‘á»™ng**:
 
-1. Vào [supabase.com/dashboard](https://supabase.com/dashboard)
-2. Chọn project → Click **Resume project**
-3. Đợi ~1-2 phút để database ready
-4. Backend tự reconnect (Prisma retry)
+1. VÃ o [supabase.com/dashboard](https://supabase.com/dashboard)
+2. Chá»n project â†’ Click **Resume project**
+3. Äá»£i ~1-2 phÃºt Ä‘á»ƒ database ready
+4. Backend tá»± reconnect (Prisma retry)
 
-> **Phòng tránh:** Backend chạy 24/7 với UptimeRobot → liên tục query DB → Supabase không pause.
+> **PhÃ²ng trÃ¡nh:** Backend cháº¡y 24/7 vá»›i UptimeRobot â†’ liÃªn tá»¥c query DB â†’ Supabase khÃ´ng pause.
 
 ---
 
 ## 13. Quick Start Checklist
 
-### Lần đầu Setup (từ 0)
+### Láº§n Ä‘áº§u Setup (tá»« 0)
 
-- [ ] Đăng ký **Blockfrost** → lấy Project ID (Preprod)
-- [ ] Đăng ký **Supabase** → lấy DATABASE_URL + DIRECT_URL
-- [ ] Đăng ký **Upstash** → lấy REDIS_URL + TOKEN
-- [ ] Đăng ký **Render** (GitHub login)
-- [ ] Đăng ký **Vercel** (GitHub login)
-- [ ] Đăng ký **UptimeRobot** (free)
+- [ ] ÄÄƒng kÃ½ **Blockfrost** â†’ láº¥y Project ID (Preprod)
+- [ ] ÄÄƒng kÃ½ **Supabase** â†’ láº¥y DATABASE_URL + DIRECT_URL
+- [ ] ÄÄƒng kÃ½ **Upstash** â†’ láº¥y REDIS_URL + TOKEN
+- [ ] ÄÄƒng kÃ½ **Render** (GitHub login)
+- [ ] ÄÄƒng kÃ½ **Vercel** (GitHub login)
+- [ ] ÄÄƒng kÃ½ **UptimeRobot** (free)
 - [ ] Clone repo + `pnpm install` + `pnpm build`
-- [ ] Tạo `.env` từ `.env.example` → điền credentials
+- [ ] Táº¡o `.env` tá»« `.env.example` â†’ Ä‘iá»n credentials
 - [ ] `npx prisma generate` + `npx prisma migrate dev`
-- [ ] `pnpm dev` → test `curl localhost:3001/v1/health`
-- [ ] Push code lên GitHub
-- [ ] Tạo Render Web Service → cấu hình env vars → deploy
-- [ ] `npx prisma migrate deploy` (trỏ DIRECT_URL tới Supabase)
-- [ ] Tạo Vercel project → import frontend → deploy
-- [ ] Cập nhật `CORS_ORIGIN` trên Render
-- [ ] Tạo UptimeRobot monitor → ping `/v1/health` mỗi 5 phút
-- [ ] Kiểm tra: `curl https://your-api.onrender.com/v1/health`
+- [ ] `pnpm dev` â†’ test `curl localhost:3001/v1/health`
+- [ ] Push code lÃªn GitHub
+- [ ] Táº¡o Render Web Service â†’ cáº¥u hÃ¬nh env vars â†’ deploy
+- [ ] `npx prisma migrate deploy` (trá» DIRECT_URL tá»›i Supabase)
+- [ ] Táº¡o Vercel project â†’ import frontend â†’ deploy
+- [ ] Cáº­p nháº­t `CORS_ORIGIN` trÃªn Render
+- [ ] Táº¡o UptimeRobot monitor â†’ ping `/v1/health` má»—i 5 phÃºt
+- [ ] Kiá»ƒm tra: `curl https://your-api.onrender.com/v1/health`
 
-### Chi phí hàng tháng
+### Chi phÃ­ hÃ ng thÃ¡ng
 
-| Dịch vụ | Chi phí |
+| Dá»‹ch vá»¥ | Chi phÃ­ |
 |---|---|
 | Blockfrost Free | $0 |
 | Supabase Free | $0 |
@@ -827,51 +830,51 @@ Supabase **tự động pause** project free tier sau **7 ngày không hoạt đ
 | Render Free | $0 |
 | Vercel Free | $0 |
 | UptimeRobot Free | $0 |
-| **Tổng** | **$0/tháng** |
+| **Tá»•ng** | **$0/thÃ¡ng** |
 
 ---
 
-## Kiến trúc Tổng quan
+## Kiáº¿n trÃºc Tá»•ng quan
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        SolverNet DEX Architecture                       │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────┐        ┌──────────────────────────┐                  │
-│  │   Browser     │───────▶│  Vercel (Next.js)         │                  │
-│  │   User        │◀───────│  frontend-etf-factory     │                  │
-│  └──────────────┘        └──────────┬───────────────┘                  │
-│                                      │ HTTPS                            │
-│                                      ▼                                  │
-│  ┌──────────────┐        ┌──────────────────────────┐                  │
-│  │  UptimeRobot  │──────▶│  Render (Node.js)         │                  │
-│  │  ping /5min   │       │  packages/backend         │                  │
-│  └──────────────┘        │                            │                  │
-│                           │  ┌─────────┐ ┌─────────┐ │                  │
-│                           │  │ Express │ │ Solver  │ │                  │
-│                           │  │ API     │ │ Engine  │ │                  │
-│                           │  └────┬────┘ └────┬────┘ │                  │
-│                           │       │           │       │                  │
-│                           │  ┌────▼───────────▼────┐ │                  │
-│                           │  │  CacheService       │ │                  │
-│                           │  │  (cache-aside)      │ │                  │
-│                           │  └────┬────────────────┘ │                  │
-│                           └───────┼──────────────────┘                  │
-│                                   │                                     │
-│                    ┌──────────────┼──────────────┐                      │
-│                    │              │              │                       │
-│                    ▼              ▼              ▼                       │
-│  ┌──────────────────┐ ┌────────────────┐ ┌──────────────┐              │
-│  │  Supabase         │ │  Upstash Redis │ │  Blockfrost  │              │
-│  │  PostgreSQL       │ │  (Cache)       │ │  (Cardano    │              │
-│  │  500 MB free      │ │  256 MB free   │ │   Preprod)   │              │
-│  └──────────────────┘ └────────────────┘ └──────────────┘              │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+â”‚                        SolverNet DEX Architecture                       â”‚
+â”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤
+â”‚                                                                         â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                  â”‚
+â”‚  â”‚   Browser     â”‚â”€â”€â”€â”€â”€â”€â”€â–¶â”‚  Vercel (Next.js)         â”‚                  â”‚
+â”‚  â”‚   User        â”‚â—€â”€â”€â”€â”€â”€â”€â”€â”‚  frontend-etf-factory     â”‚                  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜        â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                  â”‚
+â”‚                                      â”‚ HTTPS                            â”‚
+â”‚                                      â–¼                                  â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”        â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                  â”‚
+â”‚  â”‚  UptimeRobot  â”‚â”€â”€â”€â”€â”€â”€â–¶â”‚  Render (Node.js)         â”‚                  â”‚
+â”‚  â”‚  ping /5min   â”‚       â”‚  backend         â”‚                  â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜        â”‚                            â”‚                  â”‚
+â”‚                           â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”‚                  â”‚
+â”‚                           â”‚  â”‚ Express â”‚ â”‚ Solver  â”‚ â”‚                  â”‚
+â”‚                           â”‚  â”‚ API     â”‚ â”‚ Engine  â”‚ â”‚                  â”‚
+â”‚                           â”‚  â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”˜ â”‚                  â”‚
+â”‚                           â”‚       â”‚           â”‚       â”‚                  â”‚
+â”‚                           â”‚  â”Œâ”€â”€â”€â”€â–¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â–¼â”€â”€â”€â”€â” â”‚                  â”‚
+â”‚                           â”‚  â”‚  CacheService       â”‚ â”‚                  â”‚
+â”‚                           â”‚  â”‚  (cache-aside)      â”‚ â”‚                  â”‚
+â”‚                           â”‚  â””â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â”‚                  â”‚
+â”‚                           â””â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜                  â”‚
+â”‚                                   â”‚                                     â”‚
+â”‚                    â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¼â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                      â”‚
+â”‚                    â”‚              â”‚              â”‚                       â”‚
+â”‚                    â–¼              â–¼              â–¼                       â”‚
+â”‚  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â” â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”              â”‚
+â”‚  â”‚  Supabase         â”‚ â”‚  Upstash Redis â”‚ â”‚  Blockfrost  â”‚              â”‚
+â”‚  â”‚  PostgreSQL       â”‚ â”‚  (Cache)       â”‚ â”‚  (Cardano    â”‚              â”‚
+â”‚  â”‚  500 MB free      â”‚ â”‚  256 MB free   â”‚ â”‚   Preprod)   â”‚              â”‚
+â”‚  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜ â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜              â”‚
+â”‚                                                                         â”‚
+â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 ```
 
 ---
 
-> **Phiên bản:** 2.0 — Cập nhật cho stack Blockfrost + Supabase + Upstash + Render + Vercel  
-> **Cập nhật lần cuối:** 2025
+> **PhiÃªn báº£n:** 2.0 â€” Cáº­p nháº­t cho stack Blockfrost + Supabase + Upstash + Render + Vercel  
+> **Cáº­p nháº­t láº§n cuá»‘i:** 2025

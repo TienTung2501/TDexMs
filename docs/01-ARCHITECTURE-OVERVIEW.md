@@ -1,7 +1,7 @@
 # SolverNet DEX — Architecture Overview
 
-> **Document Version**: 1.0.0  
-> **Status**: Phase 1 — Design & Architecture  
+> **Document Version**: 1.1.0  
+> **Status**: Phase 2 — Implementation Complete  
 > **Author**: Solutions Architecture Team  
 > **Date**: 2026-02-17  
 > **Classification**: Internal — Technical Design Document
@@ -491,7 +491,37 @@ interface LPPosition {
 
 ## 8. Deployment Architecture
 
-### 8.1 Environment Strategy
+### 8.1 Current Production Deployment (Phase 2)
+
+| Service | Platform | URL / Access |
+|---|---|---|
+| **Backend API** | Render (Docker, Free Tier) | `https://tdexms.onrender.com` |
+| **Frontend** | Vercel (Auto-deploy) | Vercel project URL |
+| **Database** | Supabase PostgreSQL (Free Tier) | Connection string in Render env |
+| **Cache** | Upstash Redis (Serverless) | Connection via `UPSTASH_REDIS_*` env |
+| **Blockchain** | Blockfrost (Preprod API) | 50K requests/day free |
+| **Keep-alive** | UptimeRobot | Pings `/v1/health` every 5 min |
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                 CURRENT DEPLOYMENT                       │
+├──────────┬──────────────────────────────────────────────┤
+│ Frontend │  Vercel CDN (Next.js 16, auto-deploy)        │
+│          │  ↓ NEXT_PUBLIC_API_URL                       │
+├──────────┼──────────────────────────────────────────────┤
+│ Backend  │  Render Docker (node:20-alpine)              │
+│          │  Express + Prisma + Solver Engine             │
+│          │  ↓ DATABASE_URL    ↓ BLOCKFROST_API_KEY      │
+├──────────┼──────────────────────────────────────────────┤
+│ Database │  Supabase PostgreSQL (Preprod)                │
+│ Cache    │  Upstash Redis (Serverless)                  │
+│ Chain    │  Blockfrost API (Cardano Preprod)             │
+├──────────┼──────────────────────────────────────────────┤
+│ Monitor  │  UptimeRobot → GET /v1/health (5 min)       │
+└──────────┴──────────────────────────────────────────────┘
+```
+
+### 8.2 Environment Strategy
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -500,21 +530,19 @@ interface LPPosition {
 │   Local  │    Preview   │   Staging    │   Production    │
 │          │   (Testnet)  │  (Pre-prod)  │   (Mainnet)     │
 ├──────────┼──────────────┼──────────────┼─────────────────┤
-│ Emulator │ Preview      │ Pre-prod     │ Mainnet         │
-│ (Aiken)  │ Testnet      │ Testnet      │                 │
+│ pnpm dev │ Vercel       │ Render +     │ Render +        │
+│ (backend │ Preview      │ Vercel       │ Vercel          │
+│  +front) │              │ (Preprod)    │ (Mainnet)       │
 │          │              │              │                 │
-│ Mock     │ Testnet      │ Pre-prod     │ Mainnet         │
-│ Ogmios   │ Node         │ Node         │ Node            │
+│ Blockfrost│ Blockfrost  │ Blockfrost   │ Blockfrost/     │
+│ Preprod  │ Preprod      │ Preprod      │ Ogmios+Kupo    │
 │          │              │              │                 │
-│ SQLite   │ PostgreSQL   │ PostgreSQL   │ PostgreSQL      │
-│          │ (shared)     │ (dedicated)  │ (HA cluster)    │
-│          │              │              │                 │
-│ next dev │ Vercel       │ Vercel       │ Vercel/         │
-│          │ Preview      │ Preview      │ Cloudflare      │
+│ Supabase │ Supabase     │ Supabase     │ PostgreSQL      │
+│ (shared) │ (shared)     │ (dedicated)  │ (HA cluster)    │
 └──────────┴──────────────┴──────────────┴─────────────────┘
 ```
 
-### 8.2 CI/CD Pipeline
+### 8.3 CI/CD Pipeline
 
 ```
   Push to branch
@@ -532,6 +560,8 @@ interface LPPosition {
        ▼                                              ▼
   ┌──────────────────────────────────────────────────────┐
   │              Deploy to Target Environment            │
+  │  Render: auto-deploy on push (Docker build)          │
+  │  Vercel: auto-deploy on push (Next.js build)         │
   └──────────────────────────────────────────────────────┘
 ```
 
@@ -615,15 +645,16 @@ interface LPPosition {
 | **Rationale** | Better optimization (smaller scripts), Rust-like syntax, built-in testing, active ecosystem |
 | **Consequences** | Team needs Aiken expertise, limited to Aiken stdlib |
 
-### TDR-003: Ogmios + Kupo over Blockfrost
+### TDR-003: Blockfrost API (replacing self-hosted Ogmios + Kupo)
 
 | | Decision |
 |---|---|
-| **Status** | ✅ Accepted |
-| **Context** | Solver needs low-latency chain access for competitive intent fulfillment |
-| **Decision** | Self-host Ogmios + Kupo for chain interaction |
-| **Rationale** | Sub-10ms query latency, no rate limits, full UTxO index, WebSocket chain sync |
-| **Consequences** | Infrastructure management overhead, ~250GB storage requirement |
+| **Status** | ✅ Accepted (updated for Phase 2) |
+| **Context** | Self-hosted Ogmios + Kupo requires ~32 GB RAM and ~120 GB disk; not feasible for free-tier deployment |
+| **Decision** | Use Blockfrost API for chain interaction (Preprod network) |
+| **Rationale** | 50K free requests/day, zero infrastructure, paired with Upstash Redis cache to reduce calls by ~60-70% |
+| **Consequences** | Rate limited (10 req/s), vendor dependency; can migrate to self-hosted Ogmios+Kupo for mainnet |
+| **Original Plan** | Self-host Ogmios + Kupo for sub-10ms query latency and full UTxO index |
 
 ### TDR-004: Lucid Evolution for TX Building
 

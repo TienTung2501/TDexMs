@@ -6,15 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
-import type { Pool } from "@/lib/mock-data";
+import type { NormalizedPool } from "@/lib/hooks";
+import { depositLiquidity, withdrawLiquidity } from "@/lib/api";
 import { formatAmount, formatCompact } from "@/lib/utils";
 
 interface LiquidityFormProps {
-  pool: Pool;
+  pool: NormalizedPool;
 }
 
 export function LiquidityForm({ pool }: LiquidityFormProps) {
-  const { isConnected, balances, connect } = useWallet();
+  const { isConnected, address, balances, connect } = useWallet();
   const [amountA, setAmountA] = useState("");
   const [amountB, setAmountB] = useState("");
   const [withdrawPercent, setWithdrawPercent] = useState("");
@@ -23,7 +24,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
   // Auto-calculate proportional amount
   const handleAmountAChange = (val: string) => {
     setAmountA(val);
-    if (val && parseFloat(val) > 0) {
+    if (val && parseFloat(val) > 0 && pool.reserveA > 0) {
       const ratio = pool.reserveB / pool.reserveA;
       setAmountB((parseFloat(val) * ratio).toFixed(2));
     } else {
@@ -32,19 +33,46 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
   };
 
   const handleDeposit = useCallback(async () => {
+    if (!address) return;
     setIsSubmitting(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    setIsSubmitting(false);
-    setAmountA("");
-    setAmountB("");
-  }, []);
+    try {
+      await depositLiquidity(pool.id, {
+        amountA: amountA,
+        amountB: amountB,
+        minLpTokens: "0",
+        senderAddress: address,
+        changeAddress: address,
+      });
+      setAmountA("");
+      setAmountB("");
+    } catch (err) {
+      console.error("Deposit failed:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [pool.id, amountA, amountB, address]);
 
   const handleWithdraw = useCallback(async () => {
+    if (!address || !withdrawPercent) return;
     setIsSubmitting(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    setIsSubmitting(false);
-    setWithdrawPercent("");
-  }, []);
+    try {
+      const lpAmount = Math.floor(
+        pool.totalLpTokens * (parseFloat(withdrawPercent) / 100)
+      ).toString();
+      await withdrawLiquidity(pool.id, {
+        lpTokenAmount: lpAmount,
+        minAmountA: "0",
+        minAmountB: "0",
+        senderAddress: address,
+        changeAddress: address,
+      });
+      setWithdrawPercent("");
+    } catch (err) {
+      console.error("Withdraw failed:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [pool.id, pool.totalLpTokens, withdrawPercent, address]);
 
   return (
     <Tabs defaultValue="deposit" className="w-full">

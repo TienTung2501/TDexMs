@@ -5,51 +5,58 @@ import { SwapCard } from "@/components/dex/swap-card";
 import { PriceChart } from "@/components/dex/price-chart";
 import { RecentTradesTable } from "@/components/dex/recent-trades-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { MOCK_ANALYTICS, MOCK_POOLS, TOKENS, generateMockCandles, type Token } from "@/lib/mock-data";
+import { TOKENS, type Token } from "@/lib/mock-data";
+import { useAnalytics, usePools, useCandles } from "@/lib/hooks";
 import { formatCompact } from "@/lib/utils";
-import { Activity, TrendingUp, Droplets, Users } from "lucide-react";
-
-const STATS = [
-  {
-    label: "Total TVL",
-    value: formatCompact(MOCK_ANALYTICS.tvl),
-    prefix: "₳ ",
-    icon: Droplets,
-  },
-  {
-    label: "24h Volume",
-    value: formatCompact(MOCK_ANALYTICS.volume24h),
-    prefix: "₳ ",
-    icon: TrendingUp,
-  },
-  {
-    label: "Intents Filled",
-    value: `${MOCK_ANALYTICS.fillRate}%`,
-    icon: Activity,
-  },
-  {
-    label: "Active Pools",
-    value: MOCK_POOLS.filter((p) => p.state === "ACTIVE").length.toString(),
-    icon: Users,
-  },
-];
+import { Activity, TrendingUp, Droplets, Users, Loader2 } from "lucide-react";
 
 export default function SwapPage() {
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
   const [outputToken, setOutputToken] = useState<Token>(TOKENS.HOSKY);
 
+  const { analytics, loading: analyticsLoading } = useAnalytics();
+  const { pools } = usePools();
+
   // Find pool for chart
   const pool = useMemo(() => {
-    return MOCK_POOLS.find(
+    return pools.find(
       (p) =>
         (p.assetA.ticker === inputToken.ticker &&
           p.assetB.ticker === outputToken.ticker) ||
         (p.assetB.ticker === inputToken.ticker &&
           p.assetA.ticker === outputToken.ticker)
     );
-  }, [inputToken.ticker, outputToken.ticker]);
+  }, [pools, inputToken.ticker, outputToken.ticker]);
 
-  const candles = useMemo(() => generateMockCandles(30), []);
+  const { candles, loading: candlesLoading } = useCandles(pool?.id, "4h");
+
+  const stats = useMemo(
+    () => [
+      {
+        label: "Total TVL",
+        value: analytics ? formatCompact(analytics.tvl) : "—",
+        prefix: "₳ ",
+        icon: Droplets,
+      },
+      {
+        label: "24h Volume",
+        value: analytics ? formatCompact(analytics.volume24h) : "—",
+        prefix: "₳ ",
+        icon: TrendingUp,
+      },
+      {
+        label: "Intents Filled",
+        value: analytics ? `${analytics.fillRate.toFixed(1)}%` : "—",
+        icon: Activity,
+      },
+      {
+        label: "Active Pools",
+        value: analytics ? `${analytics.totalPools}` : "—",
+        icon: Users,
+      },
+    ],
+    [analytics]
+  );
 
   return (
     <div className="shell py-8 space-y-6">
@@ -67,7 +74,7 @@ export default function SwapPage() {
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {STATS.map((stat) => (
+        {stats.map((stat) => (
           <div
             key={stat.label}
             className="rounded-xl border border-border/50 bg-card/50 p-4 text-center space-y-1"
@@ -77,10 +84,16 @@ export default function SwapPage() {
               <span className="text-xs">{stat.label}</span>
             </div>
             <div className="text-lg font-bold">
-              {stat.prefix && (
-                <span className="text-primary">{stat.prefix}</span>
+              {analyticsLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin mx-auto" />
+              ) : (
+                <>
+                  {stat.prefix && (
+                    <span className="text-primary">{stat.prefix}</span>
+                  )}
+                  {stat.value}
+                </>
               )}
-              {stat.value}
             </div>
           </div>
         ))}
@@ -106,7 +119,13 @@ export default function SwapPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <PriceChart data={candles} />
+              {candlesLoading ? (
+                <div className="flex items-center justify-center h-[300px]">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <PriceChart data={candles} />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -118,6 +137,7 @@ export default function SwapPage() {
             outputToken={outputToken}
             onInputTokenChange={setInputToken}
             onOutputTokenChange={setOutputToken}
+            pools={pools}
           />
         </div>
       </div>

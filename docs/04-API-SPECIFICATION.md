@@ -1,9 +1,9 @@
 # SolverNet DEX — API Specification
 
-> **Document Version**: 1.0.0  
-> **Status**: Phase 1 — Design  
+> **Document Version**: 1.1.0  
+> **Status**: Phase 2 — Implemented & Deployed  
 > **Date**: 2026-02-17  
-> **Base URL**: `https://api.solvernet.io/v1`  
+> **Base URL**: `https://tdexms.onrender.com/v1`  
 > **Classification**: Internal — Technical Specification
 
 ---

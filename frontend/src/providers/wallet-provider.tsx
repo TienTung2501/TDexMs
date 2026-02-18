@@ -1,7 +1,22 @@
 "use client";
 
 import React, { createContext, useContext, useState, useCallback } from "react";
-import { MOCK_WALLET } from "@/lib/mock-data";
+
+// Inline mock wallet data (replace with CIP-30 wallet integration in production)
+const DEMO_WALLET = {
+  address:
+    "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu5d8ps7zex2k2xt3uqxgjqnnj83ws8lhrn648jjxtwq2ytjqp",
+  balances: {
+    ADA: 1_500_000_000,
+    HOSKY: 10_000_000_000,
+    DJED: 2_500_000_000,
+    MELD: 15_000_000_000,
+    MIN: 8_000_000_000,
+    INDY: 500_000_000,
+    SNEK: 25_000_000_000,
+    WMT: 3_000_000_000,
+  } as Record<string, number>,
+};
 
 interface WalletContextType {
   isConnected: boolean;
@@ -25,10 +40,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [balances, setBalances] = useState<Record<string, number>>({});
 
   const connect = useCallback(() => {
-    // Mock wallet connection — replace with CIP-30 integration later
+    // Demo wallet connection — replace with CIP-30 integration later
     setIsConnected(true);
-    setAddress(MOCK_WALLET.address);
-    setBalances(MOCK_WALLET.balances);
+    setAddress(DEMO_WALLET.address);
+    setBalances(DEMO_WALLET.balances);
   }, []);
 
   const disconnect = useCallback(() => {

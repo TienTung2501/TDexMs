@@ -23,7 +23,9 @@ import {
   TokenButton,
 } from "@/components/dex/token-select";
 import { useWallet } from "@/providers/wallet-provider";
-import { TOKENS, MOCK_POOLS, type Token } from "@/lib/mock-data";
+import { TOKENS, type Token } from "@/lib/mock-data";
+import type { NormalizedPool } from "@/lib/hooks";
+import { createIntent } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
 
 interface SwapCardProps {
@@ -31,6 +33,7 @@ interface SwapCardProps {
   outputToken?: Token;
   onInputTokenChange?: (token: Token) => void;
   onOutputTokenChange?: (token: Token) => void;
+  pools?: NormalizedPool[];
 }
 
 export function SwapCard({
@@ -38,8 +41,9 @@ export function SwapCard({
   outputToken: controlledOutputToken,
   onInputTokenChange,
   onOutputTokenChange,
+  pools: externalPools,
 }: SwapCardProps = {}) {
-  const { isConnected, balances, connect } = useWallet();
+  const { isConnected, address, balances, connect } = useWallet();
 
   const [internalInputToken, setInternalInputToken] = useState<Token>(TOKENS.ADA);
   const [internalOutputToken, setInternalOutputToken] = useState<Token>(TOKENS.HOSKY);
@@ -72,14 +76,15 @@ export function SwapCard({
 
   // Find pool
   const pool = useMemo(() => {
-    return MOCK_POOLS.find(
+    const poolList = externalPools || [];
+    return poolList.find(
       (p) =>
         (p.assetA.ticker === inputToken.ticker &&
           p.assetB.ticker === outputToken.ticker) ||
         (p.assetB.ticker === inputToken.ticker &&
           p.assetA.ticker === outputToken.ticker)
     );
-  }, [inputToken.ticker, outputToken.ticker]);
+  }, [externalPools, inputToken.ticker, outputToken.ticker]);
 
   // Calculate output
   const quote = useMemo(() => {
@@ -116,14 +121,41 @@ export function SwapCard({
       : raw;
   }, [balances, inputToken]);
 
-  // Handle swap
+  // Handle swap — submit intent to backend
   const handleSwap = useCallback(async () => {
+    if (!pool || !address) return;
     setIsSwapping(true);
-    // Mock delay
-    await new Promise((r) => setTimeout(r, 2000));
-    setIsSwapping(false);
-    setInputAmount("");
-  }, []);
+    try {
+      const inputAsset =
+        inputToken.policyId === ""
+          ? "lovelace"
+          : `${inputToken.policyId}.${inputToken.assetName}`;
+      const outputAsset =
+        outputToken.policyId === ""
+          ? "lovelace"
+          : `${outputToken.policyId}.${outputToken.assetName}`;
+      const minOut = Math.floor(
+        quote.output * (1 - slippage / 100)
+      ).toString();
+      const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
+
+      await createIntent({
+        senderAddress: address,
+        inputAsset,
+        inputAmount: inputAmount,
+        outputAsset,
+        minOutput: minOut,
+        deadline,
+        partialFill: false,
+        changeAddress: address,
+      });
+      setInputAmount("");
+    } catch (err) {
+      console.error("Swap intent failed:", err);
+    } finally {
+      setIsSwapping(false);
+    }
+  }, [pool, address, inputToken, outputToken, inputAmount, quote.output, slippage]);
 
   // Price impact color
   const impactColor =

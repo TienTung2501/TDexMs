@@ -6,28 +6,29 @@ import {
   Wallet,
   TrendingUp,
   TrendingDown,
-  ExternalLink,
   PieChart,
   ClipboardList,
+  Loader2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Progress } from "@/components/ui/progress";
 import { useWallet } from "@/providers/wallet-provider";
-import {
-  MOCK_PORTFOLIO,
-  MOCK_INTENTS,
-  MOCK_POOLS,
-  TOKENS,
-  generatePerformanceData,
-} from "@/lib/mock-data";
-import { formatCompact, formatAda, formatPercent, cn } from "@/lib/utils";
+import { useIntents, usePools } from "@/lib/hooks";
+import { TOKENS } from "@/lib/mock-data";
+import { formatCompact, cn } from "@/lib/utils";
 
 export default function PortfolioPage() {
   const { isConnected, address, balances, connect } = useWallet();
-  const perfData = useMemo(() => generatePerformanceData(30), []);
+  const { intents, loading: intentsLoading } = useIntents({
+    address: isConnected ? address ?? undefined : undefined,
+  });
+  const { pools, loading: poolsLoading } = usePools();
+
+  const activeIntents = useMemo(
+    () => intents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING"),
+    [intents]
+  );
 
   if (!isConnected) {
     return (
@@ -46,10 +47,6 @@ export default function PortfolioPage() {
     );
   }
 
-  const activeIntents = MOCK_INTENTS.filter(
-    (i) => i.status === "ACTIVE" || i.status === "PENDING"
-  );
-
   return (
     <div className="shell py-8 space-y-6">
       <h1 className="text-2xl font-bold">Portfolio</h1>
@@ -59,48 +56,57 @@ export default function PortfolioPage() {
         <Card>
           <CardContent className="p-5">
             <div className="text-xs text-muted-foreground mb-1">
-              Total Value
+              Active Intents
             </div>
             <div className="text-2xl font-bold">
-              {formatAda(MOCK_PORTFOLIO.totalValueAda * 1_000_000)}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground mb-1">
-              Total PnL
-            </div>
-            <div
-              className={cn(
-                "text-2xl font-bold",
-                MOCK_PORTFOLIO.totalPnl >= 0 ? "text-primary" : "text-destructive"
+              {intentsLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                activeIntents.length
               )}
-            >
-              {formatPercent(MOCK_PORTFOLIO.totalPnlPercent)}
-            </div>
-            <div className="text-xs text-muted-foreground">
-              {MOCK_PORTFOLIO.totalPnl >= 0 ? "+" : ""}
-              {formatCompact(MOCK_PORTFOLIO.totalPnl)} ADA
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
             <div className="text-xs text-muted-foreground mb-1">
-              LP Positions
+              Total Intents
             </div>
             <div className="text-2xl font-bold">
-              {MOCK_PORTFOLIO.positions.length}
+              {intentsLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                intents.length
+              )}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-5">
             <div className="text-xs text-muted-foreground mb-1">
-              Open Intents
+              Filled
             </div>
-            <div className="text-2xl font-bold">{activeIntents.length}</div>
+            <div className="text-2xl font-bold text-primary">
+              {intentsLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                intents.filter((i) => i.status === "FILLED").length
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <div className="text-xs text-muted-foreground mb-1">
+              Active Pools
+            </div>
+            <div className="text-2xl font-bold">
+              {poolsLoading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                pools.length
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -146,64 +152,52 @@ export default function PortfolioPage() {
         </CardContent>
       </Card>
 
-      {/* LP Positions */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <PieChart className="h-4 w-4" />
-            Liquidity Positions
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {MOCK_PORTFOLIO.positions.map((pos) => {
-              const pool = MOCK_POOLS.find((p) => p.id === pos.poolId);
-              return (
-                <Link key={pos.poolId} href={`/pools/${pos.poolId}`}>
+      {/* Pools Overview */}
+      {!poolsLoading && pools.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <PieChart className="h-4 w-4" />
+              Available Pools
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {pools.slice(0, 5).map((pool) => (
+                <Link key={pool.id} href={`/pools/${pool.id}`}>
                   <div className="flex items-center justify-between rounded-xl bg-secondary/30 p-4 hover:bg-secondary/50 transition-colors cursor-pointer">
                     <div className="flex items-center gap-3">
                       <div className="flex -space-x-1.5 text-xl">
-                        <span className="mr-1">{TOKENS[pos.assetATicker]?.logo}</span>
-                        <span className="ml-1">{TOKENS[pos.assetBTicker]?.logo}</span>
+                        <span className="mr-1">{pool.assetA.logo}</span>
+                        <span className="ml-1">{pool.assetB.logo}</span>
                       </div>
                       <div>
                         <div className="font-medium text-sm">
-                          {pos.assetATicker}/{pos.assetBTicker}
+                          {pool.assetA.ticker}/{pool.assetB.ticker}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {formatCompact(pos.lpTokens)} LP tokens &bull; Pool
-                          share {pos.sharePercent}%
+                          TVL: ₳ {formatCompact(pool.tvlAda)} &bull; APY {pool.apy.toFixed(1)}%
                         </div>
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-semibold text-sm">
-                        ₳ {formatCompact(pos.valueAda)}
+                      <div className="font-semibold text-sm text-primary">
+                        ₳ {formatCompact(pool.volume24h)}
                       </div>
-                      <div
-                        className={cn(
-                          "text-xs flex items-center gap-0.5 justify-end",
-                          pos.pnl >= 0 ? "text-primary" : "text-destructive"
-                        )}
-                      >
-                        {pos.pnl >= 0 ? (
-                          <TrendingUp className="h-3 w-3" />
-                        ) : (
-                          <TrendingDown className="h-3 w-3" />
-                        )}
-                        {formatPercent(pos.pnlPercent)}
+                      <div className="text-xs text-muted-foreground">
+                        24h vol
                       </div>
                     </div>
                   </div>
                 </Link>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Active Intents */}
-      {activeIntents.length > 0 && (
+      {!intentsLoading && activeIntents.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">

@@ -1,7 +1,7 @@
 # SolverNet DEX — Frontend Design System
 
-> **Document Version**: 1.0.0  
-> **Status**: Phase 1 — Design  
+> **Document Version**: 1.1.0  
+> **Status**: Phase 2 — Implemented & Integrated  
 > **Date**: 2026-02-17  
 > **Classification**: Internal — Technical Specification
 
@@ -500,7 +500,7 @@ function useSubmitIntent() {
 
 ## 8. State Management Architecture
 
-### 8.1 State Categories
+### 8.1 State Categories (Implemented)
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -508,17 +508,17 @@ function useSubmitIntent() {
 ├────────────────────┬──────────────────────────────────────┤
 │                    │                                      │
 │  SERVER STATE      │  • Pool list, pool details           │
-│  (TanStack Query)  │  • Quotes, prices                   │
-│                    │  • Intent status                     │
-│                    │  • Portfolio data                    │
-│                    │  • Analytics                         │
+│  (useApi<T> hook,  │  • Quotes, prices                   │
+│   lib/hooks.ts)    │  • Intent status                     │
+│                    │  • Portfolio (derived from intents)  │
+│                    │  • Analytics overview                │
 │                    │                                      │
 ├────────────────────┼──────────────────────────────────────┤
 │                    │                                      │
-│  WALLET STATE      │  • Connection status                 │
-│  (React Context)   │  • Address, balance                  │
-│                    │  • Network ID                        │
-│                    │  • CIP-30 API reference             │
+│  WALLET STATE      │  • Connection status (isConnected)   │
+│  (React Context —  │  • Address (testnet demo)            │
+│   WalletProvider)  │  • Balances (demo preset)            │
+│                    │  • Future: CIP-30 API reference     │
 │                    │                                      │
 ├────────────────────┼──────────────────────────────────────┤
 │                    │                                      │
@@ -535,77 +535,133 @@ function useSubmitIntent() {
 │                    │                                      │
 ├────────────────────┼──────────────────────────────────────┤
 │                    │                                      │
-│  REAL-TIME STATE   │  • Live prices (WebSocket)           │
-│  (WebSocket +      │  • Intent updates                   │
-│   TanStack Query)  │  • Pool state changes               │
+│  REAL-TIME STATE   │  • Live prices (WebSocket — ready)   │
+│  (useWebSocket     │  • Intent updates                   │
+│   hook)            │  • Pool state changes               │
 │                    │                                      │
 └────────────────────┴──────────────────────────────────────┘
 ```
 
-### 8.2 Provider Hierarchy
+> **Implementation Note**: Instead of TanStack Query, the project uses a lightweight
+> custom `useApi<T>()` hook with `setInterval`-based refetch to avoid extra dependencies.
+> See `frontend/src/lib/hooks.ts` for the full implementation.
+
+### 8.2 Provider Hierarchy (Actual)
 
 ```tsx
-// app/layout.tsx
-<ThemeProvider defaultTheme="dark">
-  <QueryClientProvider client={queryClient}>
-    <WalletProvider>
-      <NetworkProvider>
-        <Toaster />
-        <Header />
-        {children}
-        <Footer />
-      </NetworkProvider>
-    </WalletProvider>
-  </QueryClientProvider>
+// app/layout.tsx → app/providers.tsx
+<ThemeProvider defaultTheme="dark" attribute="class">
+  <WalletProvider>
+    <Header />
+    {children}
+  </WalletProvider>
 </ThemeProvider>
+```
+
+### 8.3 Wallet Provider (Demo Mode)
+
+```tsx
+// providers/wallet-provider.tsx
+const DEMO_WALLET = {
+  address: "addr_test1qz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzer3jcu...",
+  balances: { ADA: 15_000, HOSKY: 5_000_000_000, DJED: 2_500, ... },
+};
+
+// connect() sets address + balances from DEMO_WALLET
+// disconnect() clears state → isConnected = false
+// Future: replace with CIP-30 wallet detection (Nami, Eternl, Lace)
 ```
 
 ---
 
 ## 9. Data Fetching Strategy
 
-### 9.1 Query Key Convention
+### 9.1 Architecture Overview
 
-```typescript
-// Hierarchical query keys for targeted invalidation
-const queryKeys = {
-  pools: {
-    all: ['pools'] as const,
-    list: (filters: PoolFilters) => ['pools', 'list', filters] as const,
-    detail: (id: string) => ['pools', 'detail', id] as const,
-    history: (id: string, period: string) => ['pools', 'history', id, period] as const,
-  },
-  intents: {
-    all: ['intents'] as const,
-    list: (address: string) => ['intents', 'list', address] as const,
-    detail: (id: string) => ['intents', 'detail', id] as const,
-  },
-  quotes: {
-    swap: (params: QuoteParams) => ['quotes', 'swap', params] as const,
-  },
-  portfolio: {
-    summary: (address: string) => ['portfolio', address] as const,
-    positions: (address: string) => ['portfolio', address, 'positions'] as const,
-    transactions: (address: string) => ['portfolio', address, 'transactions'] as const,
-  },
-  analytics: {
-    overview: ['analytics', 'overview'] as const,
-    token: (assetId: string) => ['analytics', 'token', assetId] as const,
-  },
-};
+The data fetching stack uses two layers:
+
+```
+┌──────────────────────────────────────────────┐
+│  Page / Component (consumes hooks)           │
+│  e.g. usePools(), useAnalytics()             │
+├──────────────────────────────────────────────┤
+│  hooks.ts — useApi<T> generic hook           │
+│  • useState + useEffect + setInterval        │
+│  • Auto-refetch with configurable interval   │
+│  • Normalization (API shape → UI shape)      │
+├──────────────────────────────────────────────┤
+│  api.ts — typed fetch wrappers               │
+│  • apiFetch<T>(path, options)                │
+│  • JSON parsing + error handling             │
+│  • Base URL from NEXT_PUBLIC_API_URL         │
+└──────────────────────────────────────────────┘
 ```
 
-### 9.2 Refresh Intervals
+### 9.2 Generic Hook Implementation
 
-| Data Type | Stale Time | Refetch Interval | Rationale |
+```typescript
+// frontend/src/lib/hooks.ts
+function useApi<T>(
+  fetcher: () => Promise<T>,
+  deps: unknown[],
+  options?: { enabled?: boolean; fallback?: T; refetchInterval?: number }
+): {
+  data: T | undefined;
+  loading: boolean;
+  error: Error | null;
+  refetch: () => void;
+}
+```
+
+Key behaviors:
+- **Initial fetch**: Runs immediately when `enabled !== false`
+- **Auto-refetch**: If `refetchInterval` is set, re-fetches on that interval
+- **Dependency tracking**: Re-fetches when `deps` array changes
+- **Error isolation**: Errors are caught and exposed via `error` state
+
+### 9.3 Domain Hooks
+
+| Hook | API Function | Refetch Interval | Normalization |
 |---|---|---|---|
-| **Pool List** | 30s | 60s | Moderate change rate |
-| **Pool Detail** | 10s | 15s | More frequent for active view |
-| **Quote** | 3s | 5s | Must be near real-time |
-| **Intent Status** | 2s | 5s | User waiting for settlement |
-| **Portfolio** | 30s | 60s | Balance changes with TX |
-| **Analytics** | 5min | 10min | Aggregated data, slow change |
-| **Token Prices** | Real-time | WebSocket | Continuous via WS |
+| `usePools(params?)` | `listPools()` | 30s | `normalizePool()` → `NormalizedPool` |
+| `usePool(poolId)` | `getPool()` | 15s | `normalizePool()` → `NormalizedPool` |
+| `useAnalytics()` | `getAnalyticsOverview()` | 30s | → `NormalizedAnalytics` |
+| `useIntents(params?)` | `listIntents()` | 15s | → `NormalizedIntent[]` |
+| `useCandles(poolId, interval)` | `getChartCandles()` | — | → `CandleData[]` (OHLCV) |
+| `usePrice(poolId)` | `getChartPrice()` | 10s | → `string` |
+| `useWebSocket(channels, cb)` | `createWsConnection()` | — | Raw messages |
+
+### 9.4 Normalization Layer
+
+API responses return string amounts + raw identifiers. Hooks normalize to typed UI shapes:
+
+```typescript
+function normalizePool(raw: PoolResponse): NormalizedPool {
+  return {
+    id: raw.id,
+    assetA: resolveToken(raw.assetA),      // policyId+assetName → Token
+    assetB: resolveToken(raw.assetB),
+    reserveA: Number(raw.reserveA),         // string → number
+    reserveB: Number(raw.reserveB),
+    feePercent: raw.feeNumerator / raw.feeDenominator * 100,
+    tvlAda: Number(raw.tvlAda ?? 0),
+    volume24h: Number(raw.volume24h ?? 0),
+    // ...
+  };
+}
+```
+
+### 9.5 Refresh Intervals (Implemented)
+
+| Data Type | Refetch Interval | Rationale |
+|---|---|---|
+| **Pool List** | 30s | Moderate change rate |
+| **Pool Detail** | 15s | More frequent for active view |
+| **Intent List** | 15s | User monitors order status |
+| **Analytics** | 30s | Aggregated protocol stats |
+| **Price** | 10s | Near real-time price display |
+| **Candles** | — (one-shot) | Historical data, no refetch needed |
+| **Token Prices** | Real-time | Via `useWebSocket` hook |
 
 ---
 

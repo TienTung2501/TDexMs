@@ -1,14 +1,13 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
   TrendingUp,
   TrendingDown,
-  ExternalLink,
-  Copy,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,28 +15,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { PriceChart } from "@/components/dex/price-chart";
 import { LiquidityForm } from "@/components/dex/liquidity-form";
-import {
-  MOCK_POOLS,
-  MOCK_RECENT_TRADES,
-  generateMockCandles,
-} from "@/lib/mock-data";
+import { RecentTradesTable } from "@/components/dex/recent-trades-table";
+import { usePool, useCandles } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
 
 export default function PoolDetailPage() {
   const params = useParams();
   const poolId = params.id as string;
 
-  const pool = useMemo(
-    () => MOCK_POOLS.find((p) => p.id === poolId),
-    [poolId]
-  );
+  const { pool, loading: poolLoading } = usePool(poolId);
+  const { candles, loading: candlesLoading } = useCandles(poolId, "4h");
 
-  const candles = useMemo(() => generateMockCandles(30), []);
-
-  const trades = useMemo(
-    () => MOCK_RECENT_TRADES.filter((t) => t.poolId === poolId).slice(0, 10),
-    [poolId]
-  );
+  if (poolLoading) {
+    return (
+      <div className="shell py-16 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (!pool) {
     return (
@@ -137,7 +132,13 @@ export default function PoolDetailPage() {
               <CardTitle className="text-base">Price Chart</CardTitle>
             </CardHeader>
             <CardContent>
-              <PriceChart data={candles} />
+              {candlesLoading ? (
+                <div className="flex items-center justify-center h-[300px]">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <PriceChart data={candles} />
+              )}
             </CardContent>
           </Card>
         </div>
@@ -211,46 +212,7 @@ export default function PoolDetailPage() {
         </Card>
 
         {/* Recent Trades */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">Recent Trades</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {trades.length > 0 ? (
-              <div className="space-y-2">
-                {trades.map((trade) => (
-                  <div
-                    key={trade.id}
-                    className="flex items-center justify-between py-2 px-3 rounded-lg bg-secondary/30"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant={
-                          trade.direction === "buy" ? "success" : "destructive"
-                        }
-                        className="text-[10px] w-10 justify-center"
-                      >
-                        {trade.direction.toUpperCase()}
-                      </Badge>
-                      <span className="text-xs font-mono">
-                        {trade.inputAmount.toLocaleString()}{" "}
-                        {trade.inputTicker} → {trade.outputAmount.toLocaleString()}{" "}
-                        {trade.outputTicker}
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground">
-                      {new Date(trade.timestamp).toLocaleTimeString()}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-sm text-muted-foreground">
-                No recent trades for this pool.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <RecentTradesTable poolId={poolId} limit={10} />
       </div>
     </div>
   );
