@@ -8,3 +8,8 @@ dist
 *.log
 cardano-data
 kupo-data
+.next
+frontend/
+smartcontract/
+.github/
+.turbo/

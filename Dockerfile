@@ -9,8 +9,7 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
 
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
-COPY packages/shared/package.json ./packages/shared/package.json
-COPY packages/backend/package.json ./packages/backend/package.json
+COPY backend/package.json ./backend/package.json
 
 RUN pnpm install --frozen-lockfile
 
@@ -20,16 +19,14 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=deps /app/packages/backend/node_modules ./packages/backend/node_modules
+COPY --from=deps /app/backend/node_modules ./backend/node_modules
 COPY . .
 
 # Generate Prisma client
-RUN cd packages/backend && npx prisma generate
+RUN cd backend && npx prisma generate
 
-# Build shared first, then backend
-RUN pnpm --filter @solvernet/shared build
-RUN pnpm --filter @solvernet/backend build
+# Build backend
+RUN pnpm --filter backend build
 
 # ── Stage 3: Production image ──
 FROM node:20-alpine AS runner
@@ -44,12 +41,10 @@ WORKDIR /app
 # Copy built artifacts
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/pnpm-workspace.yaml ./
-COPY --from=builder /app/packages/shared/package.json ./packages/shared/package.json
-COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
-COPY --from=builder /app/packages/backend/package.json ./packages/backend/package.json
-COPY --from=builder /app/packages/backend/dist ./packages/backend/dist
-COPY --from=builder /app/packages/backend/prisma ./packages/backend/prisma
-COPY --from=builder /app/packages/backend/node_modules/.prisma ./packages/backend/node_modules/.prisma
+COPY --from=builder /app/backend/package.json ./backend/package.json
+COPY --from=builder /app/backend/dist ./backend/dist
+COPY --from=builder /app/backend/prisma ./backend/prisma
+COPY --from=builder /app/backend/node_modules/.prisma ./backend/node_modules/.prisma
 COPY --from=builder /app/node_modules ./node_modules
 
 USER solvernet
@@ -60,4 +55,4 @@ ENV NODE_ENV=production
 ENV PORT=3001
 
 # Run Prisma migrations then start server
-CMD ["sh", "-c", "cd packages/backend && npx prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "cd backend && npx prisma migrate deploy && node dist/index.js"]
