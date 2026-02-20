@@ -2,10 +2,12 @@
 
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
-import { Search, TrendingUp, TrendingDown, Droplets, Loader2 } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Droplets, Loader2, Plus } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { TokenPairIcon } from "@/components/ui/token-icon";
 import { usePools, useAnalytics } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
 
@@ -42,12 +44,20 @@ export default function PoolsPage() {
   return (
     <div className="shell py-8 space-y-6">
       {/* Header */}
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold">Liquidity Pools</h1>
-        <p className="text-sm text-muted-foreground">
-          Provide liquidity to earn trading fees.{" "}
-          {analytics ? `${analytics.totalPools} active pools.` : ""}
-        </p>
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold">Liquidity Pools</h1>
+          <p className="text-sm text-muted-foreground">
+            Provide liquidity to earn trading fees.{" "}
+            {analytics ? `${analytics.totalPools} active pools.` : ""}
+          </p>
+        </div>
+        <Link href="/pools/create">
+          <Button variant="default" size="sm" className="gap-1.5">
+            <Plus className="h-4 w-4" />
+            Create Pool
+          </Button>
+        </Link>
       </div>
 
       {/* Summary */}
@@ -117,12 +127,7 @@ export default function PoolsPage() {
                   {/* Pair header */}
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <div className="flex -space-x-1.5 flex justify-center items-center">
-                       <div className="flex items-center">
-                          <span className="text-xl mr-1">{pool.assetA.logo}</span>
-                          /<span className="text-xl ml-1">{pool.assetB.logo}</span>
-                          </div>
-                      </div>
+                      <TokenPairIcon tokenA={pool.assetA} tokenB={pool.assetB} size="md" />
                       <div>
                         <div className="font-semibold text-sm">
                           {pool.assetA.ticker}/{pool.assetB.ticker}

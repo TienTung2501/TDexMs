@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+import { TokenIcon } from "@/components/ui/token-icon";
 import type { NormalizedPool } from "@/lib/hooks";
 import { depositLiquidity, withdrawLiquidity, confirmTx } from "@/lib/api";
 import { formatAmount, formatCompact } from "@/lib/utils";
@@ -117,7 +118,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
                 className="font-mono"
               />
               <div className="flex items-center gap-1 text-sm font-medium whitespace-nowrap">
-                <span>{pool.assetA.logo}</span>
+                <TokenIcon token={pool.assetA} size="sm" />
                 {pool.assetA.ticker}
               </div>
             </div>
@@ -136,7 +137,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
                 className="font-mono"
               />
               <div className="flex items-center gap-1 text-sm font-medium whitespace-nowrap">
-                <span>{pool.assetB.logo}</span>
+                <TokenIcon token={pool.assetB} size="sm" />
                 {pool.assetB.ticker}
               </div>
             </div>

@@ -1,0 +1,30 @@
+{
+  "name": "solvernet-scripts",
+  "version": "1.0.0",
+  "description": "CLI debug scripts for SolverNet DEX — mirrors frontend actions",
+  "type": "module",
+  "scripts": {
+    "health": "npx tsx src/health.ts",
+    "quote": "npx tsx src/quote.ts",
+    "list-pools": "npx tsx src/list-pools.ts",
+    "list-intents": "npx tsx src/list-intents.ts",
+    "list-orders": "npx tsx src/list-orders.ts",
+    "create-intent": "npx tsx src/create-intent.ts",
+    "cancel-intent": "npx tsx src/cancel-intent.ts",
+    "create-order": "npx tsx src/create-order.ts",
+    "cancel-order": "npx tsx src/cancel-order.ts",
+    "deposit": "npx tsx src/deposit-liquidity.ts",
+    "withdraw": "npx tsx src/withdraw-liquidity.ts",
+    "submit-tx": "npx tsx src/submit-tx.ts",
+    "portfolio": "npx tsx src/portfolio.ts",
+    "mint-test-tokens": "npx tsx src/mint-test-tokens.ts"
+  },
+  "dependencies": {
+    "@lucid-evolution/lucid": "^0.4",
+    "dotenv": "^16.4.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5"
+  }
+}

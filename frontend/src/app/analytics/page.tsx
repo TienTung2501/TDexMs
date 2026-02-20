@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { TokenPairIcon } from "@/components/ui/token-icon";
 import { useAnalytics, usePools, useIntents } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
 
@@ -170,12 +171,7 @@ export default function AnalyticsPage() {
                           <span className="text-xs text-muted-foreground w-4">
                             {idx + 1}
                           </span>
-                          <div className="flex -space-x-1">
-                            <div className="flex items-center">
-                          <span className="text-xl mr-1">{pool.assetA.logo}</span>
-                          /<span className="text-xl ml-1">{pool.assetB.logo}</span>
-                          </div>
-                          </div>
+                          <TokenPairIcon tokenA={pool.assetA} tokenB={pool.assetB} size="sm" />
                           <span className="text-sm font-medium">
                             {pool.assetA.ticker}/{pool.assetB.ticker}
                           </span>

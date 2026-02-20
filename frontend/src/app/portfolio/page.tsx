@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+import { TokenIcon, TokenPairIcon } from "@/components/ui/token-icon";
 import { useIntents, usePools, useOrders, usePortfolio } from "@/lib/hooks";
 import { cancelOrder } from "@/lib/api";
 import { TOKENS } from "@/lib/mock-data";
@@ -148,7 +149,7 @@ export default function PortfolioPage() {
                     key={ticker}
                     className="flex items-center gap-3 rounded-xl bg-secondary/30 p-3"
                   >
-                    <span className="text-xl">{token.logo}</span>
+                    <TokenIcon token={token} size="lg" />
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm">{token.ticker}</div>
                       <div className="text-xs text-muted-foreground truncate">
@@ -180,10 +181,7 @@ export default function PortfolioPage() {
                 <Link key={pool.id} href={`/pools/${pool.id}`}>
                   <div className="flex items-center justify-between rounded-xl bg-secondary/30 p-4 hover:bg-secondary/50 transition-colors cursor-pointer">
                     <div className="flex items-center gap-3">
-                      <div className="flex -space-x-1.5 text-xl">
-                        <span className="mr-1">{pool.assetA.logo}</span>
-                        <span className="ml-1">{pool.assetB.logo}</span>
-                      </div>
+                      <TokenPairIcon tokenA={pool.assetA} tokenB={pool.assetB} size="md" />
                       <div>
                         <div className="font-medium text-sm">
                           {pool.assetA.ticker}/{pool.assetB.ticker}

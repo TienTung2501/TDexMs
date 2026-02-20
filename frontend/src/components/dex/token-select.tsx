@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { TokenIcon } from "@/components/ui/token-icon";
 import { TOKEN_LIST, type Token } from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
 
@@ -92,7 +93,7 @@ export function TokenSelectDialog({
                   )}
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl flex-shrink-0">{token.logo}</span>
+                    <TokenIcon token={token} size="lg" />
                     <div>
                       <div className="font-medium text-sm">{token.ticker}</div>
                       <div className="text-xs text-muted-foreground">
@@ -135,7 +136,7 @@ export function TokenButton({ token, onClick }: TokenButtonProps) {
     >
       {token ? (
         <>
-          <span className="text-lg">{token.logo}</span>
+          <TokenIcon token={token} size="sm" />
           {token.ticker}
         </>
       ) : (

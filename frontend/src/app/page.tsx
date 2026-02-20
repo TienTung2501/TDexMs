@@ -4,20 +4,29 @@ import React, { useState, useMemo } from "react";
 import { SwapCard } from "@/components/dex/swap-card";
 import { OrderEntryCard } from "@/components/dex/order-entry-card";
 import { PriceChart } from "@/components/dex/price-chart";
-import { RecentTradesTable } from "@/components/dex/recent-trades-table";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PseudoOrderbook } from "@/components/dex/pseudo-orderbook";
+import { TradingFooter } from "@/components/dex/trading-footer";
+import { TokenPairIcon } from "@/components/ui/token-icon";
+import { Card, CardContent } from "@/components/ui/card";
 import { TOKENS, type Token } from "@/lib/mock-data";
-import { useAnalytics, usePools, useCandles } from "@/lib/hooks";
-import { formatCompact } from "@/lib/utils";
-import { Activity, TrendingUp, Droplets, Users, Loader2 } from "lucide-react";
+import { useAnalytics, usePools, useCandles, usePrice, useIntents, useOrders } from "@/lib/hooks";
+import { formatCompact, cn } from "@/lib/utils";
+import {
+  TrendingUp,
+  TrendingDown,
+  Loader2,
+  ChevronDown,
+} from "lucide-react";
 
 export default function SwapPage() {
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
-  const [outputToken, setOutputToken] = useState<Token>(TOKENS.HOSKY);
+  const [outputToken, setOutputToken] = useState<Token>(TOKENS.tBTC);
   const [tradeMode, setTradeMode] = useState<"market" | "advanced">("market");
 
   const { analytics, loading: analyticsLoading } = useAnalytics();
   const { pools } = usePools();
+  const { intents } = useIntents({});
+  const { orders } = useOrders({});
 
   // Find pool for chart
   const pool = useMemo(() => {
@@ -31,114 +40,156 @@ export default function SwapPage() {
   }, [pools, inputToken.ticker, outputToken.ticker]);
 
   const { candles, loading: candlesLoading } = useCandles(pool?.id, "4h");
+  const { price: currentPrice } = usePrice(pool?.id);
 
-  const stats = useMemo(
-    () => [
-      {
-        label: "Total TVL",
-        value: analytics ? formatCompact(analytics.tvl) : "—",
-        prefix: "₳ ",
-        icon: Droplets,
-      },
-      {
-        label: "24h Volume",
-        value: analytics ? formatCompact(analytics.volume24h) : "—",
-        prefix: "₳ ",
-        icon: TrendingUp,
-      },
-      {
-        label: "Intents Filled",
-        value: analytics ? `${analytics.fillRate.toFixed(1)}%` : "—",
-        icon: Activity,
-      },
-      {
-        label: "Active Pools",
-        value: analytics ? `${analytics.totalPools}` : "—",
-        icon: Users,
-      },
-    ],
-    [analytics]
-  );
+  const priceNum = parseFloat(currentPrice) || 0;
+  const priceChange24h = pool?.priceChange24h ?? 0;
 
   return (
-    <div className="shell py-8 space-y-6">
-      {/* Hero */}
-      <div className="text-center space-y-3 max-w-xl mx-auto">
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">
-          Intent-Based
-          <span className="text-primary"> Trading</span>
-        </h1>
-        <p className="text-muted-foreground text-sm sm:text-base">
-          Submit your trade intent and let solvers find the best execution path.
-          Powered by Cardano smart contracts.
-        </p>
-      </div>
-
-      {/* Stats bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {stats.map((stat) => (
-          <div
-            key={stat.label}
-            className="rounded-xl border border-border/50 bg-card/50 p-4 text-center space-y-1"
-          >
-            <div className="flex items-center justify-center gap-1.5 text-muted-foreground">
-              <stat.icon className="h-3.5 w-3.5" />
-              <span className="text-xs">{stat.label}</span>
+    <div className="shell py-4 space-y-3">
+      {/* ══════ Market Info Header ══════ */}
+      <div className="flex items-center justify-between rounded-xl border border-border/50 bg-card/50 px-4 py-3">
+        {/* Pair selector */}
+        <div className="flex items-center gap-3">
+          <TokenPairIcon tokenA={inputToken} tokenB={outputToken} size="md" />
+          <div>
+            <button className="flex items-center gap-1 text-base font-bold hover:text-primary transition-colors">
+              {inputToken.ticker}/{outputToken.ticker}
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </button>
+            <div className="text-xs text-muted-foreground">
+              {inputToken.name} / {outputToken.name}
             </div>
-            <div className="text-lg font-bold">
-              {analyticsLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin mx-auto" />
+          </div>
+        </div>
+
+        {/* Price + metrics */}
+        <div className="flex items-center gap-6">
+          {/* Current price */}
+          <div className="text-right">
+            <div className="text-lg font-bold font-mono">
+              {priceNum > 0 ? priceNum.toFixed(6) : "—"}
+            </div>
+            <div
+              className={cn(
+                "text-xs font-medium flex items-center gap-0.5 justify-end",
+                priceChange24h >= 0 ? "text-primary" : "text-destructive"
+              )}
+            >
+              {priceChange24h >= 0 ? (
+                <TrendingUp className="h-3 w-3" />
               ) : (
-                <>
-                  {stat.prefix && (
-                    <span className="text-primary">{stat.prefix}</span>
-                  )}
-                  {stat.value}
-                </>
+                <TrendingDown className="h-3 w-3" />
+              )}
+              {priceChange24h >= 0 ? "+" : ""}
+              {priceChange24h.toFixed(2)}%
+            </div>
+          </div>
+
+          {/* 24h Volume */}
+          <div className="hidden sm:block text-right border-l border-border/50 pl-6">
+            <div className="text-[10px] text-muted-foreground uppercase">24h Volume</div>
+            <div className="text-sm font-semibold">
+              {analyticsLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>₳ {analytics ? formatCompact(analytics.volume24h) : "—"}</>
               )}
             </div>
           </div>
-        ))}
+
+          {/* TVL */}
+          <div className="hidden md:block text-right border-l border-border/50 pl-6">
+            <div className="text-[10px] text-muted-foreground uppercase">TVL</div>
+            <div className="text-sm font-semibold">
+              {analyticsLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>₳ {analytics ? formatCompact(analytics.tvl) : "—"}</>
+              )}
+            </div>
+          </div>
+
+          {/* Fill Rate */}
+          <div className="hidden lg:block text-right border-l border-border/50 pl-6">
+            <div className="text-[10px] text-muted-foreground uppercase">Fill Rate</div>
+            <div className="text-sm font-semibold text-primary">
+              {analyticsLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>{analytics ? `${analytics.fillRate.toFixed(1)}%` : "—"}</>
+              )}
+            </div>
+          </div>
+
+          {/* Active Pools */}
+          <div className="hidden xl:block text-right border-l border-border/50 pl-6">
+            <div className="text-[10px] text-muted-foreground uppercase">Pools</div>
+            <div className="text-sm font-semibold">
+              {analyticsLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <>{analytics ? analytics.totalPools : "—"}</>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* Chart + Swap card */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Chart */}
-        <div className="lg:col-span-3">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <div className="flex -space-x-1.5">
-                  <span className="text-lg mr-1">{inputToken.logo}</span>
-                  <span className="text-lg ml-1">{outputToken.logo}</span>
+      {/* ══════ Main 3-Column Layout ══════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+        {/* LEFT: Chart (60%) */}
+        <div className="lg:col-span-7 xl:col-span-7">
+          <Card className="h-full">
+            <CardContent className="p-0">
+              <div className="p-3 pb-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <TokenPairIcon tokenA={inputToken} tokenB={outputToken} size="sm" />
+                    <span className="text-sm font-semibold">
+                      {inputToken.ticker}/{outputToken.ticker}
+                    </span>
+                    {pool && (
+                      <span className="text-[10px] text-muted-foreground">
+                        TVL: ₳ {formatCompact(pool.tvlAda)}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                {inputToken.ticker}/{outputToken.ticker}
-                {pool && (
-                  <span className="text-xs text-muted-foreground font-normal">
-                    • TVL: ₳ {formatCompact(pool.tvlAda)}
-                  </span>
+              </div>
+              <div className="px-1">
+                {candlesLoading ? (
+                  <div className="flex items-center justify-center h-[400px]">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <PriceChart data={candles} />
                 )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {candlesLoading ? (
-                <div className="flex items-center justify-center h-[300px]">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              ) : (
-                <PriceChart data={candles} />
-              )}
+              </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Order entry panel */}
-        <div className="lg:col-span-2 space-y-3">
+        {/* MIDDLE: Orderbook (20%) */}
+        <div className="hidden lg:block lg:col-span-2 xl:col-span-2">
+          <Card className="h-full overflow-hidden">
+            <PseudoOrderbook
+              intents={intents}
+              orders={orders}
+              inputToken={inputToken}
+              outputToken={outputToken}
+              currentPrice={priceNum}
+            />
+          </Card>
+        </div>
+
+        {/* RIGHT: Order Entry (20%) */}
+        <div className="lg:col-span-3 xl:col-span-3">
           {/* Market / Advanced toggle */}
-          <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
+          <div className="flex gap-1 bg-muted/50 rounded-lg p-1 mb-3">
             <button
               onClick={() => setTradeMode("market")}
-              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors ${
+              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer ${
                 tradeMode === "market"
                   ? "bg-background shadow-sm text-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -148,13 +199,13 @@ export default function SwapPage() {
             </button>
             <button
               onClick={() => setTradeMode("advanced")}
-              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors ${
+              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors cursor-pointer ${
                 tradeMode === "advanced"
                   ? "bg-background shadow-sm text-foreground"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              Advanced Orders
+              Advanced
             </button>
           </div>
 
@@ -172,47 +223,8 @@ export default function SwapPage() {
         </div>
       </div>
 
-      {/* Recent Trades */}
-      <RecentTradesTable poolId={pool?.id} limit={15} />
-
-      {/* How it works */}
-      <div className="max-w-2xl mx-auto space-y-4">
-        <h3 className="text-center text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-          How It Works
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {[
-            {
-              step: "1",
-              title: "Submit Intent",
-              desc: "Specify your trade parameters: tokens, amounts, and deadline.",
-            },
-            {
-              step: "2",
-              title: "Solver Matches",
-              desc: "Solvers compete to find the optimal execution path for your trade.",
-            },
-            {
-              step: "3",
-              title: "On-chain Settlement",
-              desc: "Trade is settled atomically on Cardano with guaranteed min output.",
-            },
-          ].map((item) => (
-            <div
-              key={item.step}
-              className="rounded-xl border border-border/50 bg-card/50 p-4 space-y-2"
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-sm">
-                {item.step}
-              </div>
-              <h4 className="font-semibold text-sm">{item.title}</h4>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                {item.desc}
-              </p>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* ══════ Footer Tabs ══════ */}
+      <TradingFooter poolId={pool?.id} />
     </div>
   );
 }
