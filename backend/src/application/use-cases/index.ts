@@ -5,3 +5,7 @@ export { GetPoolInfo } from './GetPoolInfo.js';
 export { CreatePool, type CreatePoolInput, type CreatePoolOutput } from './CreatePool.js';
 export { DepositLiquidity, type DepositLiquidityInput, type DepositLiquidityOutput } from './DepositLiquidity.js';
 export { WithdrawLiquidity, type WithdrawLiquidityInput, type WithdrawLiquidityOutput } from './WithdrawLiquidity.js';
+export { CreateOrder, type CreateOrderInput, type CreateOrderOutput } from './CreateOrder.js';
+export { CancelOrder, type CancelOrderInput, type CancelOrderOutput } from './CancelOrder.js';
+export { ListOrders } from './ListOrders.js';
+export { GetPortfolio, type PortfolioOutput } from './GetPortfolio.js';

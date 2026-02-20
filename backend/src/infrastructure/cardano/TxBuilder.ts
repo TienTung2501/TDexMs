@@ -34,6 +34,8 @@ import type {
   CreatePoolTxParams,
   CancelIntentTxParams,
   SettlementTxParams,
+  OrderTxParams,
+  CancelOrderTxParams,
   BuildTxResult,
 } from '../../domain/ports/ITxBuilder.js';
 import { getLogger } from '../../config/logger.js';
@@ -156,6 +158,63 @@ const PoolNFTRedeemer = {
       new Constr(0, [new Constr(0, [new Constr(0, [txHash]), outputIndex])]),
     ),
   Burn: () => Data.to(new Constr(1, [])),
+};
+
+/** OrderType enum: LimitOrder=0, DCA=1, StopLoss=2 */
+function mkOrderType(t: 'LIMIT' | 'DCA' | 'STOP_LOSS'): Constr<Data> {
+  switch (t) {
+    case 'LIMIT': return new Constr(0, []);
+    case 'DCA': return new Constr(1, []);
+    case 'STOP_LOSS': return new Constr(2, []);
+  }
+}
+
+/** Build OrderDatum CBOR hex */
+function buildOrderDatumCbor(p: {
+  orderType: Constr<Data>;
+  owner: Constr<Data>;
+  assetIn: Constr<Data>;
+  assetOut: Constr<Data>;
+  params: Constr<Data>;
+  orderToken: Constr<Data>;
+}): string {
+  return Data.to(
+    new Constr(0, [
+      p.orderType,
+      p.owner,
+      p.assetIn,
+      p.assetOut,
+      p.params,
+      p.orderToken,
+    ]),
+  );
+}
+
+/** Build OrderParams datum */
+function mkOrderParams(p: {
+  priceNum: bigint;
+  priceDen: bigint;
+  amountPerInterval: bigint;
+  minInterval: bigint;
+  lastFillSlot: bigint;
+  remainingBudget: bigint;
+  deadline: bigint;
+}): Constr<Data> {
+  return new Constr(0, [
+    new Constr(0, [p.priceNum, p.priceDen]),
+    p.amountPerInterval,
+    p.minInterval,
+    p.lastFillSlot,
+    p.remainingBudget,
+    p.deadline,
+  ]);
+}
+
+/** OrderRedeemer variants */
+const OrderRedeemer = {
+  CancelOrder: () => Data.to(new Constr(0, [])),
+  ExecuteOrder: (inputConsumed: bigint, outputDelivered: bigint) =>
+    Data.to(new Constr(1, [inputConsumed, outputDelivered])),
 };
 
 /** LPRedeemer = MintOrBurnLP { pool_nft: AssetClass, amount: Int } */
@@ -982,6 +1041,190 @@ export class TxBuilder implements ITxBuilder {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: msg }, 'Failed to build settlement TX');
       throw new ChainError(`Failed to build settlement TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 7. CREATE ORDER — lock funds in order validator
+  // ═══════════════════════════════════════════
+
+  async buildOrderTx(params: OrderTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { type: params.orderType, input: params.inputAmount.toString() },
+      'Building create order TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      // Load order validator scripts
+      const orderBp = findValidator(bp, 'order_validator.order_validator');
+      const orderScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(orderBp.compiledCode),
+      };
+      const orderAddr = validatorToAddress(this.network, orderScript);
+
+      // Reuse intent token policy for order auth tokens
+      const { intentPolicyScript, intentPolicyId } = this.getEscrowScripts();
+
+      const userUtxos = await lucid.utxosAt(params.senderAddress);
+      if (userUtxos.length === 0) {
+        throw new ChainError('No UTxOs at sender address');
+      }
+      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
+
+      const seedUtxo = userUtxos[0];
+
+      // Derive order token name via hash of consumed UTxO
+      const outRefDatum = Data.to(
+        new Constr(0, [new Constr(0, [seedUtxo.txHash]), BigInt(seedUtxo.outputIndex)]),
+      );
+      const tokenNameHex = datumToHash(outRefDatum);
+      const orderTokenUnit = toUnit(intentPolicyId, tokenNameHex);
+
+      const inputAsset = AssetId.fromString(params.inputAssetId);
+      const outputAsset = AssetId.fromString(params.outputAssetId);
+      const inputUnit = assetIdToUnit(params.inputAssetId);
+
+      // Budget amount depends on order type
+      const budget = params.totalBudget ?? params.inputAmount;
+
+      // Build OrderParams datum
+      const orderParams = mkOrderParams({
+        priceNum: params.priceNumerator,
+        priceDen: params.priceDenominator,
+        amountPerInterval: params.amountPerInterval ?? 0n,
+        minInterval: BigInt(params.intervalSlots ?? 0),
+        lastFillSlot: 0n,
+        remainingBudget: budget,
+        deadline: BigInt(params.deadline),
+      });
+
+      // Build OrderDatum
+      const orderDatumCbor = buildOrderDatumCbor({
+        orderType: mkOrderType(params.orderType),
+        owner: addressToPlutusData(params.senderAddress),
+        assetIn: mkAssetClass(inputAsset.policyId, inputAsset.assetName),
+        assetOut: mkAssetClass(outputAsset.policyId, outputAsset.assetName),
+        params: orderParams,
+        orderToken: mkAssetClass(intentPolicyId, tokenNameHex),
+      });
+
+      // Build order output value
+      const orderAssets: Assets = { [orderTokenUnit]: 1n };
+      if (inputUnit === 'lovelace') {
+        orderAssets.lovelace = budget + MIN_SCRIPT_LOVELACE;
+      } else {
+        orderAssets.lovelace = MIN_SCRIPT_LOVELACE;
+        orderAssets[inputUnit] = budget;
+      }
+
+      const tx = lucid
+        .newTx()
+        .collectFrom([seedUtxo])
+        .mintAssets(
+          { [orderTokenUnit]: 1n },
+          IntentTokenRedeemer.Mint(seedUtxo.txHash, BigInt(seedUtxo.outputIndex)),
+        )
+        .attach.MintingPolicy(intentPolicyScript)
+        .pay.ToContract(
+          orderAddr,
+          { kind: 'inline', value: orderDatumCbor },
+          orderAssets,
+        )
+        .addSigner(params.senderAddress)
+        .validTo(params.deadline);
+
+      const completed = await tx.complete({
+        changeAddress: params.changeAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Order TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build order TX');
+      throw new ChainError(`Failed to build order TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 8. CANCEL ORDER — owner reclaims from order validator
+  // ═══════════════════════════════════════════
+
+  async buildCancelOrderTx(params: CancelOrderTxParams): Promise<BuildTxResult> {
+    this.logger.info({ orderId: params.orderId }, 'Building cancel order TX');
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      const orderBp = findValidator(bp, 'order_validator.order_validator');
+      const orderScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(orderBp.compiledCode),
+      };
+      const orderAddr = validatorToAddress(this.network, orderScript);
+
+      const { intentPolicyScript, intentPolicyId } = this.getEscrowScripts();
+
+      const userUtxos = await lucid.utxosAt(params.senderAddress);
+      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
+
+      // Find order UTxO by txHash + outputIndex
+      const orderUtxos = await lucid.utxosAt(orderAddr);
+      const orderUtxo = orderUtxos.find(
+        (u) => u.txHash === params.escrowTxHash && u.outputIndex === params.escrowOutputIndex,
+      );
+
+      if (!orderUtxo) {
+        throw new ChainError('Order UTxO not found on-chain');
+      }
+
+      // Find and burn order auth token
+      const orderTokenUnit = Object.keys(orderUtxo.assets).find((unit) =>
+        unit.startsWith(intentPolicyId),
+      );
+
+      const burnAssets: Assets = {};
+      if (orderTokenUnit) {
+        burnAssets[orderTokenUnit] = -1n;
+      }
+
+      let tx = lucid
+        .newTx()
+        .collectFrom([orderUtxo], OrderRedeemer.CancelOrder())
+        .attach.SpendingValidator(orderScript)
+        .addSigner(params.senderAddress);
+
+      if (Object.keys(burnAssets).length > 0) {
+        tx = tx
+          .mintAssets(burnAssets, IntentTokenRedeemer.Burn())
+          .attach.MintingPolicy(intentPolicyScript);
+      }
+
+      const completed = await tx.complete({
+        changeAddress: params.senderAddress,
+      });
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build cancel order TX');
+      throw new ChainError(`Failed to build cancel order TX: ${msg}`);
     }
   }
 }

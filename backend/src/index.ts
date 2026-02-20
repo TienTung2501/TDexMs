@@ -12,11 +12,13 @@ import { getLogger } from './config/logger.js';
 import { getPrisma, disconnectPrisma } from './infrastructure/database/index.js';
 import { IntentRepository } from './infrastructure/database/IntentRepository.js';
 import { PoolRepository } from './infrastructure/database/PoolRepository.js';
+import { OrderRepository } from './infrastructure/database/OrderRepository.js';
 import { BlockfrostClient } from './infrastructure/cardano/BlockfrostClient.js';
 import { ChainProvider } from './infrastructure/cardano/ChainProvider.js';
 import { TxBuilder } from './infrastructure/cardano/TxBuilder.js';
 import { ChainSync } from './infrastructure/cardano/ChainSync.js';
 import { PriceAggregationCron } from './infrastructure/cron/PriceAggregationCron.js';
+import { ReclaimKeeperCron } from './infrastructure/cron/ReclaimKeeperCron.js';
 import { CacheService } from './infrastructure/cache/CacheService.js';
 
 // Application
@@ -27,6 +29,10 @@ import { GetPoolInfo } from './application/use-cases/GetPoolInfo.js';
 import { CreatePool } from './application/use-cases/CreatePool.js';
 import { DepositLiquidity } from './application/use-cases/DepositLiquidity.js';
 import { WithdrawLiquidity } from './application/use-cases/WithdrawLiquidity.js';
+import { CreateOrder } from './application/use-cases/CreateOrder.js';
+import { CancelOrder } from './application/use-cases/CancelOrder.js';
+import { ListOrders } from './application/use-cases/ListOrders.js';
+import { GetPortfolio } from './application/use-cases/GetPortfolio.js';
 import { CandlestickService } from './application/services/CandlestickService.js';
 
 // Interface
@@ -90,6 +96,7 @@ async function main(): Promise<void> {
   // Repositories
   const intentRepo = new IntentRepository(prisma);
   const poolRepo = new PoolRepository(prisma);
+  const orderRepo = new OrderRepository(prisma);
 
   // ──────────────────────────────────────────────
   // 2. Application Layer — Use Cases + Services
@@ -101,6 +108,12 @@ async function main(): Promise<void> {
   const createPool = new CreatePool(poolRepo, txBuilder);
   const depositLiquidity = new DepositLiquidity(poolRepo, txBuilder);
   const withdrawLiquidity = new WithdrawLiquidity(poolRepo, txBuilder);
+
+  // Order use cases
+  const createOrder = new CreateOrder(orderRepo, txBuilder);
+  const cancelOrder = new CancelOrder(orderRepo, txBuilder);
+  const listOrders = new ListOrders(orderRepo);
+  const getPortfolio = new GetPortfolio(intentRepo, orderRepo, poolRepo);
 
   // Chart / OHLCV service
   const candlestickService = new CandlestickService(prisma, cache, env.CHART_MAX_CANDLES);
@@ -118,7 +131,12 @@ async function main(): Promise<void> {
     createPool,
     depositLiquidity,
     withdrawLiquidity,
+    createOrder,
+    cancelOrder,
+    listOrders,
+    getPortfolio,
     intentRepo,
+    orderRepo,
     blockfrost,
     candlestickService,
     cache,
@@ -165,6 +183,9 @@ async function main(): Promise<void> {
     env.CHART_SNAPSHOT_INTERVAL_MS,
   );
 
+  // Reclaim keeper — marks expired intents/orders
+  const reclaimKeeper = new ReclaimKeeperCron(intentRepo, orderRepo, 60_000);
+
   // ──────────────────────────────────────────────
   // 6. Start
   // ──────────────────────────────────────────────
@@ -185,6 +206,7 @@ async function main(): Promise<void> {
   });
 
   priceCron.start();
+  reclaimKeeper.start();
 
   // ──────────────────────────────────────────────
   // 7. Graceful Shutdown
@@ -195,6 +217,7 @@ async function main(): Promise<void> {
     solverEngine.stop();
     chainSync.stop();
     priceCron.stop();
+    reclaimKeeper.stop();
     wsServer.close();
 
     httpServer.close(() => {

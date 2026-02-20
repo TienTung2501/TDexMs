@@ -15,6 +15,8 @@ import { createPoolRouter } from '../http/routes/pools.js';
 import { createAnalyticsRouter } from '../http/routes/analytics.js';
 import { createChartRouter } from '../http/routes/chart.js';
 import { createTxRouter } from '../http/routes/tx.js';
+import { createOrderRouter } from '../http/routes/orders.js';
+import { createPortfolioRouter } from '../http/routes/portfolio.js';
 import type { GetQuote } from '../../application/use-cases/GetQuote.js';
 import type { CreateIntent } from '../../application/use-cases/CreateIntent.js';
 import type { CancelIntent } from '../../application/use-cases/CancelIntent.js';
@@ -22,7 +24,12 @@ import type { GetPoolInfo } from '../../application/use-cases/GetPoolInfo.js';
 import type { CreatePool } from '../../application/use-cases/CreatePool.js';
 import type { DepositLiquidity } from '../../application/use-cases/DepositLiquidity.js';
 import type { WithdrawLiquidity } from '../../application/use-cases/WithdrawLiquidity.js';
+import type { CreateOrder } from '../../application/use-cases/CreateOrder.js';
+import type { CancelOrder } from '../../application/use-cases/CancelOrder.js';
+import type { ListOrders } from '../../application/use-cases/ListOrders.js';
+import type { GetPortfolio } from '../../application/use-cases/GetPortfolio.js';
 import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js';
+import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { BlockfrostClient } from '../../infrastructure/cardano/BlockfrostClient.js';
 import type { CandlestickService } from '../../application/services/CandlestickService.js';
 import type { CacheService } from '../../infrastructure/cache/CacheService.js';
@@ -35,7 +42,12 @@ export interface AppDependencies {
   createPool: CreatePool;
   depositLiquidity: DepositLiquidity;
   withdrawLiquidity: WithdrawLiquidity;
+  createOrder: CreateOrder;
+  cancelOrder: CancelOrder;
+  listOrders: ListOrders;
+  getPortfolio: GetPortfolio;
   intentRepo: IIntentRepository;
+  orderRepo: IOrderRepository;
   blockfrost: BlockfrostClient;
   candlestickService: CandlestickService;
   cache: CacheService | null;
@@ -77,6 +89,8 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createAnalyticsRouter());
   v1.use(createChartRouter(deps.candlestickService));
   v1.use(createTxRouter(deps.blockfrost, deps.intentRepo));
+  v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
+  v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo));
 
   app.use('/v1', v1);
 

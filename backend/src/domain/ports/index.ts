@@ -1,5 +1,6 @@
 export type { IIntentRepository, IntentFilters, IntentPage } from './IIntentRepository.js';
 export type { IPoolRepository, PoolFilters, PoolPage } from './IPoolRepository.js';
+export type { IOrderRepository, OrderFilters, OrderPage } from './IOrderRepository.js';
 export type {
   IChainProvider,
   UTxO,
@@ -14,5 +15,7 @@ export type {
   CreatePoolTxParams,
   CancelIntentTxParams,
   SettlementTxParams,
+  OrderTxParams,
+  CancelOrderTxParams,
   BuildTxResult,
 } from './ITxBuilder.js';

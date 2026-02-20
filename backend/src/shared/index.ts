@@ -164,3 +164,27 @@ export const poolListSchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().positive().max(100).default(20).optional(),
 });
+
+// ─── Order schemas ──────────────────────────
+export const orderCreateSchema = z.object({
+  type: z.enum(['LIMIT', 'DCA', 'STOP_LOSS']),
+  inputAsset: assetId,
+  outputAsset: assetId,
+  inputAmount: positiveAmountStr,
+  priceNumerator: positiveAmountStr,
+  priceDenominator: positiveAmountStr,
+  totalBudget: positiveAmountStr.optional(),
+  amountPerInterval: positiveAmountStr.optional(),
+  intervalSlots: z.number().int().positive().optional(),
+  deadline: z.number().int().positive(),
+  senderAddress: cardanoAddress,
+  changeAddress: cardanoAddress,
+});
+
+export const orderListSchema = z.object({
+  creator: z.string().optional(),
+  status: z.enum(['CREATED', 'PENDING', 'ACTIVE', 'PARTIALLY_FILLED', 'FILLED', 'CANCELLED', 'EXPIRED']).optional(),
+  type: z.enum(['LIMIT', 'DCA', 'STOP_LOSS']).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20).optional(),
+});

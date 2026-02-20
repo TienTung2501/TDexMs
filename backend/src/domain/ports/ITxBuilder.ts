@@ -53,6 +53,33 @@ export interface SettlementTxParams {
   solverAddress: string;
 }
 
+export interface OrderTxParams {
+  senderAddress: string;
+  changeAddress: string;
+  orderType: 'LIMIT' | 'DCA' | 'STOP_LOSS';
+  inputAssetId: string;
+  outputAssetId: string;
+  /** For LIMIT/STOP_LOSS: total input amount */
+  inputAmount: bigint;
+  /** Price as numerator/denominator rational */
+  priceNumerator: bigint;
+  priceDenominator: bigint;
+  /** For DCA: total budget */
+  totalBudget?: bigint;
+  /** For DCA: amount per interval */
+  amountPerInterval?: bigint;
+  /** For DCA: min interval between fills (slots) */
+  intervalSlots?: number;
+  deadline: number;
+}
+
+export interface CancelOrderTxParams {
+  orderId: string;
+  senderAddress: string;
+  escrowTxHash: string;
+  escrowOutputIndex: number;
+}
+
 export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
@@ -77,4 +104,10 @@ export interface ITxBuilder {
 
   /** Build a batch settlement TX (solver) */
   buildSettlementTx(params: SettlementTxParams): Promise<BuildTxResult>;
+
+  /** Build an advanced order TX (Limit/DCA/StopLoss — lock in order validator) */
+  buildOrderTx(params: OrderTxParams): Promise<BuildTxResult>;
+
+  /** Build an order cancellation TX */
+  buildCancelOrderTx(params: CancelOrderTxParams): Promise<BuildTxResult>;
 }
