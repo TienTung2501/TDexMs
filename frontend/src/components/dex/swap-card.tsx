@@ -28,6 +28,7 @@ import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
 import { createIntent, confirmTx } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
+import { useTxToast } from "@/lib/tx-toast";
 
 interface SwapCardProps {
   inputToken?: Token;
@@ -45,6 +46,7 @@ export function SwapCard({
   pools: externalPools,
 }: SwapCardProps = {}) {
   const { isConnected, address, changeAddress, balances, signAndSubmitTx } = useWallet();
+  const { toast, TxToastContainer } = useTxToast();
 
   const [internalInputToken, setInternalInputToken] = useState<Token>(TOKENS.ADA);
   const [internalOutputToken, setInternalOutputToken] = useState<Token>(TOKENS.HOSKY);
@@ -127,6 +129,7 @@ export function SwapCard({
     if (!pool || !address) return;
     setIsSwapping(true);
     try {
+      toast("building", "Building swap transaction...");
       const inputAsset =
         inputToken.policyId === ""
           ? "lovelace"
@@ -154,25 +157,29 @@ export function SwapCard({
 
       // 2. Sign and submit via CIP-30 wallet
       if (result.unsignedTx) {
+        toast("signing", "Please sign the transaction in your wallet...");
         const txHash = await signAndSubmitTx(result.unsignedTx);
         if (txHash) {
+          toast("submitting", "Submitting to the network...");
           // 3. Confirm TX on backend to update intent status
           await confirmTx({
             txHash,
             intentId: result.intentId,
             action: "create_intent",
           }).catch(() => console.warn("TX confirm call failed (non-critical)"));
-          console.log("Swap TX submitted:", txHash);
+          toast("confirmed", `Swap submitted! ${inputAmount} ${inputToken.ticker} → ${outputToken.ticker}`, txHash);
         }
       }
 
       setInputAmount("");
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast("error", msg);
       console.error("Swap intent failed:", err);
     } finally {
       setIsSwapping(false);
     }
-  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, signAndSubmitTx]);
+  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, signAndSubmitTx, toast]);
 
   // Price impact color
   const impactColor =
@@ -382,6 +389,7 @@ export function SwapCard({
         }
         balances={balances}
       />
+      <TxToastContainer />
     </>
   );
 }

@@ -244,8 +244,14 @@ export interface CreatePoolRequest {
   changeAddress: string;
 }
 
-export async function createPool(body: CreatePoolRequest) {
-  return apiFetch("/pools/create", {
+export interface CreatePoolResponse {
+  poolId: string;
+  unsignedTx?: string;
+  lpTokens?: string;
+}
+
+export async function createPool(body: CreatePoolRequest): Promise<CreatePoolResponse> {
+  return apiFetch<CreatePoolResponse>("/pools/create", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -526,3 +532,57 @@ export async function getPortfolioTransactions(
     params: limit ? { limit: String(limit) } : undefined,
   });
 }
+
+// ─── Pool History ─────────────────────────────────────────
+
+export interface PoolHistoryEntry {
+  timestamp: string;
+  tvlAda: number;
+  volume: number;
+  feeRevenue: number;
+  price: number;
+}
+
+export async function getPoolHistory(
+  poolId: string,
+  period: string = "7d",
+  interval: string = "1d"
+): Promise<{ poolId: string; history: PoolHistoryEntry[] }> {
+  return apiFetch(`/pools/${poolId}/history`, {
+    params: { period, interval },
+  });
+}
+
+// ─── Token Analytics ──────────────────────────────────────
+
+export interface TokenAnalytics {
+  assetId: string;
+  ticker: string;
+  price: number;
+  priceChange24h: number;
+  volume24h: number;
+  marketCap: number;
+  pools: number;
+}
+
+export async function getTokenAnalytics(
+  assetId: string
+): Promise<TokenAnalytics> {
+  return apiFetch(`/analytics/tokens/${encodeURIComponent(assetId)}`);
+}
+
+// ─── Prices ───────────────────────────────────────────────
+
+export interface PriceEntry {
+  assetId: string;
+  ticker: string;
+  priceAda: number;
+  priceUsd: number;
+}
+
+export async function getAnalyticsPrices(): Promise<{
+  prices: PriceEntry[];
+}> {
+  return apiFetch("/analytics/prices");
+}
+

@@ -828,6 +828,16 @@ pnpm dev  # Starts both frontend and backend via Turborepo
 | `pnpm db:migrate` | Run database migrations |
 | `pnpm db:studio` | Open Prisma Studio |
 
+### 7.3.1 CLI Debug & Admin Scripts
+
+Located in `frontend/scripts/src/`, run via `npx tsx`. See [10-CLI-DEBUG-ADMIN-SCRIPTS.md](10-CLI-DEBUG-ADMIN-SCRIPTS.md) for full reference.
+
+**User scripts:** `health`, `quote`, `list-pools`, `create-pool`, `deposit-liquidity`, `withdraw-liquidity`, `create-intent`, `cancel-intent`, `list-intents`, `create-order`, `cancel-order`, `list-orders`, `portfolio`, `submit-tx`, `mint-test-tokens`
+
+**Admin scripts:** `admin-status`, `admin-collect-fees`, `admin-update-settings`, `admin-trigger-solver`, `admin-emergency-shutdown`
+
+**Debug scripts:** `list-escrow-utxos`
+
 ### 7.4 Git Workflow
 
 ```

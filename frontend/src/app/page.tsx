@@ -3,7 +3,7 @@
 import React, { useState, useMemo } from "react";
 import { SwapCard } from "@/components/dex/swap-card";
 import { OrderEntryCard } from "@/components/dex/order-entry-card";
-import { PriceChart } from "@/components/dex/price-chart";
+import { PriceChart, TIMEFRAME_TO_INTERVAL, type ChartTimeframe } from "@/components/dex/price-chart";
 import { PseudoOrderbook } from "@/components/dex/pseudo-orderbook";
 import { TradingFooter } from "@/components/dex/trading-footer";
 import { TokenPairIcon } from "@/components/ui/token-icon";
@@ -22,6 +22,7 @@ export default function SwapPage() {
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
   const [outputToken, setOutputToken] = useState<Token>(TOKENS.tBTC);
   const [tradeMode, setTradeMode] = useState<"market" | "advanced">("market");
+  const [chartTf, setChartTf] = useState<ChartTimeframe>("4H");
 
   const { analytics, loading: analyticsLoading } = useAnalytics();
   const { pools } = usePools();
@@ -39,7 +40,7 @@ export default function SwapPage() {
     );
   }, [pools, inputToken.ticker, outputToken.ticker]);
 
-  const { candles, loading: candlesLoading } = useCandles(pool?.id, "4h");
+  const { candles, loading: candlesLoading } = useCandles(pool?.id, TIMEFRAME_TO_INTERVAL[chartTf]);
   const { price: currentPrice } = usePrice(pool?.id);
 
   const priceNum = parseFloat(currentPrice) || 0;
@@ -163,7 +164,11 @@ export default function SwapPage() {
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   </div>
                 ) : (
-                  <PriceChart data={candles} />
+                  <PriceChart
+                    data={candles}
+                    timeframe={chartTf}
+                    onTimeframeChange={setChartTf}
+                  />
                 )}
               </div>
             </CardContent>

@@ -180,18 +180,21 @@ formatAda(2500000n) → "₳2.50"
 
 ### 4.2 New DEX-Specific Components
 
-| Component | Purpose |
-|---|---|
-| `TokenSelect` | Searchable token picker (modal with balances) |
-| `SwapCard` | Main swap interface widget |
-| `PriceImpact` | Visual indicator with color-coded severity |
-| `TxStatus` | Real-time transaction status tracker |
-| `PoolCard` | Pool listing card with stats |
-| `LiquidityForm` | Add/Remove liquidity form |
-| `RouteDisplay` | Swap route visualization |
-| `IntentTimer` | Countdown to intent deadline |
-| `TokenIcon` | Token logo with fallback |
-| `AddressDisplay` | Truncated address with copy |
+| Component | Purpose | Location |
+|---|---|---|
+| `TokenSelect` | Searchable token picker (modal with balances) | `components/dex/token-select.tsx` |
+| `SwapCard` | Main swap interface widget | `components/dex/swap-card.tsx` |
+| `PriceImpact` | Visual indicator with color-coded severity | inline in SwapCard |
+| `TxStatus` | Real-time multi-step TX status tracker | `components/common/tx-status.tsx` ✅ |
+| `PoolCard` | Pool listing card with stats | `app/pools/page.tsx` |
+| `LiquidityForm` | Add/Remove liquidity form | `components/dex/liquidity-form.tsx` |
+| `RouteDisplay` | Swap route visualization | planned |
+| `CountdownTimer` | Countdown to intent/order deadline | `components/common/countdown-timer.tsx` ✅ |
+| `TokenIcon` | Token logo with fallback | `components/ui/token-icon.tsx` ✅ |
+| `AddressDisplay` | Truncated address with copy + explorer link | `components/common/address-display.tsx` ✅ |
+| `TxToast` | Floating TX lifecycle notifications | `lib/tx-toast.tsx` ✅ |
+| `OrderEntryCard` | Limit/DCA/Stop-loss order form | `components/dex/order-entry-card.tsx` ✅ |
+| `PseudoOrderbook` | Visual bid/ask depth display | `components/dex/pseudo-orderbook.tsx` ✅ |
 
 ---
 

@@ -11,15 +11,33 @@ import {
 } from "lightweight-charts";
 import { cn } from "@/lib/utils";
 
+export type ChartTimeframe = "1H" | "4H" | "1D" | "1W";
+
+/** Maps UI labels to API interval values */
+export const TIMEFRAME_TO_INTERVAL: Record<ChartTimeframe, string> = {
+  "1H": "1h",
+  "4H": "4h",
+  "1D": "1d",
+  "1W": "1w",
+};
+
 interface PriceChartProps {
   data: { time: number; open: number; high: number; low: number; close: number; volume: number }[];
   className?: string;
+  timeframe?: ChartTimeframe;
+  onTimeframeChange?: (tf: ChartTimeframe) => void;
 }
 
-export function PriceChart({ data, className }: PriceChartProps) {
+export function PriceChart({ data, className, timeframe: controlledTf, onTimeframeChange }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
-  const [timeframe, setTimeframe] = useState("4H");
+  const [internalTf, setInternalTf] = useState<ChartTimeframe>("4H");
+
+  const timeframe = controlledTf ?? internalTf;
+  const handleTfChange = (tf: ChartTimeframe) => {
+    setInternalTf(tf);
+    onTimeframeChange?.(tf);
+  };
 
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return;
@@ -116,10 +134,10 @@ export function PriceChart({ data, className }: PriceChartProps) {
     <div className={cn("space-y-2", className)}>
       {/* Timeframe selector */}
       <div className="flex gap-1">
-        {["1H", "4H", "1D", "1W"].map((tf) => (
+        {(["1H", "4H", "1D", "1W"] as ChartTimeframe[]).map((tf) => (
           <button
             key={tf}
-            onClick={() => setTimeframe(tf)}
+            onClick={() => handleTfChange(tf)}
             className={cn(
               "px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer",
               timeframe === tf

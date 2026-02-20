@@ -27,6 +27,7 @@ import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
 import { createOrder, confirmTx } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
+import { useTxToast } from "@/lib/tx-toast";
 
 type OrderTab = "LIMIT" | "DCA" | "STOP_LOSS";
 
@@ -36,6 +37,7 @@ interface OrderEntryCardProps {
 
 export function OrderEntryCard({ pools }: OrderEntryCardProps) {
   const { isConnected, address, changeAddress, signAndSubmitTx } = useWallet();
+  const { toast, TxToastContainer } = useTxToast();
 
   const [activeTab, setActiveTab] = useState<OrderTab>("LIMIT");
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
@@ -86,6 +88,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
     setTxResult(null);
 
     try {
+      toast("building", `Building ${activeTab.toLowerCase()} order...`);
       const deadlineMs = Date.now() + Number(deadline) * 24 * 60 * 60 * 1000;
       const inputAsset =
         inputToken.policyId === "" ? "lovelace" : `${inputToken.policyId}.${inputToken.assetName}`;
@@ -124,13 +127,18 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
       const result = await createOrder(body);
 
       if (result.unsignedTx && signAndSubmitTx) {
+        toast("signing", "Please sign the transaction in your wallet...");
         const txHash = await signAndSubmitTx(result.unsignedTx);
         if (txHash) {
+          toast("submitting", "Submitting to the network...");
           await confirmTx({ txHash, action: "create_order" });
+          toast("confirmed", `${activeTab} order placed successfully!`, txHash);
           setTxResult(txHash);
         }
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast("error", msg);
       console.error("Order creation failed:", err);
     } finally {
       setIsSubmitting(false);
@@ -396,6 +404,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
         }}
         excludeTicker={selectingFor === "input" ? outputToken.ticker : inputToken.ticker}
       />
+      <TxToastContainer />
     </Card>
   );
 }
