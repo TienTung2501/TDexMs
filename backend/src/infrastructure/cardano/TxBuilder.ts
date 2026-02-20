@@ -36,6 +36,7 @@ import type {
   SettlementTxParams,
   OrderTxParams,
   CancelOrderTxParams,
+  ReclaimTxParams,
   BuildTxResult,
 } from '../../domain/ports/ITxBuilder.js';
 import { getLogger } from '../../config/logger.js';
@@ -1225,6 +1226,109 @@ export class TxBuilder implements ITxBuilder {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: msg }, 'Failed to build cancel order TX');
       throw new ChainError(`Failed to build cancel order TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 9. RECLAIM — permissionless reclaim of expired escrow
+  // ═══════════════════════════════════════════
+
+  async buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { escrowTxHash: params.escrowTxHash, ownerAddress: params.ownerAddress },
+      'Building reclaim TX for expired escrow',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const { escrowScript, escrowAddr, intentPolicyScript, intentPolicyId } =
+        this.getEscrowScripts();
+
+      // Keeper pays fees — select keeper UTxOs
+      const keeperUtxos = await lucid.utxosAt(params.keeperAddress);
+      if (keeperUtxos.length === 0) {
+        throw new ChainError('No UTxOs at keeper address — keeper wallet may be empty');
+      }
+      lucid.selectWallet.fromAddress(params.keeperAddress, keeperUtxos);
+
+      // Find escrow UTxO by txHash + outputIndex
+      const escrowUtxos = await lucid.utxosAt(escrowAddr);
+      const escrowUtxo = escrowUtxos.find(
+        (u) =>
+          u.txHash === params.escrowTxHash &&
+          u.outputIndex === params.escrowOutputIndex,
+      );
+
+      if (!escrowUtxo) {
+        throw new ChainError(
+          'Escrow UTxO not found on-chain. May already be reclaimed or filled.',
+        );
+      }
+
+      // Identify the intent token unit to burn
+      const intentTokenUnit = Object.keys(escrowUtxo.assets).find((unit) =>
+        unit.startsWith(intentPolicyId),
+      );
+
+      if (!intentTokenUnit) {
+        throw new ChainError('Escrow UTxO has no intent token — cannot reclaim');
+      }
+
+      // Parse the inline datum to extract owner + remaining input info
+      // We need the datum to compute the owner payment output.
+      // The escrow datum is inline, so we can read from the UTxO.
+      // For now, we build the TX and let the validator+Lucid resolve it via datum.
+      //
+      // The validator requires:
+      //  1. check_after_deadline — set validFrom to now (after deadline)
+      //  2. check_burn_one — burn the intent token
+      //  3. check_payment_output — remaining input to owner
+      //
+      // We pay ALL non-ADA assets from the escrow to the owner.
+      // The keeper gets the ADA change minus min-ADA that goes to owner.
+
+      // Build owner payment: all assets from escrow UTxO except the intent token
+      const ownerPayment: Assets = {};
+      for (const [unit, qty] of Object.entries(escrowUtxo.assets)) {
+        if (unit === intentTokenUnit) continue; // will be burned
+        if (unit === 'lovelace') {
+          // Send min-ADA + remaining locked ADA to owner
+          ownerPayment.lovelace = qty;
+        } else {
+          ownerPayment[unit] = qty;
+        }
+      }
+
+      // Ensure owner gets at least min ADA
+      if (!ownerPayment.lovelace || ownerPayment.lovelace < MIN_SCRIPT_LOVELACE) {
+        ownerPayment.lovelace = MIN_SCRIPT_LOVELACE;
+      }
+
+      const tx = lucid
+        .newTx()
+        .collectFrom([escrowUtxo], EscrowRedeemer.Reclaim())
+        .attach.SpendingValidator(escrowScript)
+        .mintAssets({ [intentTokenUnit]: -1n }, IntentTokenRedeemer.Burn())
+        .attach.MintingPolicy(intentPolicyScript)
+        .pay.ToAddress(params.ownerAddress, ownerPayment)
+        .validFrom(Date.now()); // Reclaim is only valid AFTER deadline
+
+      const completed = await tx.complete({
+        changeAddress: params.keeperAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Reclaim TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build reclaim TX');
+      throw new ChainError(`Failed to build reclaim TX: ${msg}`);
     }
   }
 }

@@ -183,8 +183,17 @@ async function main(): Promise<void> {
     env.CHART_SNAPSHOT_INTERVAL_MS,
   );
 
-  // Reclaim keeper — marks expired intents/orders
-  const reclaimKeeper = new ReclaimKeeperCron(intentRepo, orderRepo, 60_000);
+  // Reclaim keeper — marks expired intents/orders + on-chain reclaim
+  const reclaimKeeper = new ReclaimKeeperCron(
+    intentRepo,
+    orderRepo,
+    txBuilder,
+    env.SOLVER_SEED_PHRASE,
+    env.BLOCKFROST_URL,
+    env.BLOCKFROST_PROJECT_ID,
+    env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod',
+    60_000,
+  );
 
   // ──────────────────────────────────────────────
   // 6. Start

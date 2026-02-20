@@ -80,6 +80,17 @@ export interface CancelOrderTxParams {
   escrowOutputIndex: number;
 }
 
+export interface ReclaimTxParams {
+  /** The escrow UTxO txHash to reclaim */
+  escrowTxHash: string;
+  /** The escrow UTxO output index */
+  escrowOutputIndex: number;
+  /** Address of the keeper (pays TX fees, signed by keeper wallet) */
+  keeperAddress: string;
+  /** Owner address — funds are returned here */
+  ownerAddress: string;
+}
+
 export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
@@ -110,4 +121,7 @@ export interface ITxBuilder {
 
   /** Build an order cancellation TX */
   buildCancelOrderTx(params: CancelOrderTxParams): Promise<BuildTxResult>;
+
+  /** Build a reclaim TX for expired escrow — permissionless, keeper pays fees */
+  buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult>;
 }
