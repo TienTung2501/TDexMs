@@ -13,10 +13,15 @@ import {
   getChartCandles,
   getChartPrice,
   createWsConnection,
+  listOrders,
+  getPortfolio,
   type PoolResponse,
   type PoolListResponse,
   type AnalyticsOverview,
   type IntentListResponse,
+  type OrderListResponse,
+  type OrderResponse,
+  type PortfolioResponse,
   type CandleData,
 } from "@/lib/api";
 import { TOKENS, type Token } from "@/lib/mock-data";
@@ -335,4 +340,74 @@ export function useWebSocket(
   }, [JSON.stringify(channels)]);
 
   return { connected };
+}
+
+// ─── Orders Hook ────────────────────────────
+export interface NormalizedOrder {
+  id: string;
+  type: string;
+  status: string;
+  creator: string;
+  inputTicker: string;
+  outputTicker: string;
+  inputAmount: number;
+  priceNumerator: number;
+  priceDenominator: number;
+  totalBudget: number;
+  remainingBudget: number;
+  executedIntervals: number;
+  deadline: number;
+  createdAt: string;
+}
+
+function normalizeOrder(o: OrderResponse): NormalizedOrder {
+  return {
+    id: o.orderId,
+    type: o.type,
+    status: o.status,
+    creator: o.creator,
+    inputTicker: assetToTicker(o.inputAsset),
+    outputTicker: assetToTicker(o.outputAsset),
+    inputAmount: Number(o.inputAmount ?? 0),
+    priceNumerator: Number(o.priceNumerator ?? 0),
+    priceDenominator: Number(o.priceDenominator ?? 1),
+    totalBudget: Number(o.totalBudget ?? 0),
+    remainingBudget: Number(o.remainingBudget ?? 0),
+    executedIntervals: o.executedIntervals,
+    deadline: o.deadline,
+    createdAt: o.createdAt,
+  };
+}
+
+export function useOrders(params?: {
+  creator?: string;
+  status?: string;
+  type?: string;
+}) {
+  const { data, loading, error, refetch } = useApi<OrderListResponse>(
+    () =>
+      listOrders({
+        creator: params?.creator,
+        status: params?.status,
+        type: params?.type,
+        limit: "50",
+      }),
+    [params?.creator, params?.status, params?.type],
+    { enabled: true, refetchInterval: 15_000 }
+  );
+
+  const orders: NormalizedOrder[] = (data?.items || []).map(normalizeOrder);
+
+  return { orders, total: data?.total ?? 0, loading, error, refetch };
+}
+
+// ─── Portfolio Hook ─────────────────────────
+export function usePortfolio(address: string | undefined) {
+  const { data, loading, error, refetch } = useApi<PortfolioResponse>(
+    () => getPortfolio(address!),
+    [address],
+    { enabled: !!address, refetchInterval: 30_000 }
+  );
+
+  return { portfolio: data, loading, error, refetch };
 }

@@ -8,14 +8,17 @@ import {
   TrendingDown,
   PieChart,
   ClipboardList,
+  ShoppingCart,
   Loader2,
+  XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
-import { useIntents, usePools } from "@/lib/hooks";
+import { useIntents, usePools, useOrders, usePortfolio } from "@/lib/hooks";
+import { cancelOrder } from "@/lib/api";
 import { TOKENS } from "@/lib/mock-data";
 import { formatCompact, cn } from "@/lib/utils";
 
@@ -24,12 +27,32 @@ export default function PortfolioPage() {
   const { intents, loading: intentsLoading } = useIntents({
     address: isConnected ? address ?? undefined : undefined,
   });
+  const { orders, loading: ordersLoading, refetch: refetchOrders } = useOrders({
+    creator: isConnected ? address ?? undefined : undefined,
+  });
+  const { portfolio, loading: portfolioLoading } = usePortfolio(
+    isConnected ? address ?? undefined : undefined
+  );
   const { pools, loading: poolsLoading } = usePools();
 
   const activeIntents = useMemo(
     () => intents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING"),
     [intents]
   );
+  const activeOrders = useMemo(
+    () => orders.filter((o) => o.status === "ACTIVE" || o.status === "PARTIALLY_FILLED"),
+    [orders]
+  );
+
+  const handleCancelOrder = async (orderId: string) => {
+    if (!address) return;
+    try {
+      await cancelOrder(orderId, address);
+      refetchOrders();
+    } catch (err) {
+      console.error("Cancel order failed:", err);
+    }
+  };
 
   if (!isConnected) {
     return (
@@ -50,60 +73,52 @@ export default function PortfolioPage() {
       <h1 className="text-2xl font-bold">Portfolio</h1>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card>
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground mb-1">
-              Active Intents
-            </div>
-            <div className="text-2xl font-bold">
-              {intentsLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                activeIntents.length
-              )}
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Active Intents</div>
+            <div className="text-xl font-bold">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (portfolio?.intents.active ?? activeIntents.length)}
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground mb-1">
-              Total Intents
-            </div>
-            <div className="text-2xl font-bold">
-              {intentsLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                intents.length
-              )}
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Filled Intents</div>
+            <div className="text-xl font-bold text-primary">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (portfolio?.intents.filled ?? intents.filter((i) => i.status === "FILLED").length)}
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground mb-1">
-              Filled
-            </div>
-            <div className="text-2xl font-bold text-primary">
-              {intentsLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                intents.filter((i) => i.status === "FILLED").length
-              )}
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Active Orders</div>
+            <div className="text-xl font-bold">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (portfolio?.orders.active ?? activeOrders.length)}
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-5">
-            <div className="text-xs text-muted-foreground mb-1">
-              Active Pools
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Filled Orders</div>
+            <div className="text-xl font-bold text-primary">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (portfolio?.orders.filled ?? 0)}
             </div>
-            <div className="text-2xl font-bold">
-              {poolsLoading ? (
-                <Loader2 className="h-5 w-5 animate-spin" />
-              ) : (
-                pools.length
-              )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Total Trades</div>
+            <div className="text-xl font-bold">
+              {portfolioLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : ((portfolio?.intents.total ?? intents.length) + (portfolio?.orders.total ?? orders.length))}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground mb-1">Active Pools</div>
+            <div className="text-xl font-bold">
+              {poolsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (portfolio?.pools.totalPools ?? pools.length)}
             </div>
           </CardContent>
         </Card>
@@ -188,6 +203,65 @@ export default function PortfolioPage() {
                     </div>
                   </div>
                 </Link>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Active Orders */}
+      {!ordersLoading && activeOrders.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShoppingCart className="h-4 w-4" />
+              Active Orders ({activeOrders.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {activeOrders.map((order) => (
+                <div
+                  key={order.id}
+                  className="flex items-center justify-between rounded-xl bg-secondary/30 p-3"
+                >
+                  <div className="flex items-center gap-3">
+                    <Badge
+                      variant={order.type === "LIMIT" ? "default" : order.type === "DCA" ? "success" : "warning"}
+                      className="text-[10px] w-16 justify-center"
+                    >
+                      {order.type}
+                    </Badge>
+                    <div>
+                      <span className="text-sm font-medium">
+                        {order.inputTicker} → {order.outputTicker}
+                      </span>
+                      <div className="text-xs text-muted-foreground">
+                        {order.type === "DCA"
+                          ? `Budget: ${order.totalBudget.toLocaleString()} · Remaining: ${order.remainingBudget.toLocaleString()}`
+                          : `Amount: ${order.inputAmount.toLocaleString()}`}
+                        {order.priceNumerator > 0 && order.priceDenominator > 0 && (
+                          <span className="ml-2">
+                            @ {(order.priceNumerator / order.priceDenominator).toFixed(4)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(order.deadline).toLocaleDateString()}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-destructive hover:text-destructive"
+                      onClick={() => handleCancelOrder(order.id)}
+                    >
+                      <XCircle className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
               ))}
             </div>
           </CardContent>

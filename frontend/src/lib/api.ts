@@ -370,3 +370,159 @@ export function createWsConnection(): WebSocket | null {
     return null;
   }
 }
+
+// ─── Orders (Limit / DCA / StopLoss) ────────
+export interface OrderResponse {
+  orderId: string;
+  type: string;
+  status: string;
+  creator: string;
+  inputAsset: string;
+  outputAsset: string;
+  inputAmount: string | null;
+  priceNumerator: string | null;
+  priceDenominator: string | null;
+  totalBudget: string | null;
+  amountPerInterval: string | null;
+  intervalSlots: number | null;
+  remainingBudget: string | null;
+  executedIntervals: number;
+  deadline: number;
+  escrowTxHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OrderListResponse {
+  items: OrderResponse[];
+  cursor: string | null;
+  hasMore: boolean;
+  total: number;
+}
+
+export interface CreateOrderRequest {
+  type: "LIMIT" | "DCA" | "STOP_LOSS";
+  inputAsset: string;
+  outputAsset: string;
+  inputAmount: string;
+  priceNumerator: string;
+  priceDenominator: string;
+  totalBudget?: string;
+  amountPerInterval?: string;
+  intervalSlots?: number;
+  deadline: number;
+  senderAddress: string;
+  changeAddress: string;
+}
+
+export interface CreateOrderResponse {
+  orderId: string;
+  unsignedTx: string;
+  txHash: string;
+  estimatedFee: string;
+  status: string;
+}
+
+export async function createOrder(
+  body: CreateOrderRequest
+): Promise<CreateOrderResponse> {
+  return apiFetch("/orders", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listOrders(params?: {
+  creator?: string;
+  status?: string;
+  type?: string;
+  cursor?: string;
+  limit?: string;
+}): Promise<OrderListResponse> {
+  return apiFetch("/orders", {
+    params: params as Record<string, string>,
+  });
+}
+
+export async function getOrder(orderId: string): Promise<OrderResponse> {
+  return apiFetch(`/orders/${orderId}`);
+}
+
+export async function cancelOrder(
+  orderId: string,
+  senderAddress: string
+): Promise<{ orderId: string; unsignedTx: string; status: string }> {
+  return apiFetch(`/orders/${orderId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ senderAddress }),
+  });
+}
+
+// ─── TX Submit / Confirm ────────────────────
+export interface SubmitTxRequest {
+  signedTx: string;
+  intentId?: string;
+}
+
+export async function submitTx(
+  body: SubmitTxRequest
+): Promise<{ txHash: string; status: string }> {
+  return apiFetch("/tx/submit", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function confirmTx(body: {
+  txHash: string;
+  intentId?: string;
+  action?: string;
+}): Promise<{ status: string }> {
+  return apiFetch("/tx/confirm", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function getTxStatus(
+  txHash: string
+): Promise<{ txHash: string; status: string; confirmations?: number }> {
+  return apiFetch(`/tx/${txHash}/status`);
+}
+
+// ─── Portfolio ──────────────────────────────
+export interface PortfolioResponse {
+  address: string;
+  intents: { active: number; filled: number; total: number };
+  orders: { active: number; filled: number; total: number };
+  pools: { totalPools: number };
+}
+
+export async function getPortfolio(
+  address: string
+): Promise<PortfolioResponse> {
+  return apiFetch(`/portfolio/${address}`);
+}
+
+export interface PortfolioTransactionsResponse {
+  address: string;
+  items: Array<{
+    id: string;
+    type: string;
+    status: string;
+    inputAsset: string;
+    inputAmount: string;
+    outputAsset: string;
+    createdAt: string;
+  }>;
+  total: number;
+}
+
+export async function getPortfolioTransactions(
+  address: string,
+  limit?: number
+): Promise<PortfolioTransactionsResponse> {
+  return apiFetch(`/portfolio/${address}/transactions`, {
+    params: limit ? { limit: String(limit) } : undefined,
+  });
+}

@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import type { NormalizedPool } from "@/lib/hooks";
-import { depositLiquidity, withdrawLiquidity } from "@/lib/api";
+import { depositLiquidity, withdrawLiquidity, confirmTx } from "@/lib/api";
 import { formatAmount, formatCompact } from "@/lib/utils";
 
 interface LiquidityFormProps {
@@ -47,7 +47,10 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
       // Sign and submit via wallet
       if (result.unsignedTx) {
         const txHash = await signAndSubmitTx(result.unsignedTx);
-        console.log("Deposit TX submitted:", txHash);
+        if (txHash) {
+          await confirmTx({ txHash, action: "deposit" }).catch(() => {});
+          console.log("Deposit TX submitted:", txHash);
+        }
       }
       setAmountA("");
       setAmountB("");
@@ -75,7 +78,10 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
       // Sign and submit via wallet
       if (result.unsignedTx) {
         const txHash = await signAndSubmitTx(result.unsignedTx);
-        console.log("Withdraw TX submitted:", txHash);
+        if (txHash) {
+          await confirmTx({ txHash, action: "withdraw" }).catch(() => {});
+          console.log("Withdraw TX submitted:", txHash);
+        }
       }
       setWithdrawPercent("");
     } catch (err) {

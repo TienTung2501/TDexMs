@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { SwapCard } from "@/components/dex/swap-card";
+import { OrderEntryCard } from "@/components/dex/order-entry-card";
 import { PriceChart } from "@/components/dex/price-chart";
 import { RecentTradesTable } from "@/components/dex/recent-trades-table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import { Activity, TrendingUp, Droplets, Users, Loader2 } from "lucide-react";
 export default function SwapPage() {
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
   const [outputToken, setOutputToken] = useState<Token>(TOKENS.HOSKY);
+  const [tradeMode, setTradeMode] = useState<"market" | "advanced">("market");
 
   const { analytics, loading: analyticsLoading } = useAnalytics();
   const { pools } = usePools();
@@ -130,15 +132,43 @@ export default function SwapPage() {
           </Card>
         </div>
 
-        {/* Swap card */}
-        <div className="lg:col-span-2">
-          <SwapCard
-            inputToken={inputToken}
-            outputToken={outputToken}
-            onInputTokenChange={setInputToken}
-            onOutputTokenChange={setOutputToken}
-            pools={pools}
-          />
+        {/* Order entry panel */}
+        <div className="lg:col-span-2 space-y-3">
+          {/* Market / Advanced toggle */}
+          <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
+            <button
+              onClick={() => setTradeMode("market")}
+              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors ${
+                tradeMode === "market"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Market Swap
+            </button>
+            <button
+              onClick={() => setTradeMode("advanced")}
+              className={`flex-1 rounded-md py-2 text-xs font-medium transition-colors ${
+                tradeMode === "advanced"
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Advanced Orders
+            </button>
+          </div>
+
+          {tradeMode === "market" ? (
+            <SwapCard
+              inputToken={inputToken}
+              outputToken={outputToken}
+              onInputTokenChange={setInputToken}
+              onOutputTokenChange={setOutputToken}
+              pools={pools}
+            />
+          ) : (
+            <OrderEntryCard pools={pools} />
+          )}
         </div>
       </div>
 

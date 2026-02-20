@@ -26,7 +26,7 @@ import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
 import { useWallet } from "@/providers/wallet-provider";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
-import { createIntent } from "@/lib/api";
+import { createIntent, confirmTx } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
 
 interface SwapCardProps {
@@ -155,7 +155,15 @@ export function SwapCard({
       // 2. Sign and submit via CIP-30 wallet
       if (result.unsignedTx) {
         const txHash = await signAndSubmitTx(result.unsignedTx);
-        console.log("Swap TX submitted:", txHash);
+        if (txHash) {
+          // 3. Confirm TX on backend to update intent status
+          await confirmTx({
+            txHash,
+            intentId: result.intentId,
+            action: "create_intent",
+          }).catch(() => console.warn("TX confirm call failed (non-critical)"));
+          console.log("Swap TX submitted:", txHash);
+        }
       }
 
       setInputAmount("");
