@@ -17,6 +17,7 @@ import { createChartRouter } from '../http/routes/chart.js';
 import { createTxRouter } from '../http/routes/tx.js';
 import { createOrderRouter } from '../http/routes/orders.js';
 import { createPortfolioRouter } from '../http/routes/portfolio.js';
+import { createAdminRouter } from '../http/routes/admin.js';
 import type { GetQuote } from '../../application/use-cases/GetQuote.js';
 import type { CreateIntent } from '../../application/use-cases/CreateIntent.js';
 import type { CancelIntent } from '../../application/use-cases/CancelIntent.js';
@@ -30,6 +31,8 @@ import type { ListOrders } from '../../application/use-cases/ListOrders.js';
 import type { GetPortfolio } from '../../application/use-cases/GetPortfolio.js';
 import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js';
 import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
+import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
+import type { ITxBuilder } from '../../domain/ports/index.js';
 import type { BlockfrostClient } from '../../infrastructure/cardano/BlockfrostClient.js';
 import type { CandlestickService } from '../../application/services/CandlestickService.js';
 import type { CacheService } from '../../infrastructure/cache/CacheService.js';
@@ -48,6 +51,8 @@ export interface AppDependencies {
   getPortfolio: GetPortfolio;
   intentRepo: IIntentRepository;
   orderRepo: IOrderRepository;
+  poolRepo: IPoolRepository;
+  txBuilder: ITxBuilder;
   blockfrost: BlockfrostClient;
   candlestickService: CandlestickService;
   cache: CacheService | null;
@@ -90,7 +95,13 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createChartRouter(deps.candlestickService));
   v1.use(createTxRouter(deps.blockfrost, deps.intentRepo));
   v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
-  v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo));
+  v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo, deps.poolRepo, deps.txBuilder));
+  v1.use(createAdminRouter({
+    poolRepo: deps.poolRepo,
+    intentRepo: deps.intentRepo,
+    orderRepo: deps.orderRepo,
+    candlestickService: deps.candlestickService,
+  }));
 
   app.use('/v1', v1);
 

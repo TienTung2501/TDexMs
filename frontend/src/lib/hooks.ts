@@ -15,6 +15,10 @@ import {
   createWsConnection,
   listOrders,
   getPortfolio,
+  getPortfolioSummary,
+  getPortfolioOpenOrders,
+  getPortfolioHistory,
+  getPortfolioLiquidity,
   type PoolResponse,
   type PoolListResponse,
   type AnalyticsOverview,
@@ -22,6 +26,10 @@ import {
   type OrderListResponse,
   type OrderResponse,
   type PortfolioResponse,
+  type PortfolioSummary,
+  type OpenOrderEntry,
+  type OrderHistoryEntry,
+  type LpPositionEntry,
   type CandleData,
 } from "@/lib/api";
 import { TOKENS, type Token } from "@/lib/mock-data";
@@ -410,4 +418,51 @@ export function usePortfolio(address: string | undefined) {
   );
 
   return { portfolio: data, loading, error, refetch };
+}
+
+// ─── Portfolio Summary Hook ─────────────────
+export function usePortfolioSummary(address: string | undefined) {
+  const { data, loading, error, refetch } = useApi<PortfolioSummary>(
+    () => getPortfolioSummary(address!),
+    [address],
+    { enabled: !!address, refetchInterval: 30_000 }
+  );
+
+  return { summary: data, loading, error, refetch };
+}
+
+// ─── Portfolio Open Orders Hook ─────────────
+export function usePortfolioOpenOrders(address: string | undefined) {
+  const { data, loading, error, refetch } = useApi<OpenOrderEntry[]>(
+    () => getPortfolioOpenOrders(address!),
+    [address],
+    { enabled: !!address, refetchInterval: 15_000, fallback: [] }
+  );
+
+  return { openOrders: data || [], loading, error, refetch };
+}
+
+// ─── Portfolio History Hook ─────────────────
+export function usePortfolioHistory(
+  address: string | undefined,
+  statusFilter?: string
+) {
+  const { data, loading, error, refetch } = useApi<OrderHistoryEntry[]>(
+    () => getPortfolioHistory(address!, { status: statusFilter }),
+    [address, statusFilter],
+    { enabled: !!address, refetchInterval: 30_000, fallback: [] }
+  );
+
+  return { history: data || [], loading, error, refetch };
+}
+
+// ─── Portfolio LP Positions Hook ────────────
+export function usePortfolioLiquidity(address: string | undefined) {
+  const { data, loading, error, refetch } = useApi<LpPositionEntry[]>(
+    () => getPortfolioLiquidity(address!),
+    [address],
+    { enabled: !!address, refetchInterval: 30_000, fallback: [] }
+  );
+
+  return { positions: data || [], loading, error, refetch };
 }

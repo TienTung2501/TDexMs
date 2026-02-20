@@ -80,5 +80,83 @@ export function createAnalyticsRouter(): Router {
     },
   );
 
+  /** GET /v1/analytics/prices — Token price list derived from pool reserves */
+  router.get(
+    '/analytics/prices',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const prisma = getPrisma();
+
+        // Get all active pools and derive token prices
+        const pools = await prisma.pool.findMany({
+          where: { state: 'ACTIVE' },
+        });
+
+        // Build price map: token → price in ADA (lovelace)
+        const prices: Record<string, { price_ada: number; price_usd: number; source_pool: string }> = {};
+
+        // ADA is the base currency
+        prices['ADA'] = { price_ada: 1, price_usd: 0.5, source_pool: '' };
+
+        for (const pool of pools) {
+          const reserveA = Number(pool.reserveA);
+          const reserveB = Number(pool.reserveB);
+
+          if (reserveA > 0 && reserveB > 0) {
+            // If asset A is ADA (empty policy ID), then asset B price = reserveA / reserveB
+            const aIsAda = !pool.assetAPolicyId || pool.assetAPolicyId === '';
+            const bIsAda = !pool.assetBPolicyId || pool.assetBPolicyId === '';
+
+            if (aIsAda) {
+              const ticker = pool.assetBAssetName || `${pool.assetBPolicyId.slice(0, 8)}..`;
+              const priceInAda = reserveA / reserveB;
+              prices[ticker] = {
+                price_ada: priceInAda,
+                price_usd: priceInAda * 0.5,
+                source_pool: pool.id,
+              };
+            } else if (bIsAda) {
+              const ticker = pool.assetAAssetName || `${pool.assetAPolicyId.slice(0, 8)}..`;
+              const priceInAda = reserveB / reserveA;
+              prices[ticker] = {
+                price_ada: priceInAda,
+                price_usd: priceInAda * 0.5,
+                source_pool: pool.id,
+              };
+            } else {
+              // Non-ADA pair — derive relative price
+              const tickerA = pool.assetAAssetName || `${pool.assetAPolicyId.slice(0, 8)}..`;
+              const tickerB = pool.assetBAssetName || `${pool.assetBPolicyId.slice(0, 8)}..`;
+              if (!prices[tickerA]) {
+                prices[tickerA] = {
+                  price_ada: 0,
+                  price_usd: 0,
+                  source_pool: pool.id,
+                };
+              }
+              if (!prices[tickerB]) {
+                prices[tickerB] = {
+                  price_ada: 0,
+                  price_usd: 0,
+                  source_pool: pool.id,
+                };
+              }
+            }
+          }
+        }
+
+        res.json({
+          tokens: Object.entries(prices).map(([ticker, data]) => ({
+            ticker,
+            ...data,
+          })),
+          updated_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   return router;
 }

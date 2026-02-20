@@ -13,9 +13,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { PriceChart } from "@/components/dex/price-chart";
-import { LiquidityForm } from "@/components/dex/liquidity-form";
-import { RecentTradesTable } from "@/components/dex/recent-trades-table";
+import { PriceChart } from "@/components/features/trading/price-chart";
+import { LiquidityForm } from "@/components/features/liquidity/liquidity-form";
+import { RecentTradesTable } from "@/components/features/trading/recent-trades-table";
 import { usePool, useCandles } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
 

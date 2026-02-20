@@ -137,6 +137,8 @@ async function main(): Promise<void> {
     getPortfolio,
     intentRepo,
     orderRepo,
+    poolRepo,
+    txBuilder,
     blockfrost,
     candlestickService,
     cache,

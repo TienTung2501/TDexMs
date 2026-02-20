@@ -510,6 +510,134 @@ export async function getPortfolio(
   return apiFetch(`/portfolio/${address}`);
 }
 
+// Portfolio Summary (asset overview, allocation, status breakdown)
+export interface PortfolioSummary {
+  total_balance_usd: number;
+  total_balance_ada: number;
+  status_breakdown: {
+    available_in_wallet: number;
+    locked_in_orders: number;
+    locked_in_lp: number;
+  };
+  allocation_chart: Array<{
+    asset: string;
+    percentage: number;
+    value_usd: number;
+  }>;
+}
+
+export async function getPortfolioSummary(
+  walletAddress: string
+): Promise<PortfolioSummary> {
+  return apiFetch("/portfolio/summary", {
+    params: { wallet_address: walletAddress },
+  });
+}
+
+// Open Orders
+export interface OpenOrderEntry {
+  utxo_ref: string;
+  created_at: number;
+  pair: string;
+  type: "SWAP" | "LIMIT" | "DCA" | "STOP_LOSS";
+  conditions: {
+    target_price?: number;
+    trigger_price?: number;
+    slippage_percent?: number;
+  };
+  budget: {
+    initial_amount: number;
+    remaining_amount: number;
+    progress_percent: number;
+    progress_text: string;
+  };
+  deadline: number;
+  is_expired: boolean;
+  available_action: "CANCEL" | "RECLAIM";
+}
+
+export async function getPortfolioOpenOrders(
+  walletAddress: string,
+  limit: number = 20
+): Promise<OpenOrderEntry[]> {
+  return apiFetch("/portfolio/open-orders", {
+    params: { wallet_address: walletAddress, limit: String(limit) },
+  });
+}
+
+// Order History
+export interface OrderHistoryEntry {
+  order_id: string;
+  completed_at: number;
+  pair: string;
+  type: string;
+  status: "FILLED" | "CANCELLED" | "RECLAIMED";
+  execution: {
+    average_price: number;
+    total_value_usd: number;
+    total_asset_received: number;
+  };
+  explorer_links: string[];
+}
+
+export async function getPortfolioHistory(
+  walletAddress: string,
+  params?: { status?: string; page?: number }
+): Promise<OrderHistoryEntry[]> {
+  return apiFetch("/portfolio/history", {
+    params: {
+      wallet_address: walletAddress,
+      ...(params?.status ? { status: params.status } : {}),
+      ...(params?.page ? { page: String(params.page) } : {}),
+    },
+  });
+}
+
+// LP Positions
+export interface LpPositionEntry {
+  pool_id: string;
+  pair: string;
+  lp_balance: number;
+  share_percent: number;
+  current_value: {
+    asset_a_amount: number;
+    asset_b_amount: number;
+    total_value_usd: number;
+  };
+}
+
+export async function getPortfolioLiquidity(
+  walletAddress: string
+): Promise<LpPositionEntry[]> {
+  return apiFetch("/portfolio/liquidity", {
+    params: { wallet_address: walletAddress },
+  });
+}
+
+// Portfolio Actions — build TX for cancel/reclaim
+export async function buildPortfolioAction(body: {
+  wallet_address: string;
+  utxo_ref: string;
+  action_type: "CANCEL" | "RECLAIM";
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/portfolio/build-action", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Portfolio Withdraw — build TX for LP withdrawal from portfolio
+export async function buildPortfolioWithdraw(body: {
+  wallet_address: string;
+  pool_id: string;
+  lp_tokens_to_burn: number;
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/portfolio/build-withdraw", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export interface PortfolioTransactionsResponse {
   address: string;
   items: Array<{
@@ -586,3 +714,118 @@ export async function getAnalyticsPrices(): Promise<{
   return apiFetch("/analytics/prices");
 }
 
+// ─── Admin Portal ───────────────────────────────────────────
+
+// Auth check
+export interface AdminAuthResponse {
+  is_admin: boolean;
+  roles: {
+    is_factory_admin: boolean;
+    is_settings_admin: boolean;
+  };
+  system_status: {
+    current_version: number;
+  };
+}
+
+export async function checkAdminAuth(
+  walletAddress: string
+): Promise<AdminAuthResponse> {
+  return apiFetch("/admin/auth/check", {
+    params: { wallet_address: walletAddress },
+  });
+}
+
+// Dashboard metrics
+export interface AdminDashboardMetrics {
+  total_tvl_usd: number;
+  volume_24h_usd: number;
+  active_pools: number;
+  total_pending_fees_usd: number;
+  charts: {
+    fee_growth_30d: Array<{ date: string; accumulated_usd: number }>;
+  };
+}
+
+export async function getAdminDashboardMetrics(): Promise<AdminDashboardMetrics> {
+  return apiFetch("/admin/dashboard/metrics");
+}
+
+// Revenue - pending fees
+export interface PendingFeeEntry {
+  pool_id: string;
+  pair: string;
+  pending_fees: {
+    asset_a_amount: number;
+    asset_b_amount: number;
+    total_usd_value: number;
+  };
+}
+
+export async function getAdminPendingFees(): Promise<PendingFeeEntry[]> {
+  return apiFetch("/admin/revenue/pending");
+}
+
+// Revenue - build collect
+export async function buildCollectFees(body: {
+  admin_address: string;
+  pool_ids: string[];
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/admin/revenue/build-collect", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Settings - current
+export interface AdminSettings {
+  global_settings: {
+    max_protocol_fee_bps: number;
+    min_pool_liquidity: number;
+    current_version: number;
+  };
+  factory_settings: {
+    admin_vkh: string;
+  };
+}
+
+export async function getAdminSettings(): Promise<AdminSettings> {
+  return apiFetch("/admin/settings/current");
+}
+
+// Settings - update global
+export async function buildUpdateGlobalSettings(body: {
+  admin_address: string;
+  new_settings: {
+    max_protocol_fee_bps: number;
+    min_pool_liquidity: number;
+    next_version: number;
+  };
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/admin/settings/build-update-global", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Settings - update factory admin
+export async function buildUpdateFactoryAdmin(body: {
+  current_admin_address: string;
+  new_admin_vkh: string;
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/admin/settings/build-update-factory", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// Danger zone - burn pool NFT
+export async function buildBurnPoolNFT(body: {
+  admin_address: string;
+  pool_id: string;
+}): Promise<{ unsignedTx: string }> {
+  return apiFetch("/admin/pools/build-burn", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

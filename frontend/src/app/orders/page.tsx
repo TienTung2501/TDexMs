@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
-import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
 import { cancelOrder } from "@/lib/api";
 import { truncateAddress, cn } from "@/lib/utils";

@@ -6,12 +6,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TokenIcon } from "@/components/ui/token-icon";
-import { TokenSelectDialog } from "@/components/dex/token-select";
+import { TokenSelectDialog } from "@/components/features/wallet/token-select";
 import { TOKENS, TOKEN_LIST, type Token } from "@/lib/mock-data";
 import { useWallet } from "@/providers/wallet-provider";
 import { createPool } from "@/lib/api";
-import { useTxToast } from "@/lib/tx-toast";
-import { confirmTx } from "@/lib/api";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 import {
   Plus,
   ArrowLeft,
@@ -22,15 +21,14 @@ import {
 
 export default function CreatePoolPage() {
   const router = useRouter();
-  const { isConnected, address, signAndSubmitTx } = useWallet();
-  const { toast, TxToastContainer } = useTxToast();
+  const { isConnected, address } = useWallet();
+  const { execute, busy, TxToastContainer } = useTransaction();
 
   const [tokenA, setTokenA] = useState<Token>(TOKENS.ADA);
   const [tokenB, setTokenB] = useState<Token | null>(null);
   const [amountA, setAmountA] = useState("");
   const [amountB, setAmountB] = useState("");
   const [feeRate, setFeeRate] = useState("0.3");
-  const [submitting, setSubmitting] = useState(false);
   const [showTokenSelectA, setShowTokenSelectA] = useState(false);
   const [showTokenSelectB, setShowTokenSelectB] = useState(false);
 
@@ -70,38 +68,27 @@ export default function CreatePoolPage() {
 
   async function handleCreatePool() {
     if (!canSubmit || !tokenB || !address) return;
-    setSubmitting(true);
 
-    try {
-      toast("building", "Building pool creation transaction...");
-
-      const result = await createPool({
-        assetA: assetId(tokenA),
-        assetB: assetId(tokenB),
-        initialAmountA: toSmallestUnit(amountA, tokenA.decimals),
-        initialAmountB: toSmallestUnit(amountB, tokenB.decimals),
-        feeNumerator,
-        creatorAddress: address,
-        changeAddress: address,
-      });
-
-      if (result.unsignedTx) {
-        toast("signing", "Please sign the transaction in your wallet...");
-        const txHash = await signAndSubmitTx(result.unsignedTx);
-        if (txHash) {
-          toast("submitting", "Submitting to the network...");
-          await confirmTx({ txHash, action: "create_pool" }).catch(() => {});
-          toast("confirmed", `Pool created! TX: ${txHash.slice(0, 16)}...`, txHash);
-        }
-      } else {
-        toast("confirmed", `Pool created! ID: ${result.poolId}`);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast("error", msg);
-    } finally {
-      setSubmitting(false);
-    }
+    await execute(
+      () =>
+        createPool({
+          assetA: assetId(tokenA),
+          assetB: assetId(tokenB),
+          initialAmountA: toSmallestUnit(amountA, tokenA.decimals),
+          initialAmountB: toSmallestUnit(amountB, tokenB.decimals),
+          feeNumerator,
+          creatorAddress: address,
+          changeAddress: address,
+        }),
+      {
+        buildingMsg: "Building pool creation transaction...",
+        successMsg: `Pool ${tokenA.ticker}/${tokenB.ticker} created!`,
+        action: "create_pool",
+        onSuccess: () => {
+          // Could redirect: router.push("/pools");
+        },
+      },
+    );
   }
 
   return (
@@ -294,10 +281,10 @@ export default function CreatePoolPage() {
           variant="trade"
           size="xl"
           className="w-full"
-          disabled={!canSubmit || submitting}
+          disabled={!canSubmit || busy}
           onClick={handleCreatePool}
         >
-          {submitting ? (
+          {busy ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
               Creating Pool...

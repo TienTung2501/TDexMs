@@ -21,14 +21,14 @@ import {
 import {
   TokenSelectDialog,
   TokenButton,
-} from "@/components/dex/token-select";
-import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+} from "@/components/features/wallet/token-select";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { useWallet } from "@/providers/wallet-provider";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
-import { createIntent, confirmTx } from "@/lib/api";
+import { createIntent } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
-import { useTxToast } from "@/lib/tx-toast";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 
 interface SwapCardProps {
   inputToken?: Token;
@@ -45,8 +45,8 @@ export function SwapCard({
   onOutputTokenChange,
   pools: externalPools,
 }: SwapCardProps = {}) {
-  const { isConnected, address, changeAddress, balances, signAndSubmitTx } = useWallet();
-  const { toast, TxToastContainer } = useTxToast();
+  const { isConnected, address, changeAddress, balances } = useWallet();
+  const { execute, busy, TxToastContainer } = useTransaction();
 
   const [internalInputToken, setInternalInputToken] = useState<Token>(TOKENS.ADA);
   const [internalOutputToken, setInternalOutputToken] = useState<Token>(TOKENS.HOSKY);
@@ -75,7 +75,7 @@ export function SwapCard({
   const [selectingFor, setSelectingFor] = useState<"input" | "output" | null>(
     null
   );
-  const [isSwapping, setIsSwapping] = useState(false);
+
 
   // Find pool
   const pool = useMemo(() => {
@@ -124,62 +124,44 @@ export function SwapCard({
       : raw;
   }, [balances, inputToken]);
 
-  // Handle swap — submit intent to backend
+  // Handle swap — submit intent to backend via centralized TX flow
   const handleSwap = useCallback(async () => {
     if (!pool || !address) return;
-    setIsSwapping(true);
-    try {
-      toast("building", "Building swap transaction...");
-      const inputAsset =
-        inputToken.policyId === ""
-          ? "lovelace"
-          : `${inputToken.policyId}.${inputToken.assetName}`;
-      const outputAsset =
-        outputToken.policyId === ""
-          ? "lovelace"
-          : `${outputToken.policyId}.${outputToken.assetName}`;
-      const minOut = Math.floor(
-        quote.output * (1 - slippage / 100)
-      ).toString();
-      const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
 
-      // 1. Build unsigned TX on backend
-      const result = await createIntent({
-        senderAddress: address,
-        inputAsset,
-        inputAmount: inputAmount,
-        outputAsset,
-        minOutput: minOut,
-        deadline,
-        partialFill: false,
-        changeAddress: changeAddress || address,
-      });
+    const inputAsset =
+      inputToken.policyId === ""
+        ? "lovelace"
+        : `${inputToken.policyId}.${inputToken.assetName}`;
+    const outputAsset =
+      outputToken.policyId === ""
+        ? "lovelace"
+        : `${outputToken.policyId}.${outputToken.assetName}`;
+    const minOut = Math.floor(
+      quote.output * (1 - slippage / 100)
+    ).toString();
+    const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
 
-      // 2. Sign and submit via CIP-30 wallet
-      if (result.unsignedTx) {
-        toast("signing", "Please sign the transaction in your wallet...");
-        const txHash = await signAndSubmitTx(result.unsignedTx);
-        if (txHash) {
-          toast("submitting", "Submitting to the network...");
-          // 3. Confirm TX on backend to update intent status
-          await confirmTx({
-            txHash,
-            intentId: result.intentId,
-            action: "create_intent",
-          }).catch(() => console.warn("TX confirm call failed (non-critical)"));
-          toast("confirmed", `Swap submitted! ${inputAmount} ${inputToken.ticker} → ${outputToken.ticker}`, txHash);
-        }
-      }
-
-      setInputAmount("");
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast("error", msg);
-      console.error("Swap intent failed:", err);
-    } finally {
-      setIsSwapping(false);
-    }
-  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, signAndSubmitTx, toast]);
+    await execute(
+      () =>
+        createIntent({
+          senderAddress: address,
+          inputAsset,
+          inputAmount: inputAmount,
+          outputAsset,
+          minOutput: minOut,
+          deadline,
+          partialFill: false,
+          changeAddress: changeAddress || address,
+        }),
+      {
+        buildingMsg: "Building swap transaction...",
+        successMsg: `Swap submitted! ${inputAmount} ${inputToken.ticker} → ${outputToken.ticker}`,
+        action: "create_intent",
+        extractId: (res) => ({ intentId: res.intentId }),
+        onSuccess: () => setInputAmount(""),
+      },
+    );
+  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, execute]);
 
   // Price impact color
   const impactColor =
@@ -361,9 +343,9 @@ export function SwapCard({
               size="xl"
               className="w-full"
               onClick={handleSwap}
-              disabled={isSwapping}
+              disabled={busy}
             >
-              {isSwapping ? (
+              {busy ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
                   Submitting Intent...

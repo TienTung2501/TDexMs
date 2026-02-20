@@ -6,22 +6,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useWallet } from "@/providers/wallet-provider";
-import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { TokenIcon } from "@/components/ui/token-icon";
 import type { NormalizedPool } from "@/lib/hooks";
-import { depositLiquidity, withdrawLiquidity, confirmTx } from "@/lib/api";
+import { depositLiquidity, withdrawLiquidity } from "@/lib/api";
 import { formatAmount, formatCompact } from "@/lib/utils";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 
 interface LiquidityFormProps {
   pool: NormalizedPool;
 }
 
 export function LiquidityForm({ pool }: LiquidityFormProps) {
-  const { isConnected, address, changeAddress, balances, signAndSubmitTx } = useWallet();
+  const { isConnected, address, changeAddress, balances } = useWallet();
+  const { execute, busy, TxToastContainer } = useTransaction();
   const [amountA, setAmountA] = useState("");
   const [amountB, setAmountB] = useState("");
   const [withdrawPercent, setWithdrawPercent] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Auto-calculate proportional amount
   const handleAmountAChange = (val: string) => {
@@ -36,61 +37,52 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
 
   const handleDeposit = useCallback(async () => {
     if (!address) return;
-    setIsSubmitting(true);
-    try {
-      const result = await depositLiquidity(pool.id, {
-        amountA: amountA,
-        amountB: amountB,
-        minLpTokens: "0",
-        senderAddress: address,
-        changeAddress: changeAddress || address,
-      });
-      // Sign and submit via wallet
-      if (result.unsignedTx) {
-        const txHash = await signAndSubmitTx(result.unsignedTx);
-        if (txHash) {
-          await confirmTx({ txHash, action: "deposit" }).catch(() => {});
-          console.log("Deposit TX submitted:", txHash);
-        }
-      }
-      setAmountA("");
-      setAmountB("");
-    } catch (err) {
-      console.error("Deposit failed:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [pool.id, amountA, amountB, address, changeAddress, signAndSubmitTx]);
+
+    await execute(
+      () =>
+        depositLiquidity(pool.id, {
+          amountA: amountA,
+          amountB: amountB,
+          minLpTokens: "0",
+          senderAddress: address,
+          changeAddress: changeAddress || address,
+        }),
+      {
+        buildingMsg: "Building deposit transaction...",
+        successMsg: `Deposited ${amountA} ${pool.assetA.ticker} + ${amountB} ${pool.assetB.ticker}`,
+        action: "deposit",
+        onSuccess: () => {
+          setAmountA("");
+          setAmountB("");
+        },
+      },
+    );
+  }, [pool.id, pool.assetA.ticker, pool.assetB.ticker, amountA, amountB, address, changeAddress, execute]);
 
   const handleWithdraw = useCallback(async () => {
     if (!address || !withdrawPercent) return;
-    setIsSubmitting(true);
-    try {
-      const lpAmount = Math.floor(
-        pool.totalLpTokens * (parseFloat(withdrawPercent) / 100)
-      ).toString();
-      const result = await withdrawLiquidity(pool.id, {
-        lpTokenAmount: lpAmount,
-        minAmountA: "0",
-        minAmountB: "0",
-        senderAddress: address,
-        changeAddress: changeAddress || address,
-      });
-      // Sign and submit via wallet
-      if (result.unsignedTx) {
-        const txHash = await signAndSubmitTx(result.unsignedTx);
-        if (txHash) {
-          await confirmTx({ txHash, action: "withdraw" }).catch(() => {});
-          console.log("Withdraw TX submitted:", txHash);
-        }
-      }
-      setWithdrawPercent("");
-    } catch (err) {
-      console.error("Withdraw failed:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [pool.id, pool.totalLpTokens, withdrawPercent, address, changeAddress, signAndSubmitTx]);
+
+    const lpAmount = Math.floor(
+      pool.totalLpTokens * (parseFloat(withdrawPercent) / 100)
+    ).toString();
+
+    await execute(
+      () =>
+        withdrawLiquidity(pool.id, {
+          lpTokenAmount: lpAmount,
+          minAmountA: "0",
+          minAmountB: "0",
+          senderAddress: address,
+          changeAddress: changeAddress || address,
+        }),
+      {
+        buildingMsg: "Building withdrawal transaction...",
+        successMsg: `Withdrew ${withdrawPercent}% of LP position`,
+        action: "withdraw",
+        onSuccess: () => setWithdrawPercent(""),
+      },
+    );
+  }, [pool.id, pool.totalLpTokens, withdrawPercent, address, changeAddress, execute]);
 
   return (
     <Tabs defaultValue="deposit" className="w-full">
@@ -178,10 +170,10 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
           <Button
             variant="trade"
             className="w-full"
-            disabled={!amountA || !amountB || isSubmitting}
+            disabled={!amountA || !amountB || busy}
             onClick={handleDeposit}
           >
-            {isSubmitting ? (
+            {busy ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Depositing...
@@ -256,11 +248,11 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
             variant="destructive"
             className="w-full"
             disabled={
-              !withdrawPercent || parseFloat(withdrawPercent) <= 0 || isSubmitting
+              !withdrawPercent || parseFloat(withdrawPercent) <= 0 || busy
             }
             onClick={handleWithdraw}
           >
-            {isSubmitting ? (
+            {busy ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Withdrawing...
@@ -271,6 +263,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
           </Button>
         )}
       </TabsContent>
+      <TxToastContainer />
     </Tabs>
   );
 }

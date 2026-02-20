@@ -32,6 +32,9 @@ const envSchema = z.object({
   ESCROW_SCRIPT_ADDRESS: z.string().default(''),
   POOL_SCRIPT_ADDRESS: z.string().default(''),
 
+  // Admin
+  ADMIN_ADDRESS: z.string().default(''), // Bech32 address of the factory admin
+
   // Solver
   SOLVER_SEED_PHRASE: z.string().default(''),
   SOLVER_ADDRESS: z.string().default(''),

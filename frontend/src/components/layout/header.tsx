@@ -7,7 +7,7 @@ import {
   Waves,
   Wallet,
   BarChart3,
-  ClipboardList,
+  Shield,
   Sun,
   Moon,
   Menu,
@@ -16,15 +16,15 @@ import {
 import { useTheme } from "next-themes";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Swap", icon: ArrowLeftRight },
-  { href: "/pools", label: "Pools", icon: Waves },
+  { href: "/", label: "Trade", icon: ArrowLeftRight },
+  { href: "/pools", label: "Liquidity", icon: Waves },
   { href: "/portfolio", label: "Portfolio", icon: Wallet },
-  { href: "/orders", label: "Orders", icon: ClipboardList },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/admin", label: "Admin", icon: Shield },
 ];
 
 export function Header() {

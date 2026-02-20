@@ -1,7 +1,7 @@
 # SolverNet DEX — API Specification
 
-> **Document Version**: 1.1.0  
-> **Status**: Phase 2 — Implemented & Deployed  
+> **Document Version**: 1.2.0  
+> **Status**: Phase 3 — Extended Portfolio, Admin & Chart APIs  
 > **Date**: 2026-02-17  
 > **Base URL**: `https://tdexms.onrender.com/v1`  
 > **Classification**: Internal — Technical Specification
@@ -19,9 +19,12 @@
 7. [Order API](#7-order-api)
 8. [Portfolio API](#8-portfolio-api)
 9. [Analytics API](#9-analytics-api)
-10. [WebSocket API](#10-websocket-api)
-11. [Error Handling](#11-error-handling)
-12. [Health & Status](#12-health--status)
+10. [Chart API](#10-chart-api)
+11. [Transaction API](#11-transaction-api)
+12. [Admin API](#12-admin-api)
+13. [WebSocket API](#13-websocket-api)
+14. [Error Handling](#14-error-handling)
+15. [Health & Status](#15-health--status)
 
 ---
 
@@ -414,6 +417,28 @@ Remove liquidity from a pool. Returns unsigned transaction.
 }
 ```
 
+### GET `/v1/pools/{poolId}/history?interval=1d&limit=30`
+
+Historical TVL, volume, and price data for a specific pool.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `interval` | string | `1d` | Time bucket (`1h`, `4h`, `1d`, `1w`) |
+| `limit` | number | `30` | Number of data points |
+
+**Response: `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "poolId": "pool_abc",
+  "interval": "1d",
+  "history": [
+    { "timestamp": 1740000000, "tvl_ada": 50000, "volume_ada": 2500, "price": 0.005 }
+  ]
+}
+```
+
 ---
 
 ## 7. Order API
@@ -467,51 +492,152 @@ Cancel an active order.
 
 ### GET `/v1/portfolio/{address}`
 
-Get comprehensive portfolio view for a wallet.
+Get comprehensive portfolio view for a wallet (legacy).
 
 **Response: `200 OK`**
 
 ```json
 {
   "address": "addr1qx...",
-  "summary": {
-    "totalValueAda": "150000000000",
-    "totalPnlAda": "5000000000",
-    "totalPnlPercent": 3.45,
-    "openIntents": 2,
-    "activeOrders": 1
-  },
-  "positions": [
-    {
-      "poolId": "pool_abc123",
-      "pair": "ADA/HOSKY",
-      "lpTokenAmount": "7000000000",
-      "sharePercent": 1.97,
-      "valueAda": "14000000000",
-      "depositValueAda": "13500000000",
-      "pnlAda": "500000000",
-      "pnlPercent": 3.7,
-      "feesEarnedAda": "200000000"
-    }
-  ],
-  "recentTransactions": [
-    {
-      "txHash": "abc123...",
-      "type": "SWAP",
-      "inputAsset": "ADA",
-      "inputAmount": "100000000",
-      "outputAsset": "HOSKY",
-      "outputAmount": "5000000000",
-      "timestamp": "2026-02-17T12:00:00Z",
-      "status": "CONFIRMED"
-    }
-  ]
+  "intents": { "active": 2, "filled": 10, "total": 12 },
+  "orders": { "active": 1, "filled": 5, "total": 6 },
+  "pools": { "totalPools": 3 }
 }
 ```
 
 ### GET `/v1/portfolio/{address}/transactions`
 
 Paginated transaction history for a wallet.
+
+### GET `/v1/portfolio/summary?wallet_address=...`
+
+Aggregated portfolio summary with allocation & status breakdown.
+
+**Response: `200 OK`**
+
+```json
+{
+  "total_balance_usd": 500.25,
+  "total_balance_ada": 1000.5,
+  "status_breakdown": {
+    "available_in_wallet": 800,
+    "locked_in_orders": 150,
+    "locked_in_lp": 50.5
+  },
+  "allocation_chart": [
+    { "asset": "ADA", "percentage": 80.0, "value_usd": 400 },
+    { "asset": "SNEK", "percentage": 15.0, "value_usd": 75 }
+  ]
+}
+```
+
+### GET `/v1/portfolio/open-orders?wallet_address=...&limit=20`
+
+Active orders/intents with progress bars, deadlines, and available actions.
+
+**Response: `200 OK`**
+
+```json
+[
+  {
+    "utxo_ref": "abc123#0",
+    "created_at": 1740000000,
+    "pair": "ADA_SNEK",
+    "type": "LIMIT",
+    "conditions": { "target_price": 0.005, "trigger_price": null, "slippage_percent": null },
+    "budget": { "initial_amount": 1000, "remaining_amount": 600, "progress_percent": 40, "progress_text": "40% filled" },
+    "deadline": 1740086400,
+    "is_expired": false,
+    "available_action": "CANCEL"
+  }
+]
+```
+
+### GET `/v1/portfolio/history?wallet_address=...&status=FILLED&page=1`
+
+Completed order history with execution data and explorer links.
+
+**Response: `200 OK`**
+
+```json
+[
+  {
+    "order_id": "ord_abc",
+    "completed_at": 1740000000,
+    "pair": "ADA_SNEK",
+    "type": "SWAP",
+    "status": "FILLED",
+    "execution": { "average_price": 0.005, "total_value_usd": 25.0, "total_asset_received": 5000 },
+    "explorer_links": ["abc123def..."]
+  }
+]
+```
+
+### GET `/v1/portfolio/liquidity?wallet_address=...`
+
+LP positions with current value and pool share.
+
+**Response: `200 OK`**
+
+```json
+[
+  {
+    "pool_id": "pool_abc",
+    "pair": "ADA_SNEK",
+    "lp_balance": 7000,
+    "share_percent": 1.97,
+    "current_value": { "asset_a_amount": 700, "asset_b_amount": 140000, "total_value_usd": 350 }
+  }
+]
+```
+
+### POST `/v1/portfolio/build-action`
+
+Build a cancel or reclaim transaction for an active/expired order.
+
+**Request:**
+
+```json
+{
+  "wallet_address": "addr1qx...",
+  "utxo_ref": "abc123#0",
+  "action_type": "CANCEL"
+}
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "unsignedTx": "84a400...",
+  "txHash": "def456...",
+  "estimatedFee": "200000"
+}
+```
+
+### POST `/v1/portfolio/build-withdraw`
+
+Build an LP withdrawal transaction from the portfolio.
+
+**Request:**
+
+```json
+{
+  "wallet_address": "addr1qx...",
+  "pool_id": "pool_abc",
+  "lp_tokens_to_burn": 5000
+}
+```
+
+**Response: `200 OK`**
+
+```json
+{
+  "unsignedTx": "84a400...",
+  "txHash": "ghi789...",
+  "estimatedFee": "250000"
+}
+```
 
 ---
 
@@ -548,9 +674,317 @@ Token-specific analytics (price, volume, liquidity across all pools).
 
 Current prices for all traded assets (used by frontend for display).
 
+**Response: `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "prices": [
+    {
+      "asset": "SNEK",
+      "policyId": "abc...",
+      "assetName": "534e454b",
+      "priceInAda": 0.005,
+      "pool_id": "pool_abc"
+    }
+  ]
+}
+```
+
 ---
 
-## 10. WebSocket API
+## 10. Chart API
+
+TradingView-compatible OHLCV chart endpoints powered by `CandlestickService`.
+
+### GET `/v1/chart/config`
+
+TradingView UDF configuration.
+
+**Response: `200 OK`**
+
+```json
+{
+  "supported_resolutions": ["240", "1D", "1W"],
+  "supports_group_request": false,
+  "supports_marks": false,
+  "supports_search": true,
+  "supports_timescale_marks": false
+}
+```
+
+### GET `/v1/chart/symbols?symbol={poolId}`
+
+Resolve a symbol (pool ID) to TradingView-compatible symbol info.
+
+**Response: `200 OK`**
+
+```json
+{
+  "name": "pool_abc",
+  "ticker": "pool_abc",
+  "description": "Pool pool_abc",
+  "type": "crypto",
+  "session": "24x7",
+  "timezone": "Etc/UTC",
+  "exchange": "SolverNet",
+  "minmov": 1,
+  "pricescale": 1000000000000000,
+  "has_intraday": true,
+  "has_daily": true,
+  "supported_resolutions": ["240", "1D", "1W"]
+}
+```
+
+### GET `/v1/chart/history?symbol={poolId}&resolution={res}&from={ts}&to={ts}&countback={n}`
+
+TradingView UDF candle history. Returns arrays of OHLCV data.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `symbol` | string | ✅ | Pool ID |
+| `resolution` | string | ✅ | TradingView resolution (`240`, `1D`, `1W`) |
+| `from` | number | ❌ | Start timestamp (seconds) |
+| `to` | number | ❌ | End timestamp (seconds) |
+| `countback` | number | ❌ | Number of bars to fetch |
+
+**Response: `200 OK`**
+
+```json
+{
+  "s": "ok",
+  "t": [1740000000, 1740014400],
+  "o": [0.005, 0.0051],
+  "h": [0.0055, 0.0052],
+  "l": [0.0049, 0.0050],
+  "c": [0.0051, 0.0051],
+  "v": [500000, 320000]
+}
+```
+
+No-data response: `{ "s": "no_data" }`
+
+### GET `/v1/chart/candles?poolId={id}&interval={iv}&from={ts}&to={ts}&limit={n}`
+
+Direct candle query (non-TradingView format).
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `poolId` | string | ✅ | — | Pool ID |
+| `interval` | string | ❌ | `4h` | Candle interval (`4h`, `1d`, `1w`) |
+| `from` | number | ❌ | — | Start timestamp (seconds) |
+| `to` | number | ❌ | — | End timestamp (seconds) |
+| `limit` | number | ❌ | — | Max candles to return |
+
+**Response: `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "poolId": "pool_abc",
+  "interval": "4h",
+  "count": 100,
+  "candles": [
+    { "time": 1740000000, "open": 0.005, "high": 0.0055, "low": 0.0049, "close": 0.0051, "volume": "500000" }
+  ]
+}
+```
+
+### GET `/v1/chart/price/{poolId}`
+
+Latest price for a pool.
+
+**Response: `200 OK`**
+
+```json
+{ "status": "ok", "poolId": "pool_abc", "price": 0.0051 }
+```
+
+**`404`** if no price data available.
+
+### GET `/v1/chart/info/{poolId}`
+
+24-hour pool chart info (high, low, open, close, change).
+
+**Response: `200 OK`**
+
+```json
+{
+  "status": "ok",
+  "poolId": "pool_abc",
+  "open": 0.005,
+  "high": 0.0055,
+  "low": 0.0048,
+  "close": 0.0051,
+  "change24h": 2.0,
+  "volume24h": "1200000"
+}
+```
+
+### GET `/v1/chart/intervals`
+
+Supported candlestick intervals.
+
+**Response: `200 OK`**
+
+```json
+{ "status": "ok", "intervals": ["4h", "1d", "1w"] }
+```
+
+---
+
+## 11. Transaction API
+
+Submit signed transactions and track confirmation status.
+
+### POST `/v1/tx/submit`
+
+Submit a signed transaction to the Cardano network via Blockfrost.
+
+**Rate-limited** (write limiter).
+
+**Request:**
+
+```json
+{ "signedTx": "84a400..." }
+```
+
+**Response: `200 OK`**
+
+```json
+{ "txHash": "abc123...", "accepted": true }
+```
+
+**Error: `400`**
+
+```json
+{ "txHash": "", "accepted": false, "error": "Transaction validation failed" }
+```
+
+### POST `/v1/tx/confirm`
+
+Client callback after on-chain confirmation — updates intent status in DB.
+
+**Request:**
+
+```json
+{
+  "txHash": "abc123...",
+  "intentId": "int_def456",
+  "action": "create"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `txHash` | string | ✅ | Confirmed transaction hash |
+| `intentId` | string | ❌ | Intent to update (if applicable) |
+| `action` | string | ❌ | `create` → set ACTIVE, `cancel` → set CANCELLED |
+
+**Response: `200 OK`**
+
+```json
+{ "status": "ok", "txHash": "abc123..." }
+```
+
+### GET `/v1/tx/{txHash}/status`
+
+Check whether a transaction is confirmed on-chain (polls Blockfrost with 5 s timeout).
+
+**Response: `200 OK`**
+
+```json
+{ "txHash": "abc123...", "confirmed": true }
+```
+
+---
+
+## 12. Admin API
+
+Admin endpoints require wallet address verification against `ADMIN_ADDRESS` environment variable.
+
+### GET `/v1/admin/auth/check?wallet_address=...`
+
+Verify if a wallet is the configured admin.
+
+**Response: `200 OK`**
+
+```json
+{ "is_admin": true }
+```
+
+### GET `/v1/admin/dashboard/metrics`
+
+Aggregated protocol metrics for the admin dashboard.
+
+**Response: `200 OK`**
+
+```json
+{
+  "tvl_ada": 500000,
+  "volume_24h_ada": 25000,
+  "total_pools": 12,
+  "total_fees_ada": 150,
+  "chart_data": [
+    { "date": "2026-02-01", "tvl": 480000, "volume": 22000, "fees": 5.5 }
+  ]
+}
+```
+
+### GET `/v1/admin/revenue/pending`
+
+Estimated pending fees across all pools (per-pool breakdown).
+
+**Response: `200 OK`**
+
+```json
+{
+  "total_pending_ada": 75.5,
+  "pools": [
+    { "pool_id": "pool_abc", "pair": "ADA_SNEK", "pending_ada": 25.0 }
+  ]
+}
+```
+
+### POST `/v1/admin/revenue/build-collect`
+
+Build a fee-collection transaction. **Status: 501 — requires dedicated TxBuilder method.**
+
+### GET `/v1/admin/settings/current`
+
+Current global and factory settings.
+
+**Response: `200 OK`**
+
+```json
+{
+  "global": {
+    "solver_address": "addr1qx...",
+    "min_fee_percent": 0.3,
+    "max_pools": 100
+  },
+  "factory": {
+    "min_liquidity_ada": 100,
+    "default_fee_percent": 0.3
+  }
+}
+```
+
+### POST `/v1/admin/settings/build-update-global`
+
+Build a transaction to update global settings. **Status: 501.**
+
+### POST `/v1/admin/settings/build-update-factory`
+
+Build a transaction to update factory settings. **Status: 501.**
+
+### POST `/v1/admin/pools/build-burn`
+
+Build a transaction to burn/close a pool. **Status: 501.**
+
+---
+
+## 13. WebSocket API
 
 ### Connection
 
@@ -637,7 +1071,7 @@ ws://api.solvernet.io/v1/ws
 
 ---
 
-## 11. Error Handling
+## 14. Error Handling
 
 ### Standard Error Response
 
@@ -679,7 +1113,7 @@ ws://api.solvernet.io/v1/ws
 
 ---
 
-## 12. Health & Status
+## 15. Health & Status
 
 ### GET `/v1/health`
 

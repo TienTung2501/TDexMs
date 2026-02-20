@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
-import { SwapCard } from "@/components/dex/swap-card";
-import { OrderEntryCard } from "@/components/dex/order-entry-card";
-import { PriceChart, TIMEFRAME_TO_INTERVAL, type ChartTimeframe } from "@/components/dex/price-chart";
-import { PseudoOrderbook } from "@/components/dex/pseudo-orderbook";
-import { TradingFooter } from "@/components/dex/trading-footer";
+import { SwapCard } from "@/components/features/trading/swap-card";
+import { OrderEntryCard } from "@/components/features/trading/order-entry-card";
+import { PriceChart, TIMEFRAME_TO_INTERVAL, type ChartTimeframe } from "@/components/features/trading/price-chart";
+import { PseudoOrderbook } from "@/components/features/trading/pseudo-orderbook";
+import { TradingFooter } from "@/components/features/trading/trading-footer";
 import { TokenPairIcon } from "@/components/ui/token-icon";
 import { Card, CardContent } from "@/components/ui/card";
 import { TOKENS, type Token } from "@/lib/mock-data";

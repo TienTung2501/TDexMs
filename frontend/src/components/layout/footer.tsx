@@ -38,10 +38,10 @@ export function Footer() {
                 Analytics
               </Link>
               <Link
-                href="/orders"
+                href="/admin"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
-                Orders
+                Admin
               </Link>
             </nav>
           </div>

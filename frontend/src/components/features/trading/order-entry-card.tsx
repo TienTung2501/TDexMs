@@ -20,14 +20,14 @@ import {
 import {
   TokenSelectDialog,
   TokenButton,
-} from "@/components/dex/token-select";
-import { WalletConnectDialog } from "@/components/dex/wallet-connect-dialog";
+} from "@/components/features/wallet/token-select";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { useWallet } from "@/providers/wallet-provider";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
-import { createOrder, confirmTx } from "@/lib/api";
+import { createOrder } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
-import { useTxToast } from "@/lib/tx-toast";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 
 type OrderTab = "LIMIT" | "DCA" | "STOP_LOSS";
 
@@ -36,8 +36,8 @@ interface OrderEntryCardProps {
 }
 
 export function OrderEntryCard({ pools }: OrderEntryCardProps) {
-  const { isConnected, address, changeAddress, signAndSubmitTx } = useWallet();
-  const { toast, TxToastContainer } = useTxToast();
+  const { isConnected, address, changeAddress } = useWallet();
+  const { execute, busy, TxToastContainer } = useTransaction();
 
   const [activeTab, setActiveTab] = useState<OrderTab>("LIMIT");
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
@@ -56,7 +56,6 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
   // Stop-loss specific
   const [stopPrice, setStopPrice] = useState("");
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [txResult, setTxResult] = useState<string | null>(null);
 
   // Calculate price from pool
@@ -84,65 +83,51 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
 
   const handleSubmit = async () => {
     if (!address || !changeAddress || !inputAmount) return;
-    setIsSubmitting(true);
     setTxResult(null);
 
-    try {
-      toast("building", `Building ${activeTab.toLowerCase()} order...`);
-      const deadlineMs = Date.now() + Number(deadline) * 24 * 60 * 60 * 1000;
-      const inputAsset =
-        inputToken.policyId === "" ? "lovelace" : `${inputToken.policyId}.${inputToken.assetName}`;
-      const outputAsset =
-        outputToken.policyId === "" ? "lovelace" : `${outputToken.policyId}.${outputToken.assetName}`;
+    const deadlineMs = Date.now() + Number(deadline) * 24 * 60 * 60 * 1000;
+    const inputAsset =
+      inputToken.policyId === "" ? "lovelace" : `${inputToken.policyId}.${inputToken.assetName}`;
+    const outputAsset =
+      outputToken.policyId === "" ? "lovelace" : `${outputToken.policyId}.${outputToken.assetName}`;
 
-      // Parse price as rational number (multiply by 1e6 for precision)
-      const priceVal = activeTab === "STOP_LOSS" ? Number(stopPrice) : Number(targetPrice);
-      const priceDen = 1_000_000;
-      const priceNum = Math.round(priceVal * priceDen);
+    const priceVal = activeTab === "STOP_LOSS" ? Number(stopPrice) : Number(targetPrice);
+    const priceDen = 1_000_000;
+    const priceNum = Math.round(priceVal * priceDen);
 
-      const decimals = inputToken.decimals || 0;
-      const rawAmount = BigInt(Math.round(Number(inputAmount) * 10 ** decimals));
+    const decimals = inputToken.decimals || 0;
+    const rawAmount = BigInt(Math.round(Number(inputAmount) * 10 ** decimals));
 
-      const body = {
-        type: activeTab as "LIMIT" | "DCA" | "STOP_LOSS",
-        inputAsset,
-        outputAsset,
-        inputAmount: rawAmount.toString(),
-        priceNumerator: priceNum.toString(),
-        priceDenominator: priceDen.toString(),
-        ...(activeTab === "DCA"
-          ? {
-              totalBudget: rawAmount.toString(),
-              amountPerInterval: BigInt(
-                Math.round(Number(amountPerInterval) * 10 ** decimals),
-              ).toString(),
-              intervalSlots: Math.round(Number(intervalHours) * 3600 / 20), // ~20s per slot
-            }
-          : {}),
-        deadline: deadlineMs,
-        senderAddress: address,
-        changeAddress,
-      };
+    const body = {
+      type: activeTab as "LIMIT" | "DCA" | "STOP_LOSS",
+      inputAsset,
+      outputAsset,
+      inputAmount: rawAmount.toString(),
+      priceNumerator: priceNum.toString(),
+      priceDenominator: priceDen.toString(),
+      ...(activeTab === "DCA"
+        ? {
+            totalBudget: rawAmount.toString(),
+            amountPerInterval: BigInt(
+              Math.round(Number(amountPerInterval) * 10 ** decimals),
+            ).toString(),
+            intervalSlots: Math.round(Number(intervalHours) * 3600 / 20),
+          }
+        : {}),
+      deadline: deadlineMs,
+      senderAddress: address,
+      changeAddress,
+    };
 
-      const result = await createOrder(body);
-
-      if (result.unsignedTx && signAndSubmitTx) {
-        toast("signing", "Please sign the transaction in your wallet...");
-        const txHash = await signAndSubmitTx(result.unsignedTx);
-        if (txHash) {
-          toast("submitting", "Submitting to the network...");
-          await confirmTx({ txHash, action: "create_order" });
-          toast("confirmed", `${activeTab} order placed successfully!`, txHash);
-          setTxResult(txHash);
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast("error", msg);
-      console.error("Order creation failed:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await execute(
+      () => createOrder(body),
+      {
+        buildingMsg: `Building ${activeTab.toLowerCase()} order...`,
+        successMsg: `${activeTab} order placed successfully!`,
+        action: "create_order",
+        onSuccess: (txHash) => setTxResult(txHash),
+      },
+    );
   };
 
   return (
@@ -378,10 +363,10 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
           <Button
             className="w-full"
             size="lg"
-            disabled={!inputAmount || Number(inputAmount) <= 0 || isSubmitting}
+            disabled={!inputAmount || Number(inputAmount) <= 0 || busy}
             onClick={handleSubmit}
           >
-            {isSubmitting ? (
+            {busy ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
                 Signing...
