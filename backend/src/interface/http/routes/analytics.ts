@@ -17,10 +17,11 @@ export function createAnalyticsRouter(): Router {
         const prisma = getPrisma();
 
         // Gather protocol stats
-        const [poolCount, intentCount, filledCount] = await Promise.all([
+        const [poolCount, intentCount, filledCount, uniqueTraders] = await Promise.all([
           prisma.pool.count({ where: { state: 'ACTIVE' } }),
           prisma.intent.count(),
           prisma.intent.count({ where: { status: 'FILLED' } }),
+          prisma.intent.groupBy({ by: ['creator'] }).then((g) => g.length).catch(() => 0),
         ]);
 
         // Try to get protocol stats record
@@ -37,6 +38,7 @@ export function createAnalyticsRouter(): Router {
           totalIntents: intentCount,
           intentsFilled: filledCount,
           fillRate: intentCount > 0 ? (filledCount / intentCount) * 100 : 0,
+          uniqueTraders,
         });
       } catch (err) {
         next(err);

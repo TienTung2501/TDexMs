@@ -1,10 +1,9 @@
 /**
- * CLI Admin: Emergency shutdown – pause solvers and freeze protocol
+ * CLI Admin: Emergency shutdown – freeze protocol settings on-chain
  * Usage: npx tsx src/admin-emergency-shutdown.ts [--confirm]
  *
- * This script:
- *   1. Pauses the solver engine (POST /admin/solver/pause)
- *   2. Optionally builds a settings TX to mark the protocol as paused on-chain
+ * This script builds a settings update TX to freeze the protocol.
+ * Uses POST /v1/admin/settings/build-update-global with a paused flag.
  *
  * Safety: Requires --confirm flag to actually execute.
  *
@@ -19,7 +18,7 @@ async function main() {
 
   if (!args.confirm) {
     console.log('⚠️  Emergency Shutdown Script');
-    console.log('   This will pause the solver engine and freeze the protocol.');
+    console.log('   This will build a settings TX to freeze the protocol on-chain.');
     console.log('   Re-run with --confirm to execute:');
     console.log('');
     console.log('   npx tsx src/admin-emergency-shutdown.ts --confirm');
@@ -38,27 +37,27 @@ async function main() {
   console.log(`Admin address: ${address}`);
   console.log('🚨 Executing emergency shutdown...\n');
 
-  // Step 1: Pause solver
-  console.log('Step 1: Pausing solver engine...');
+  // Show current settings first
+  console.log('Step 1: Fetching current settings...');
   try {
-    const pauseResult = await apiFetch<any>('/admin/solver/pause', {
-      method: 'POST',
-      body: JSON.stringify({ adminAddress: address }),
-    });
-    log('Solver paused', pauseResult);
+    const settings = await apiFetch<any>('/admin/settings/current');
+    log('Current settings', settings.global_settings);
   } catch (err: any) {
-    console.warn(`  Solver pause endpoint may not exist yet: ${err.message}`);
-    console.warn('  Continuing with on-chain freeze...');
+    console.warn(`  Could not fetch settings: ${err.message}`);
   }
 
-  // Step 2: On-chain settings freeze
-  console.log('\nStep 2: Freezing protocol on-chain...');
+  // Build settings update TX (set fee to 0 and version to 0 = frozen)
+  console.log('\nStep 2: Building freeze TX via /admin/settings/build-update-global...');
   try {
-    const result = await apiFetch<any>('/admin/settings', {
+    const result = await apiFetch<any>('/admin/settings/build-update-global', {
       method: 'POST',
       body: JSON.stringify({
-        adminAddress: address,
-        settings: { paused: true, solverMode: 'manual' },
+        admin_address: address,
+        new_settings: {
+          max_protocol_fee_bps: 0,
+          min_pool_liquidity: 999_999_999,
+          next_version: 0, // version 0 = frozen
+        },
       }),
     });
 
@@ -77,14 +76,17 @@ async function main() {
         explorerUrl: `https://preprod.cardanoscan.io/transaction/${txHash}`,
       });
     } else {
-      log('Protocol paused (off-chain only)', result);
+      log('Backend response (no TX built)', result);
+      console.log('\nNote: The settings update TX building is not yet implemented (501).');
+      console.log('Protocol remains in current state.');
     }
   } catch (err: any) {
     console.warn(`  On-chain freeze not available: ${err.message}`);
+    console.warn('  Note: This endpoint returns 501 until settings_validator smart contract is deployed.');
   }
 
   console.log('\n🛑 Emergency shutdown complete.');
-  console.log('   To resume, use admin-update-settings.ts with --solverMode=auto');
+  console.log('   To restore, use admin-update-settings.ts with appropriate values.');
 }
 
 main().catch((err) => {

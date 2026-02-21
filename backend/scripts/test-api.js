@@ -117,13 +117,19 @@ async function testPools() {
 
   let firstPoolId = null;
 
-  await runTest('GET /pools returns list', async () => {
+  await runTest('GET /pools returns { data, pagination }', async () => {
     const r = await apiFetch('/pools');
     assert(r.ok, `HTTP ${r.status}: ${JSON.stringify(r.json).slice(0, 200)}`);
-    const pools = r.json.data || r.json.items || r.json;
-    assert(Array.isArray(pools), 'response is not array/list');
-    if (pools.length > 0) firstPoolId = pools[0].poolId || pools[0].id;
-    return `${r.ms}ms | ${pools.length} pools`;
+    assert(Array.isArray(r.json.data), 'response.data should be array');
+    assert(r.json.pagination && typeof r.json.pagination.total === 'number', 'response.pagination.total missing');
+    const pools = r.json.data;
+    if (pools.length > 0) {
+      firstPoolId = pools[0].poolId;
+      // Validate serialized shape (no bigints)
+      assert(typeof pools[0].reserveA === 'string', 'reserveA should be string (not bigint)');
+      assert(typeof pools[0].assetA === 'object', 'assetA should be object');
+    }
+    return `${r.ms}ms | ${pools.length} pools | total=${r.json.pagination.total}`;
   });
 
   await runTest('GET /pools/:poolId returns pool detail with object assets', async () => {
@@ -366,28 +372,53 @@ async function testAdmin() {
   await runTest('GET /admin/dashboard/metrics returns metrics', async () => {
     const r = await apiFetch('/admin/dashboard/metrics');
     assert(r.ok, `HTTP ${r.status}`);
-    assert('total_pools' in r.json, 'missing total_pools');
-    return `${r.ms}ms | pools=${r.json.total_pools}`;
+    assert('active_pools' in r.json, 'missing active_pools');
+    assert('total_tvl_usd' in r.json, 'missing total_tvl_usd');
+    assert(r.json.charts?.fee_growth_30d, 'missing charts.fee_growth_30d');
+    return `${r.ms}ms | pools=${r.json.active_pools} tvl=$${r.json.total_tvl_usd}`;
   });
 
-  await runTest('GET /admin/revenue/pending returns fee breakdown', async () => {
+  await runTest('GET /admin/revenue/pending returns fee entries array', async () => {
     const r = await apiFetch('/admin/revenue/pending');
     assert(r.ok, `HTTP ${r.status}`);
-    assert('total_pending_ada' in r.json, 'missing total_pending_ada');
-    return `${r.ms}ms | pending=${r.json.total_pending_ada} ADA`;
+    assert(Array.isArray(r.json), 'response should be array of PendingFeeEntry');
+    if (r.json.length > 0) {
+      assert('pool_id' in r.json[0], 'missing pool_id in entry');
+      assert('pending_fees' in r.json[0], 'missing pending_fees in entry');
+    }
+    return `${r.ms}ms | ${r.json.length} pool fee entries`;
   });
 
   await runTest('GET /admin/settings/current returns settings', async () => {
     const r = await apiFetch('/admin/settings/current');
     assert(r.ok, `HTTP ${r.status}`);
-    assert(r.json.global || r.json.factory, 'missing settings data');
-    return `${r.ms}ms`;
+    assert(r.json.global_settings, 'missing global_settings');
+    assert(r.json.factory_settings, 'missing factory_settings');
+    return `${r.ms}ms | fee_bps=${r.json.global_settings.max_protocol_fee_bps}`;
   });
 
   await runTest('POST /admin/revenue/build-collect returns 501 (not implemented)', async () => {
     const r = await apiFetch('/admin/revenue/build-collect', {
       method: 'POST',
-      body: { wallet_address: WALLET_ADDR },
+      body: { admin_address: WALLET_ADDR, pool_ids: ['test-pool'] },
+    });
+    assert(r.status === 501, `expected 501, got ${r.status}`);
+    return `${r.ms}ms | correctly returns 501`;
+  });
+
+  await runTest('POST /admin/settings/build-update-global returns 501', async () => {
+    const r = await apiFetch('/admin/settings/build-update-global', {
+      method: 'POST',
+      body: { admin_address: WALLET_ADDR, new_settings: { max_protocol_fee_bps: 30, min_pool_liquidity: 1000000, next_version: 2 } },
+    });
+    assert(r.status === 501, `expected 501, got ${r.status}`);
+    return `${r.ms}ms | correctly returns 501`;
+  });
+
+  await runTest('POST /admin/settings/build-update-factory returns 501', async () => {
+    const r = await apiFetch('/admin/settings/build-update-factory', {
+      method: 'POST',
+      body: { current_admin_address: WALLET_ADDR, new_admin_vkh: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef12' },
     });
     assert(r.status === 501, `expected 501, got ${r.status}`);
     return `${r.ms}ms | correctly returns 501`;
@@ -396,7 +427,7 @@ async function testAdmin() {
   await runTest('POST /admin/pools/build-burn returns 501 (not implemented)', async () => {
     const r = await apiFetch('/admin/pools/build-burn', {
       method: 'POST',
-      body: { pool_id: 'test', wallet_address: WALLET_ADDR },
+      body: { admin_address: WALLET_ADDR, pool_id: 'test' },
     });
     assert(r.status === 501, `expected 501, got ${r.status}`);
     return `${r.ms}ms | correctly returns 501`;

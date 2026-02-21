@@ -10,7 +10,7 @@ async function main() {
     inputAsset: args.inputAsset || 'lovelace',
     outputAsset: args.outputAsset || 'test0001.74425443',
     inputAmount: args.inputAmount || '10000000',
-    slippage: args.slippage || '0.5',
+    slippage: args.slippage || '50', // 50 basis points = 0.5%
   };
 
   console.log('Fetching quote with params:', params);

@@ -251,11 +251,18 @@ export function createPortfolioRouter(
           ? [statusFilter]
           : completedStatuses;
 
+        // RECLAIMED is valid for intents but not for orders — filter separately
+        const validOrderStatuses = ['FILLED', 'CANCELLED', 'EXPIRED'];
+        const intentFilterStatuses = filterStatuses;
+        const orderFilterStatuses = filterStatuses.filter((s) => validOrderStatuses.includes(s));
+
         const results = await Promise.all(
-          filterStatuses.map(async (status) => {
+          intentFilterStatuses.map(async (status) => {
             const [intents, orders] = await Promise.all([
               intentRepo.findMany({ address: walletAddress, status: status as any, limit }),
-              orderRepo.findMany({ creator: walletAddress, status: status as any, limit }),
+              orderFilterStatuses.includes(status)
+                ? orderRepo.findMany({ creator: walletAddress, status: status as any, limit })
+                : Promise.resolve({ items: [] as any[], cursor: null, hasMore: false, total: 0 }),
             ]);
             return { intents: intents.items, orders: orders.items };
           }),

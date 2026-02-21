@@ -34,7 +34,31 @@ export function createPoolRouter(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const result = await getPoolInfo.list(req.query as Record<string, string>);
-        res.json(result);
+        // Serialize Pool domain entities to DTOs — prevents bigint crash
+        // and matches frontend PoolListResponse: { data, pagination }
+        res.json({
+          data: result.items.map((pool) => ({
+            poolId: pool.id,
+            assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
+            assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
+            reserveA: pool.reserveA.toString(),
+            reserveB: pool.reserveB.toString(),
+            totalLpTokens: pool.totalLpTokens.toString(),
+            feeNumerator: pool.feeNumerator,
+            feeDenominator: FEE_DENOMINATOR,
+            state: pool.state,
+            tvlAda: pool.tvlAda.toString(),
+            volume24h: pool.volume24h.toString(),
+            fees24h: pool.fees24h.toString(),
+            apy: pool.calculateApy(),
+            createdAt: pool.createdAt.toISOString(),
+          })),
+          pagination: {
+            cursor: result.cursor,
+            hasMore: result.hasMore,
+            total: result.total,
+          },
+        });
       } catch (err) {
         next(err);
       }

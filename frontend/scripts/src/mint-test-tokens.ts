@@ -88,9 +88,22 @@ function textToHex(text: string): string {
   return Buffer.from(text, 'utf-8').toString('hex');
 }
 
+/**
+ * CIP-25 metadata requires strings to be max 64 chars.
+ * Split long strings into arrays of 64-char chunks.
+ */
+function metadataString(s: string): string | string[] {
+  if (s.length <= 64) return s;
+  const chunks: string[] = [];
+  for (let i = 0; i < s.length; i += 64) {
+    chunks.push(s.slice(i, i + 64));
+  }
+  return chunks;
+}
+
 async function getWallet(): Promise<{ lucid: LucidEvolution; address: string; paymentKeyHash: string }> {
-  const seed = requireEnv('WALLET_SEED');
-  const network = (process.env.NETWORK || 'Preprod') as 'Preprod' | 'Preview' | 'Mainnet';
+  const seed = requireEnv('T_WALLET_SEED');
+  const network = (process.env.CARDANO_NETWORK || 'Preprod') as 'Preprod' | 'Preview' | 'Mainnet';
   const lucid = await Lucid(
     new Blockfrost(requireEnv('BLOCKFROST_URL'), requireEnv('BLOCKFROST_PROJECT_ID')),
     network,
@@ -161,11 +174,11 @@ async function main() {
 
     if (!isBurn) {
       cip25Metadata[token.ticker] = {
-        name: token.name,
-        description: token.description,
+        name: metadataString(token.name),
+        description: metadataString(token.description),
         ticker: token.ticker,
         decimals: token.decimals,
-        image: token.image,
+        image: metadataString(token.image),
         mediaType: 'image/png',
       };
     }
@@ -182,9 +195,9 @@ async function main() {
 
   // Attach CIP-25 metadata (label 721) if minting
   if (!isBurn && Object.keys(cip25Metadata).length > 0) {
-    tx = tx.attachMetadata(721, JSON.stringify({
+    tx = tx.attachMetadata(721, {
       [policyId]: cip25Metadata,
-    }));
+    });
   }
 
   const completed = await tx.complete({ changeAddress: address });

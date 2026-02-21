@@ -1,61 +1,77 @@
 /**
- * CLI Admin: Force-trigger the solver engine to process pending batches
- * Usage: npx tsx src/admin-trigger-solver.ts [--dryRun]
+ * CLI Admin: Check solver status and pending batches
+ * Usage: npx tsx src/admin-trigger-solver.ts
  *
- * Useful for testing the solver without waiting for the cron interval.
- * Use --dryRun to simulate without submitting transactions.
+ * Shows active intents and orders that the solver would process.
+ * The solver runs on a cron schedule in the backend; this script
+ * just inspects the current queue state.
  *
  * Environment:
- *   WALLET_SEED, BLOCKFROST_URL, BLOCKFROST_PROJECT_ID
+ *   API_BASE (optional, defaults to production)
  */
-import { apiFetch, log, requireEnv, parseArgs } from './shared.js';
+import { apiFetch, log, parseArgs } from './shared.js';
 
 async function main() {
-  const args = parseArgs();
-  const dryRun = args.dryRun === 'true';
+  console.log('🧠 SolverNet — Solver Queue Inspector\n');
 
-  console.log(`🧠 Triggering Solver Engine${dryRun ? ' (DRY RUN)' : ''}...\n`);
-
-  // Check pending intents first
+  // Check pending intents
+  console.log('── Active Intents (solver input) ──');
   try {
-    const intents = await apiFetch<any>('/intents', { params: { status: 'PENDING' } });
-    const items = intents.intents || intents;
-    console.log(`  Pending intents: ${Array.isArray(items) ? items.length : 0}`);
+    const intents = await apiFetch<any>('/intents', { params: { status: 'ACTIVE', limit: '10' } });
+    const items = intents.data ?? [];
+    const total = intents.pagination?.total ?? items.length;
+    console.log(`  ${items.length} displayed / ${total} total active intents`);
 
-    if (Array.isArray(items) && items.length === 0) {
-      console.log('\n  No pending intents to process. Solver has nothing to do.');
-      return;
+    for (const i of items.slice(0, 5)) {
+      console.log(`    ${i.id?.slice(0, 16)}... | ${i.inputAmount} ${i.inputAsset?.slice(-8)} → ${i.minOutput} ${i.outputAsset?.slice(-8)} | deadline: ${i.deadline}`);
+    }
+    if (items.length === 0) {
+      console.log('  No active intents — solver has nothing to process.');
     }
   } catch (err: any) {
     console.warn(`  Could not check intents: ${err.message}`);
   }
 
-  // Trigger solver
+  // Check active orders
+  console.log('\n── Active Orders ──');
   try {
-    const result = await apiFetch<any>('/admin/solver/trigger', {
-      method: 'POST',
-      body: JSON.stringify({
-        dryRun,
-        adminAddress: process.env.WALLET_SEED ? 'from-env' : undefined,
-      }),
-    });
-    log('Solver result', result);
-  } catch (err: any) {
-    if (err.message.includes('404') || err.message.includes('Not Found')) {
-      console.log('\n  Note: /admin/solver/trigger endpoint not yet implemented.');
-      console.log('  The solver runs on a cron schedule. To test it, ensure:');
-      console.log('  1. The backend is running');
-      console.log('  2. SOLVER_ENABLED=true in backend .env');
-      console.log('  3. There are pending intents in the database');
-    } else {
-      throw err;
+    const orders = await apiFetch<any>('/orders', { params: { status: 'ACTIVE', limit: '10' } });
+    const items = orders.items ?? [];
+    console.log(`  ${items.length} displayed / ${orders.total ?? items.length} total active orders`);
+
+    for (const o of items.slice(0, 5)) {
+      console.log(`    ${o.id?.slice(0, 16)}... | ${o.type} | ${o.inputAmount} ${o.inputAsset?.slice(-8)}`);
     }
+    if (items.length === 0) {
+      console.log('  No active orders.');
+    }
+  } catch (err: any) {
+    console.warn(`  Could not check orders: ${err.message}`);
   }
 
+  // Check pool liquidity available for matching
+  console.log('\n── Active Pools (solver liquidity) ──');
+  try {
+    const pools = await apiFetch<any>('/pools?limit=10');
+    const items = pools.data ?? pools.items ?? [];
+    console.log(`  ${items.length} active pools`);
+
+    for (const p of items.slice(0, 5)) {
+      console.log(`    ${p.poolId?.slice(0, 16)}... | reserveA: ${p.reserveA} | reserveB: ${p.reserveB} | TVL: ${p.tvlAda}`);
+    }
+    if (items.length === 0) {
+      console.log('  No pools — solver cannot match intents without liquidity.');
+    }
+  } catch (err: any) {
+    console.warn(`  Could not check pools: ${err.message}`);
+  }
+
+  console.log('\n  ℹ️  The solver runs automatically on a cron schedule in the backend.');
+  console.log('  Ensure SOLVER_ENABLED=true in backend .env to activate it.');
   console.log('\n✅ Done.');
 }
 
 main().catch((err) => {
-  console.error('\n❌ Trigger solver failed:', err.message || err);
+  console.error('\n❌ Error:', err.message || err);
   process.exit(1);
 });

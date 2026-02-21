@@ -1,8 +1,8 @@
 /**
- * CLI Admin: Collect accumulated fees from a pool
+ * CLI Admin: Collect accumulated fees from pool(s)
  * Usage: npx tsx src/admin-collect-fees.ts --poolId=<id>
  *
- * This script calls the backend admin endpoint to build a fee-collection TX,
+ * Calls POST /v1/admin/revenue/build-collect to build a fee-collection TX,
  * signs it with the admin wallet, and submits.
  *
  * Environment:
@@ -33,22 +33,36 @@ async function main() {
   console.log(`Admin address: ${address}`);
   console.log(`Collecting fees from pool: ${poolId}`);
 
-  // First get pool info
+  // First get pool info (assetA/B are objects: { policyId, assetName })
   const pool = await apiFetch<any>(`/pools/${poolId}`);
+  const pairA = pool.assetA?.assetName || (pool.assetA?.policyId === '' ? 'ADA' : '?');
+  const pairB = pool.assetB?.assetName || '?';
   log('Pool info', {
-    pair: `${pool.assetA} / ${pool.assetB}`,
+    pair: `${pairA} / ${pairB}`,
     reserveA: pool.reserveA,
     reserveB: pool.reserveB,
     tvlAda: pool.tvlAda,
-    accumulatedFees: pool.accumulatedFees ?? 'N/A',
   });
 
-  // Build collect-fees TX
-  const result = await apiFetch<any>(`/pools/${poolId}/collect-fees`, {
+  // Check pending fees for this pool
+  try {
+    const fees = await apiFetch<any[]>('/admin/revenue/pending');
+    const poolFee = fees.find((e) => e.pool_id === poolId);
+    if (poolFee) {
+      log('Pending fees for this pool', poolFee.pending_fees);
+    } else {
+      console.log('  No pending fee data for this pool');
+    }
+  } catch {
+    console.warn('  Could not fetch pending fees (non-critical)');
+  }
+
+  // Build collect-fees TX via correct admin endpoint
+  const result = await apiFetch<any>('/admin/revenue/build-collect', {
     method: 'POST',
     body: JSON.stringify({
-      adminAddress: address,
-      changeAddress: address,
+      admin_address: address,
+      pool_ids: [poolId],
     }),
   });
 
@@ -61,7 +75,7 @@ async function main() {
 
     await apiFetch('/tx/confirm', {
       method: 'POST',
-      body: JSON.stringify({ txHash, poolId, action: 'collect_fees' }),
+      body: JSON.stringify({ txHash, action: 'collect_fees' }),
     }).catch(() => console.warn('Confirm call failed (non-critical)'));
 
     log('Fees collected!', {
@@ -70,8 +84,8 @@ async function main() {
       explorerUrl: `https://preprod.cardanoscan.io/transaction/${txHash}`,
     });
   } else {
-    console.log('No fees to collect or endpoint not available yet.');
-    console.log('Note: The collect-fees backend endpoint may need to be implemented.');
+    console.log('\nNote: The build-collect endpoint returns 501 — fee collection TX building');
+    console.log('requires dedicated smart contract interaction (not yet implemented).');
   }
 }
 

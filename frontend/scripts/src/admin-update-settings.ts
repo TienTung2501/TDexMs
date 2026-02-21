@@ -1,12 +1,14 @@
 /**
- * CLI Admin: Update protocol settings (fee rates, deadlines, etc.)
- * Usage: npx tsx src/admin-update-settings.ts --key=maxDeadlineMs --value=604800000
+ * CLI Admin: Update protocol settings (fee rates, pool liquidity min, version)
+ * Usage: npx tsx src/admin-update-settings.ts --feeNumerator=30 --minLiquidity=2000000 --version=2
  *
- * Supported settings:
- *   --feeNumerator=<n>    Update global fee numerator (e.g. 30 = 0.3%)
- *   --maxDeadlineMs=<n>   Max intent deadline in milliseconds
- *   --minLiquidity=<n>    Minimum liquidity for new pools
- *   --solverMode=<auto|manual>  Solver execution mode
+ * Supported args:
+ *   --feeNumerator=<n>    Max protocol fee in basis points (e.g. 30 = 0.3%)
+ *   --minLiquidity=<n>    Minimum initial pool liquidity in lovelace
+ *   --version=<n>         Next protocol version number
+ *
+ * Calls POST /v1/admin/settings/build-update-global to build the TX,
+ * then signs and submits.
  *
  * Environment:
  *   WALLET_SEED, BLOCKFROST_URL, BLOCKFROST_PROJECT_ID
@@ -27,33 +29,45 @@ async function main() {
 
   console.log(`Admin address: ${address}`);
 
-  // Build settings payload from args
-  const settings: Record<string, string | number> = {};
-  const settingsKeys = ['feeNumerator', 'maxDeadlineMs', 'minLiquidity', 'solverMode'];
+  // Fetch current settings first
+  const current = await apiFetch<any>('/admin/settings/current');
+  log('Current settings', current.global_settings);
 
-  for (const key of settingsKeys) {
-    if (args[key]) {
-      settings[key] = isNaN(Number(args[key])) ? args[key] : Number(args[key]);
-    }
-  }
+  // Build new_settings payload from args (merge with current)
+  const newSettings = {
+    max_protocol_fee_bps: args.feeNumerator
+      ? Number(args.feeNumerator)
+      : current.global_settings.max_protocol_fee_bps,
+    min_pool_liquidity: args.minLiquidity
+      ? Number(args.minLiquidity)
+      : current.global_settings.min_pool_liquidity,
+    next_version: args.version
+      ? Number(args.version)
+      : current.global_settings.current_version + 1,
+  };
 
-  if (Object.keys(settings).length === 0) {
-    console.error('No settings to update. Provide at least one of:');
+  const hasChanges = (
+    newSettings.max_protocol_fee_bps !== current.global_settings.max_protocol_fee_bps ||
+    newSettings.min_pool_liquidity !== current.global_settings.min_pool_liquidity ||
+    newSettings.next_version !== current.global_settings.current_version
+  );
+
+  if (!hasChanges && !args.feeNumerator && !args.minLiquidity && !args.version) {
+    console.error('\nNo settings to update. Provide at least one of:');
     console.error('  --feeNumerator=30');
-    console.error('  --maxDeadlineMs=604800000');
-    console.error('  --minLiquidity=1000');
-    console.error('  --solverMode=auto');
+    console.error('  --minLiquidity=2000000');
+    console.error('  --version=2');
     process.exit(1);
   }
 
-  log('Settings to update', settings);
+  log('New settings', newSettings);
 
-  // POST to admin/settings endpoint
-  const result = await apiFetch<any>('/admin/settings', {
+  // POST to correct admin endpoint
+  const result = await apiFetch<any>('/admin/settings/build-update-global', {
     method: 'POST',
     body: JSON.stringify({
-      adminAddress: address,
-      settings,
+      admin_address: address,
+      new_settings: newSettings,
     }),
   });
 
@@ -74,12 +88,13 @@ async function main() {
       explorerUrl: `https://preprod.cardanoscan.io/transaction/${txHash}`,
     });
   } else {
-    log('Settings updated (off-chain)', result);
+    console.log('\nNote: The settings update TX building is not yet implemented (501).');
+    console.log('Requires settings_validator smart contract interaction.');
+    log('Response', result);
   }
 }
 
 main().catch((err) => {
   console.error('\n❌ Update settings failed:', err.message || err);
-  console.error('\nNote: The /admin/settings endpoint may need to be implemented in the backend.');
   process.exit(1);
 });
