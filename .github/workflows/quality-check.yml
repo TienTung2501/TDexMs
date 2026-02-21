@@ -37,5 +37,6 @@ jobs:
       # Bước này cực kỳ quan trọng, nếu không có nó build backend sẽ fail
       run: cd backend && npx prisma generate
 
-    - name: Check Build (Backend)
-      run: pnpm --filter backend build
+    # Đổi bước này để chạy build toàn bộ monorepo (cả frontend và backend) thông qua turbo
+    - name: Check Build (Full Monorepo)
+      run: pnpm run build

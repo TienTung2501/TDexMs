@@ -1,6 +1,7 @@
 # ═══════════════════════════════════════════════════════
 # SolverNet Backend — Production Dockerfile
-# Multi-stage build using "pnpm deploy" for clean output
+# esbuild bundles all JS deps (incl. libsodium) into a
+# single file; only @prisma/client stays external.
 # ═══════════════════════════════════════════════════════
 
 # ── Stage 1: Install & Build ──
@@ -18,32 +19,30 @@ RUN pnpm install --frozen-lockfile
 COPY backend/ ./backend/
 COPY tsconfig.base.json ./
 
-# Generate Prisma client & build TypeScript
+# Generate Prisma client (needed so esbuild can resolve @prisma/client types),
+# then bundle the entire backend into dist/index.js with esbuild.
+# libsodium-wrappers-sumo and all other JS deps are inlined at this step.
 RUN cd backend && npx prisma generate && pnpm build
-
-# Use "pnpm deploy" to create a self-contained production directory
-# This resolves all symlinks and bundles only production dependencies
-RUN pnpm deploy --filter backend --prod /app/pruned
-
-# Copy prisma schema, dist, and re-generate Prisma client in pruned dir
-RUN cp -r /app/backend/prisma /app/pruned/prisma \
-    && cp -r /app/backend/dist /app/pruned/dist \
-    && cd /app/pruned && npx prisma generate
 
 # ── Stage 2: Production image ──
 FROM node:20-alpine AS runner
 
-# Security: non-root user
 RUN addgroup --system --gid 1001 solvernet \
     && adduser --system --uid 1001 solvernet
 
 WORKDIR /app
 
-# Copy the self-contained pruned directory (no symlinks)
-COPY --from=builder /app/pruned/package.json ./
-COPY --from=builder /app/pruned/node_modules ./node_modules
-COPY --from=builder /app/pruned/dist ./dist
-COPY --from=builder /app/pruned/prisma ./prisma
+# Copy the single-file esbuild bundle (all JS deps inlined — no pnpm virtual store)
+COPY --from=builder /app/backend/dist/index.js ./dist/index.js
+
+# Copy Prisma schema (needed by migrate deploy and generate)
+COPY --from=builder /app/backend/prisma ./prisma
+
+# Install ONLY prisma + @prisma/client via npm (flat node_modules, no .pnpm quirks).
+# This installs the native Query Engine binary for the correct platform.
+RUN npm install --save-exact prisma@6.2.0 @prisma/client@6.2.0 \
+    && npx prisma generate \
+    && npm cache clean --force
 
 USER solvernet
 
@@ -52,5 +51,4 @@ EXPOSE 3001
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Run Prisma migrations then start server
-CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && node dist/index.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/index.js"]
