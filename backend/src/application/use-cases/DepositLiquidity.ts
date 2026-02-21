@@ -56,6 +56,7 @@ export class DepositLiquidity {
       amountA: BigInt(input.amountA),
       amountB: BigInt(input.amountB),
       minLpTokens: BigInt(input.minLpTokens),
+      lpToMint: estimatedLp,
     });
 
     return {

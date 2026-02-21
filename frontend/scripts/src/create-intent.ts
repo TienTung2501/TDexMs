@@ -25,7 +25,7 @@ async function main() {
   const inputAsset = args.inputAsset || 'lovelace';
   const outputAsset = args.outputAsset || 'test0001.74425443';
   const inputAmount = args.inputAmount || '5000000';
-  const deadline = Math.floor(Date.now() / 1000) + 30 * 60; // 30 min from now (Unix seconds)
+  const deadline = Date.now() + 30 * 60 * 1000; // 30 min from now (milliseconds)
 
   console.log(`\nCreating intent: ${inputAmount} ${inputAsset} → ${outputAsset}`);
 

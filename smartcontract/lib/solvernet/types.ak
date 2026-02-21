@@ -106,6 +106,8 @@ pub type PoolRedeemer {
   Withdraw { lp_tokens_burned: Int }
   /// Collect accumulated protocol fees (admin only)
   CollectFees
+  /// Close the pool — admin burns the pool NFT and reclaims all reserves
+  ClosePool
 }
 
 /// Direction of a swap.

@@ -87,10 +87,26 @@ async function main(): Promise<void> {
 
   // Chain abstractions
   const chainProvider = new ChainProvider(blockfrost);
+
+  // Derive admin VKH from ADMIN_ADDRESS (needed for parameterized validators)
+  let adminVkh = '';
+  if (env.ADMIN_ADDRESS) {
+    try {
+      // Dynamic import to avoid top-level dependency
+      const { getAddressDetails } = await import('@lucid-evolution/lucid');
+      const details = getAddressDetails(env.ADMIN_ADDRESS);
+      adminVkh = details.paymentCredential?.hash || '';
+      logger.info({ adminVkh: adminVkh.slice(0, 16) + '...' }, 'Derived admin VKH');
+    } catch (e) {
+      logger.warn('Could not derive admin VKH from ADMIN_ADDRESS');
+    }
+  }
+
   const txBuilder = new TxBuilder(
     env.CARDANO_NETWORK as 'preprod' | 'preview' | 'mainnet',
     env.BLOCKFROST_URL,
     env.BLOCKFROST_PROJECT_ID,
+    adminVkh,
   );
 
   // Repositories

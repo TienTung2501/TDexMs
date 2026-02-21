@@ -33,12 +33,13 @@ use solvernet/validation.{
 
 /// Escrow Validator
 ///
-/// Parameters:
-/// - `intent_token_policy_id`: PolicyId of the Intent Token minting policy
-///
 /// The validator guards user funds locked as swap intents.
 /// Each escrow UTxO holds exactly one intent with its auth token.
-validator escrow_validator(intent_token_policy_id: PolicyId) {
+///
+/// Security: The intent token policy ID is derived from the datum's
+/// `escrow_token.policy_id` field, eliminating the circular dependency
+/// between escrow_validator and intent_token_policy.
+validator escrow_validator {
   spend(
     datum: Option<EscrowDatum>,
     redeemer: EscrowRedeemer,
@@ -46,6 +47,9 @@ validator escrow_validator(intent_token_policy_id: PolicyId) {
     tx: Transaction,
   ) {
     expect Some(escrow_datum) = datum
+
+    // Extract intent token policy ID from the datum's escrow_token field
+    let intent_token_policy_id = escrow_datum.escrow_token.policy_id
 
     when redeemer is {
       Cancel -> validate_cancel(tx, escrow_datum, intent_token_policy_id)

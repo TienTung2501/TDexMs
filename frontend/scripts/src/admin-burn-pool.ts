@@ -49,17 +49,16 @@ async function main() {
       method: 'POST',
       body: JSON.stringify({
         admin_address: address,
-        admin_vkh: adminVkh,
         pool_id: poolId,
       }),
     });
 
     log('Build Burn TX Result', result);
 
-    if (result.tx_cbor) {
+    if (result.unsignedTx) {
       console.log('\nSigning TX...');
       const signed = await lucid
-        .fromTx(result.tx_cbor)
+        .fromTx(result.unsignedTx)
         .sign.withWallet()
         .complete();
 
@@ -67,6 +66,8 @@ async function main() {
       const txHash = await signed.submit();
       console.log(`\n✅ Pool burned! TX: ${txHash}`);
       console.log(`   View: https://preprod.cardanoscan.io/transaction/${txHash}`);
+    } else {
+      console.log('⚠️ No unsigned TX returned');
     }
   } catch (err: any) {
     if (err.message?.includes('501')) {

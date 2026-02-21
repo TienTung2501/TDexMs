@@ -21,6 +21,8 @@ export interface DepositTxParams {
   amountA: bigint;
   amountB: bigint;
   minLpTokens: bigint;
+  /** Actual LP tokens to mint (computed by use case based on pool state) */
+  lpToMint: bigint;
 }
 
 export interface WithdrawTxParams {
@@ -127,6 +129,13 @@ export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
   estimatedFee: bigint;
+  /** Extra metadata returned by buildCreatePoolTx for pool registration */
+  poolMeta?: {
+    poolNftPolicyId: string;
+    poolNftAssetName: string;
+    lpPolicyId: string;
+    initialLp: bigint;
+  };
 }
 
 export interface ITxBuilder {

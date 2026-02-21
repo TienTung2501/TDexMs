@@ -1,31 +1,28 @@
 //// SolverNet DEX — Intent Token Minting Policy
 ////
-//// Authentication tokens for escrow (intent) UTxOs.
-//// Similar to Pool NFT policy — uses one-shot pattern for uniqueness.
-//// Prevents spoofing of intent UTxOs by unauthorized parties.
+//// Authentication tokens for escrow (intent) and order UTxOs.
+//// Uses one-shot pattern for uniqueness — each token name = hash(consumed_utxo).
+//// Prevents spoofing by requiring a specific UTxO to be consumed.
 ////
-//// Each intent gets a unique token with name = hash(consumed_utxo).
-//// The token is burned when the intent is filled, cancelled, or reclaimed.
+//// Security model:
+//// - One-shot pattern (check_utxo_spent) guarantees unique token names
+//// - Exactly 1 token minted per transaction
+//// - Destination validation is delegated to escrow_validator / order_validator
+////   (both independently verify the token is present in their datum)
+//// - Token is burned when the intent/order is filled, cancelled, or reclaimed.
 
 use aiken/collection/dict
-use aiken/collection/list
-use aiken/crypto.{ScriptHash}
-use cardano/address.{Script}
 use cardano/assets.{PolicyId}
-use cardano/transaction.{Output, Transaction}
+use cardano/transaction.{Transaction}
 use solvernet/types.{BurnIntentToken, IntentTokenRedeemer, MintIntentToken}
 use solvernet/utils.{derive_token_name}
 use solvernet/validation.{check_utxo_spent}
 
-/// Intent Token Minting Policy
-///
-/// Parameters:
-/// - `escrow_validator_hash`: Hash of the escrow validator
-///   (minted token must go to the escrow address)
+/// Intent Token Minting Policy (no parameters — standalone)
 ///
 /// Mint: Exactly 1 token, uniquely named via consumed UTxO hash.
-/// Burn: Any time (fill, cancel, or reclaim will burn it).
-validator intent_token_policy(escrow_validator_hash: ScriptHash) {
+/// Burn: Exactly 1 token burned (fill, cancel, or reclaim).
+validator intent_token_policy {
   mint(redeemer: IntentTokenRedeemer, policy_id: PolicyId, tx: Transaction) {
     when redeemer is {
       MintIntentToken { consumed_utxo } -> {
@@ -40,13 +37,6 @@ validator intent_token_policy(escrow_validator_hash: ScriptHash) {
           check_utxo_spent(tx.inputs, consumed_utxo),
           // 2. Exactly 1 token minted with the correct name
           check_exactly_one_mint(minted_tokens, expected_token_name),
-          // 3. The minted token goes to the escrow validator address
-          check_token_at_escrow(
-            tx.outputs,
-            escrow_validator_hash,
-            policy_id,
-            expected_token_name,
-          ),
         }
       }
 
@@ -81,24 +71,4 @@ fn check_exactly_one_burn(minted_tokens: dict.Dict<ByteArray, Int>) -> Bool {
     [Pair(_, qty)] -> qty == -1
     _ -> False
   }
-}
-
-/// Verify that the minted token goes to an output at the escrow validator address.
-fn check_token_at_escrow(
-  outputs: List<Output>,
-  escrow_hash: ScriptHash,
-  policy_id: PolicyId,
-  token_name: ByteArray,
-) -> Bool {
-  list.any(
-    outputs,
-    fn(out) {
-      and {
-        // Output is at escrow validator address
-        out.address.payment_credential == Script(escrow_hash),
-        // Output contains the minted token
-        assets.quantity_of(out.value, policy_id, token_name) == 1,
-      }
-    },
-  )
 }

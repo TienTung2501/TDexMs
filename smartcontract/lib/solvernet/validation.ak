@@ -85,6 +85,33 @@ pub fn check_mint_exact(
   minted == expected
 }
 
+/// Verify that exactly `expected` tokens with the given asset name are
+/// minted/burned across ANY policy. Used when the policy ID is not known
+/// at compile time (e.g., LP token verification without parameterization).
+///
+/// This checks all policies for the asset name and sums quantities.
+/// Security: The corresponding minting policy still enforces its own checks,
+/// so this cross-policy sum only provides a "sanity check" for the pool validator.
+pub fn check_mint_exact_any_policy(
+  mint: Value,
+  asset_name: ByteArray,
+  expected: Int,
+) -> Bool {
+  let total =
+    assets.reduce(
+      mint,
+      0,
+      fn(_policy_id, name, qty, acc) {
+        if name == asset_name {
+          acc + qty
+        } else {
+          acc
+        }
+      },
+    )
+  total == expected
+}
+
 /// Verify exactly 1 token is minted (for NFT minting).
 pub fn check_mint_one(
   mint: Value,

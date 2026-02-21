@@ -1,14 +1,15 @@
 //// SolverNet DEX — LP Token Minting Policy
 ////
 //// Manages liquidity provider tokens — minted on deposit, burned on withdrawal.
-//// Uses the "forwarding mint" pattern: ALL validation logic is delegated to
-//// the Pool Validator. This keeps the minting policy minimal (~2KB).
+//// Uses the "forwarding mint" pattern: validation logic is delegated to
+//// the Pool Validator (for deposits/withdrawals) or Factory Validator
+//// (for initial pool creation).
 ////
 //// Each pool has its own LP token asset name (= pool NFT asset name),
 //// establishing a 1:1 correspondence between pool identity and LP token identity.
 ////
-//// Security: LP tokens can only be minted/burned when the pool validator is
-//// invoked in the same transaction, preventing unauthorized inflation/deflation.
+//// Security: LP tokens can only be minted/burned when the pool validator
+//// OR factory validator is invoked in the same transaction.
 
 use aiken/collection/dict
 use aiken/collection/list
@@ -23,12 +24,17 @@ use solvernet/utils.{has_nft}
 ///
 /// Parameters:
 /// - `pool_validator_hash`: Hash of the pool validator
-///   (only this validator can authorize LP mint/burn)
+///   (authorizes LP mint/burn during deposit/withdraw)
+/// - `factory_validator_hash`: Hash of the factory validator
+///   (authorizes initial LP mint during pool creation)
 ///
-/// The LP token policy is intentionally simple — it only checks that
-/// the pool validator is involved in the transaction. The pool validator
-/// handles all the complex validation (proportional deposit, correct burn, etc.).
-validator lp_token_policy(pool_validator_hash: ScriptHash) {
+/// During pool creation, no pool UTxO exists yet, so the factory validator
+/// serves as the authorization source. For subsequent deposits/withdrawals,
+/// the pool validator provides authorization.
+validator lp_token_policy(
+  pool_validator_hash: ScriptHash,
+  factory_validator_hash: ScriptHash,
+) {
   mint(redeemer: LPRedeemer, policy_id: PolicyId, tx: Transaction) {
     let MintOrBurnLP { pool_nft, amount } = redeemer
 
@@ -38,15 +44,17 @@ validator lp_token_policy(pool_validator_hash: ScriptHash) {
     and {
       // 1. Amount must be non-zero
       amount != 0,
-      // 2. Pool validator is invoked in this transaction
-      //    (a pool UTxO with the specified pool NFT must be in the inputs)
-      check_pool_validator_invoked(tx.inputs, pool_validator_hash, pool_nft),
+      // 2. EITHER pool validator OR factory validator is invoked
+      //    - Pool validator: for deposit/withdraw (pool UTxO exists)
+      //    - Factory validator: for initial pool creation (no pool UTxO yet)
+      or {
+        check_pool_validator_invoked(tx.inputs, pool_validator_hash, pool_nft),
+        check_factory_validator_invoked(tx.inputs, factory_validator_hash),
+      },
       // 3. Exactly one token name is minted/burned under this policy
       //    and the amount matches the redeemer
       check_lp_mint_amount(minted_tokens, pool_nft.asset_name, amount),
     }
-    // 4. LP token asset name must match pool NFT asset name
-    //    (This is already ensured by check #3 since we use pool_nft.asset_name)
   }
 
   else(_) {
@@ -71,6 +79,17 @@ fn check_pool_validator_invoked(
         has_nft(inp.output.value, pool_nft),
       }
     },
+  )
+}
+
+/// Verify factory validator is invoked (for pool creation).
+fn check_factory_validator_invoked(
+  inputs: List<Input>,
+  factory_hash: ScriptHash,
+) -> Bool {
+  list.any(
+    inputs,
+    fn(inp) { inp.output.address.payment_credential == Script(factory_hash) },
   )
 }
 

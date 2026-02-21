@@ -62,7 +62,7 @@ export class CreateOrder {
       deadline: input.deadline,
     });
 
-    // Persist the order
+    // Persist the order with on-chain reference
     const orderId = `ord_${uuid().replace(/-/g, '').slice(0, 12)}`;
     const order = new Order({
       id: orderId,
@@ -82,6 +82,8 @@ export class CreateOrder {
       executedIntervals: 0,
       deadline: input.deadline,
       status: 'CREATED',
+      escrowTxHash: txResult.txHash,
+      escrowOutputIndex: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
