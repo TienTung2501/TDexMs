@@ -4,8 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-packageExtensionsChecksum: 225085f1b733807528049c1c8342ef66
-
 patchedDependencies:
   libsodium-wrappers-sumo@0.7.16:
     hash: ygoiloezctogkmkbvbdxnlcqsm
