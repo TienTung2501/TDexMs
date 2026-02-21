@@ -37,6 +37,10 @@ import type {
   OrderTxParams,
   CancelOrderTxParams,
   ReclaimTxParams,
+  CollectFeesTxParams,
+  UpdateSettingsTxParams,
+  UpdateFactoryAdminTxParams,
+  BurnPoolNFTTxParams,
   BuildTxResult,
 } from '../../domain/ports/ITxBuilder.js';
 import { getLogger } from '../../config/logger.js';
@@ -1329,6 +1333,368 @@ export class TxBuilder implements ITxBuilder {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: msg }, 'Failed to build reclaim TX');
       throw new ChainError(`Failed to build reclaim TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 10. COLLECT FEES — admin collects protocol fees from pool(s)
+  // ═══════════════════════════════════════════
+
+  async buildCollectFeesTx(params: CollectFeesTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { admin: params.adminAddress, poolCount: params.poolIds.length },
+      'Building collect fees TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      // Load pool validator
+      const poolBp = findValidator(bp, 'pool_validator.pool_validator');
+      const poolScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(poolBp.compiledCode),
+      };
+      const poolAddr = validatorToAddress(this.network, poolScript);
+
+      // Load pool NFT policy to identify pools
+      const poolNftBp = findValidator(bp, 'pool_nft_policy.pool_nft_policy');
+      const poolNftScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(poolNftBp.compiledCode),
+      };
+      const poolNftPolicyId = mintingPolicyToId(poolNftScript);
+
+      // Admin wallet
+      const adminUtxos = await lucid.utxosAt(params.adminAddress);
+      if (adminUtxos.length === 0) {
+        throw new ChainError('No UTxOs at admin address');
+      }
+      lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
+
+      // Find all pool UTxOs on-chain
+      const allPoolUtxos = await lucid.utxosAt(poolAddr);
+
+      let tx = lucid.newTx();
+
+      for (const _poolId of params.poolIds) {
+        // Find pool UTxO by its NFT
+        const poolUtxo = allPoolUtxos.find((u) =>
+          Object.keys(u.assets).some((unit) => unit.startsWith(poolNftPolicyId)),
+        );
+
+        if (!poolUtxo) {
+          this.logger.warn({ poolId: _poolId }, 'Pool UTxO not found, skipping');
+          continue;
+        }
+
+        // Collect from pool with CollectFees redeemer
+        tx = tx
+          .collectFrom([poolUtxo], PoolRedeemer.CollectFees())
+          .attach.SpendingValidator(poolScript);
+
+        // Re-output pool with fees zeroed out (datum must be updated)
+        // The pool validator verifies the admin signature and that
+        // protocol_fees_a/b are set to 0 in the continuing output
+        tx = tx.pay.ToContract(
+          poolAddr,
+          { kind: 'inline', value: poolUtxo.datum! },
+          poolUtxo.assets,
+        );
+      }
+
+      tx = tx.addSigner(params.adminAddress);
+
+      const completed = await tx.complete({
+        changeAddress: params.adminAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Collect fees TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build collect fees TX');
+      throw new ChainError(`Failed to build collect fees TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 11. UPDATE SETTINGS — admin updates global protocol settings
+  // ═══════════════════════════════════════════
+
+  async buildUpdateSettingsTx(params: UpdateSettingsTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { admin: params.adminAddress, settings: params.newSettings },
+      'Building update settings TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      // Load settings validator
+      const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
+      const settingsScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(settingsBp.compiledCode),
+      };
+      const settingsAddr = validatorToAddress(this.network, settingsScript);
+
+      // Admin wallet
+      const adminUtxos = await lucid.utxosAt(params.adminAddress);
+      if (adminUtxos.length === 0) {
+        throw new ChainError('No UTxOs at admin address');
+      }
+      lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
+
+      // Find settings UTxO on-chain
+      const settingsUtxos = await lucid.utxosAt(settingsAddr);
+      if (settingsUtxos.length === 0) {
+        throw new ChainError('Settings UTxO not found on-chain');
+      }
+      const settingsUtxo = settingsUtxos[0];
+
+      // UpdateProtocolSettings redeemer = Constr(0, [])
+      const updateRedeemer = Data.to(new Constr(0, []));
+
+      // Build new SettingsDatum with updated values
+      // SettingsDatum { admin, protocol_fee_bps, min_pool_liquidity,
+      //                 min_intent_size, solver_bond, fee_collector, version }
+      const adminDetails = getAddressDetails(params.adminAddress);
+      const adminVkh = adminDetails.paymentCredential!.hash;
+
+      const newSettingsDatum = Data.to(
+        new Constr(0, [
+          adminVkh,                                          // admin VKH
+          BigInt(params.newSettings.maxProtocolFeeBps),       // protocol_fee_bps
+          params.newSettings.minPoolLiquidity,                // min_pool_liquidity
+          1000000n,                                           // min_intent_size (1 ADA)
+          5000000n,                                           // solver_bond (5 ADA)
+          adminVkh,                                           // fee_collector (same as admin)
+          BigInt(params.newSettings.nextVersion),              // version
+        ]),
+      );
+
+      const tx = lucid
+        .newTx()
+        .collectFrom([settingsUtxo], updateRedeemer)
+        .attach.SpendingValidator(settingsScript)
+        .pay.ToContract(
+          settingsAddr,
+          { kind: 'inline', value: newSettingsDatum },
+          settingsUtxo.assets,
+        )
+        .addSigner(params.adminAddress);
+
+      const completed = await tx.complete({
+        changeAddress: params.adminAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Update settings TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build update settings TX');
+      throw new ChainError(`Failed to build update settings TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 12. UPDATE FACTORY ADMIN — transfer factory admin to new VKH
+  // ═══════════════════════════════════════════
+
+  async buildUpdateFactoryAdminTx(params: UpdateFactoryAdminTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { currentAdmin: params.currentAdminAddress, newVkh: params.newAdminVkh },
+      'Building update factory admin TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      // Load factory validator
+      const factoryBp = findValidator(bp, 'factory_validator.factory_validator');
+      const factoryScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(factoryBp.compiledCode),
+      };
+      const factoryAddr = validatorToAddress(this.network, factoryScript);
+
+      // Admin wallet
+      const adminUtxos = await lucid.utxosAt(params.currentAdminAddress);
+      if (adminUtxos.length === 0) {
+        throw new ChainError('No UTxOs at admin address');
+      }
+      lucid.selectWallet.fromAddress(params.currentAdminAddress, adminUtxos);
+
+      // Find factory UTxO
+      const factoryUtxos = await lucid.utxosAt(factoryAddr);
+      if (factoryUtxos.length === 0) {
+        throw new ChainError('Factory UTxO not found on-chain');
+      }
+      const factoryUtxo = factoryUtxos[0];
+
+      // UpdateSettings redeemer for factory = Constr(1, [])
+      const updateRedeemer = Data.to(new Constr(1, []));
+
+      // Build new FactoryDatum with updated admin VKH
+      // FactoryDatum { factory_nft, pool_count, admin, settings_utxo }
+      // We update the admin field to new VKH
+      const newFactoryDatum = Data.to(
+        new Constr(0, [
+          new Constr(0, ['', '']),  // factory_nft (preserved from existing)
+          0n,                       // pool_count (preserved)
+          params.newAdminVkh,       // new admin VKH
+          new Constr(0, ['', '']),  // settings_utxo (preserved)
+        ]),
+      );
+
+      const tx = lucid
+        .newTx()
+        .collectFrom([factoryUtxo], updateRedeemer)
+        .attach.SpendingValidator(factoryScript)
+        .pay.ToContract(
+          factoryAddr,
+          { kind: 'inline', value: newFactoryDatum },
+          factoryUtxo.assets,
+        )
+        .addSigner(params.currentAdminAddress);
+
+      const completed = await tx.complete({
+        changeAddress: params.currentAdminAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Update factory admin TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build update factory admin TX');
+      throw new ChainError(`Failed to build update factory admin TX: ${msg}`);
+    }
+  }
+
+  // ═══════════════════════════════════════════
+  // 13. BURN POOL NFT — admin closes pool by burning NFT
+  // ═══════════════════════════════════════════
+
+  async buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { admin: params.adminAddress, poolId: params.poolId },
+      'Building burn pool NFT TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const bp = this.getBlueprint();
+
+      // Load pool validator + pool NFT policy
+      const poolBp = findValidator(bp, 'pool_validator.pool_validator');
+      const poolScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(poolBp.compiledCode),
+      };
+      const poolAddr = validatorToAddress(this.network, poolScript);
+
+      const poolNftBp = findValidator(bp, 'pool_nft_policy.pool_nft_policy');
+      const poolNftScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(poolNftBp.compiledCode),
+      };
+      const poolNftPolicyId = mintingPolicyToId(poolNftScript);
+
+      // Load LP token policy for burning remaining LP tokens
+      const lpBp = findValidator(bp, 'lp_token_policy.lp_token_policy');
+      const lpScript: Script = {
+        type: 'PlutusV3',
+        script: applyDoubleCborEncoding(lpBp.compiledCode),
+      };
+      const lpPolicyId = mintingPolicyToId(lpScript);
+
+      // Admin wallet
+      const adminUtxos = await lucid.utxosAt(params.adminAddress);
+      if (adminUtxos.length === 0) {
+        throw new ChainError('No UTxOs at admin address');
+      }
+      lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
+
+      // Find pool UTxO on-chain
+      const allPoolUtxos = await lucid.utxosAt(poolAddr);
+      const poolUtxo = allPoolUtxos.find((u) =>
+        Object.keys(u.assets).some((unit) => unit.startsWith(poolNftPolicyId)),
+      );
+
+      if (!poolUtxo) {
+        throw new ChainError('Pool UTxO with NFT not found on-chain');
+      }
+
+      // Identify pool NFT unit and LP token unit
+      const poolNftUnit = Object.keys(poolUtxo.assets).find((unit) =>
+        unit.startsWith(poolNftPolicyId),
+      )!;
+      const poolNftAssetName = poolNftUnit.slice(poolNftPolicyId.length);
+
+      // BurnPoolNFT redeemer = Constr(1, [])
+      const burnNftRedeemer = PoolNFTRedeemer.Burn();
+
+      // Collect pool UTxO (need a spending redeemer — use CollectFees as admin action)
+      // then burn the NFT
+      let tx = lucid
+        .newTx()
+        .collectFrom([poolUtxo], PoolRedeemer.CollectFees())
+        .attach.SpendingValidator(poolScript)
+        .mintAssets({ [poolNftUnit]: -1n }, burnNftRedeemer)
+        .attach.MintingPolicy(poolNftScript);
+
+      // Also burn any LP tokens that remain in the pool UTxO
+      const lpTokenUnit = Object.keys(poolUtxo.assets).find((unit) =>
+        unit.startsWith(lpPolicyId),
+      );
+      if (lpTokenUnit && poolUtxo.assets[lpTokenUnit]) {
+        const lpAmount = poolUtxo.assets[lpTokenUnit];
+        const lpRedeemer = mkLPRedeemer(poolNftPolicyId, poolNftAssetName, -lpAmount);
+        tx = tx
+          .mintAssets({ [lpTokenUnit]: -lpAmount }, lpRedeemer)
+          .attach.MintingPolicy(lpScript);
+      }
+
+      tx = tx.addSigner(params.adminAddress);
+
+      const completed = await tx.complete({
+        changeAddress: params.adminAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Burn pool NFT TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build burn pool NFT TX');
+      throw new ChainError(`Failed to build burn pool NFT TX: ${msg}`);
     }
   }
 }

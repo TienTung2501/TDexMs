@@ -101,6 +101,7 @@ export function createApp(deps: AppDependencies): express.Express {
     intentRepo: deps.intentRepo,
     orderRepo: deps.orderRepo,
     candlestickService: deps.candlestickService,
+    txBuilder: deps.txBuilder,
   }));
 
   app.use('/v1', v1);

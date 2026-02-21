@@ -91,6 +91,38 @@ export interface ReclaimTxParams {
   ownerAddress: string;
 }
 
+export interface CollectFeesTxParams {
+  /** Admin address that signs the TX */
+  adminAddress: string;
+  /** Pool IDs to collect fees from */
+  poolIds: string[];
+}
+
+export interface UpdateSettingsTxParams {
+  /** Admin address that signs the TX */
+  adminAddress: string;
+  /** New protocol settings */
+  newSettings: {
+    maxProtocolFeeBps: number;
+    minPoolLiquidity: bigint;
+    nextVersion: number;
+  };
+}
+
+export interface UpdateFactoryAdminTxParams {
+  /** Current admin address */
+  currentAdminAddress: string;
+  /** New admin's verification key hash */
+  newAdminVkh: string;
+}
+
+export interface BurnPoolNFTTxParams {
+  /** Admin address that signs the TX */
+  adminAddress: string;
+  /** Pool ID whose NFT to burn */
+  poolId: string;
+}
+
 export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
@@ -124,4 +156,16 @@ export interface ITxBuilder {
 
   /** Build a reclaim TX for expired escrow — permissionless, keeper pays fees */
   buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to collect accumulated protocol fees from pool(s) — admin only */
+  buildCollectFeesTx(params: CollectFeesTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to update global protocol settings — admin only */
+  buildUpdateSettingsTx(params: UpdateSettingsTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to transfer factory admin to a new VKH — admin only */
+  buildUpdateFactoryAdminTx(params: UpdateFactoryAdminTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to burn a pool NFT (pool closure) — admin only */
+  buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult>;
 }

@@ -11,6 +11,7 @@ import { env } from '../../../config/env.js';
 import type { IPoolRepository } from '../../../domain/ports/IPoolRepository.js';
 import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.js';
 import type { IOrderRepository } from '../../../domain/ports/IOrderRepository.js';
+import type { ITxBuilder } from '../../../domain/ports/index.js';
 import type { CandlestickService } from '../../../application/services/CandlestickService.js';
 
 export interface AdminDependencies {
@@ -18,6 +19,7 @@ export interface AdminDependencies {
   intentRepo: IIntentRepository;
   orderRepo: IOrderRepository;
   candlestickService: CandlestickService;
+  txBuilder?: ITxBuilder;
 }
 
 export function createAdminRouter(deps: AdminDependencies): Router {
@@ -126,12 +128,20 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           return;
         }
 
-        // TODO: Build actual fee collection TX via TxBuilder
-        // For now return a placeholder — the TX building requires a dedicated
-        // batch-collect-fees method in TxBuilder
-        res.status(501).json({
-          error: 'Fee collection TX building not yet implemented',
-          message: 'Requires dedicated smart contract interaction',
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const result = await deps.txBuilder.buildCollectFeesTx({
+          adminAddress: admin_address,
+          poolIds: pool_ids,
+        });
+
+        res.json({
+          unsignedTx: result.unsignedTx,
+          txHash: result.txHash,
+          estimatedFee: result.estimatedFee.toString(),
         });
       } catch (err) {
         next(err);
@@ -175,10 +185,24 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           return;
         }
 
-        // TODO: Build settings update TX consuming settings UTxO
-        res.status(501).json({
-          error: 'Settings update TX building not yet implemented',
-          message: 'Requires settings_validator smart contract interaction',
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const result = await deps.txBuilder.buildUpdateSettingsTx({
+          adminAddress: admin_address,
+          newSettings: {
+            maxProtocolFeeBps: new_settings.max_protocol_fee_bps ?? 30,
+            minPoolLiquidity: BigInt(new_settings.min_pool_liquidity ?? 1_000_000),
+            nextVersion: new_settings.next_version ?? 1,
+          },
+        });
+
+        res.json({
+          unsignedTx: result.unsignedTx,
+          txHash: result.txHash,
+          estimatedFee: result.estimatedFee.toString(),
         });
       } catch (err) {
         next(err);
@@ -198,10 +222,20 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           return;
         }
 
-        // TODO: Build factory admin transfer TX
-        res.status(501).json({
-          error: 'Factory admin transfer TX building not yet implemented',
-          message: 'Requires factory_validator smart contract interaction',
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const result = await deps.txBuilder.buildUpdateFactoryAdminTx({
+          currentAdminAddress: current_admin_address,
+          newAdminVkh: new_admin_vkh,
+        });
+
+        res.json({
+          unsignedTx: result.unsignedTx,
+          txHash: result.txHash,
+          estimatedFee: result.estimatedFee.toString(),
         });
       } catch (err) {
         next(err);
@@ -221,10 +255,20 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           return;
         }
 
-        // TODO: Build pool NFT burn TX
-        res.status(501).json({
-          error: 'Pool NFT burn TX building not yet implemented',
-          message: 'Requires pool_nft_policy smart contract interaction',
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const result = await deps.txBuilder.buildBurnPoolNFTTx({
+          adminAddress: admin_address,
+          poolId: pool_id,
+        });
+
+        res.json({
+          unsignedTx: result.unsignedTx,
+          txHash: result.txHash,
+          estimatedFee: result.estimatedFee.toString(),
         });
       } catch (err) {
         next(err);
