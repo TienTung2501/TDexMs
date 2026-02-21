@@ -64,9 +64,27 @@ export function createApp(deps: AppDependencies): express.Express {
 
   // ── Security ──
   app.use(helmet());
+
+  // Tự động xử lý danh sách các domain cho phép
+  const allowedOrigins = (env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, "")); // Loại bỏ dấu / ở cuối nếu có
+
   app.use(
     cors({
-      origin: env.CORS_ORIGIN.split(',').map((s) => s.trim()),
+      origin: (origin, callback) => {
+        // Cho phép nếu không có origin (như khi test bằng Postman)
+        if (!origin) return callback(null, true);
+        
+        // Kiểm tra xem origin gửi lên có nằm trong danh sách được phép không
+        if (allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          // Log ra để bạn dễ debug trên Render
+          console.warn(`CORS blocked for origin: ${origin}`);
+          callback(new Error('Not allowed by CORS'));
+        }
+      },
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
       credentials: true,
