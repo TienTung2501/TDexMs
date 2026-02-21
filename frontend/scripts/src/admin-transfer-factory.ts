@@ -49,8 +49,7 @@ async function main() {
     const result = await apiFetch<any>('/admin/settings/build-update-factory', {
       method: 'POST',
       body: JSON.stringify({
-        admin_address: address,
-        admin_vkh: adminVkh,
+        current_admin_address: address,
         new_admin_vkh: newAdminVkh,
       }),
     });
