@@ -125,6 +125,47 @@ export interface BurnPoolNFTTxParams {
   poolId: string;
 }
 
+export interface DirectSwapTxParams {
+  /** User address initiating the swap */
+  senderAddress: string;
+  /** Address to receive change */
+  changeAddress: string;
+  /** Asset being sold */
+  inputAssetId: string;
+  /** Amount of input asset */
+  inputAmount: bigint;
+  /** Asset being bought */
+  outputAssetId: string;
+  /** Minimum acceptable output (slippage protection) */
+  minOutput: bigint;
+  /** TX validity deadline (POSIX ms) */
+  deadline: number;
+}
+
+export interface ExecuteOrderTxParams {
+  /** Solver/keeper address that signs and pays fees */
+  solverAddress: string;
+  /** Order UTxO reference to execute */
+  orderUtxoRef: { txHash: string; outputIndex: number };
+  /** Pool UTxO reference to swap against */
+  poolUtxoRef: { txHash: string; outputIndex: number };
+}
+
+export interface DeploySettingsTxParams {
+  /** Admin address that signs the TX */
+  adminAddress: string;
+  /** Protocol fee in basis points (default 5 = 0.05%) */
+  protocolFeeBps?: number;
+  /** Minimum pool liquidity in lovelace */
+  minPoolLiquidity?: bigint;
+  /** Minimum intent size in lovelace */
+  minIntentSize?: bigint;
+  /** Solver bond requirement in lovelace */
+  solverBond?: bigint;
+  /** Fee collector address (defaults to admin) */
+  feeCollectorAddress?: string;
+}
+
 export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
@@ -177,4 +218,13 @@ export interface ITxBuilder {
 
   /** Build a TX to burn a pool NFT (pool closure) — admin only */
   buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult>;
+
+  /** Build a direct swap TX against a pool (no escrow) */
+  buildDirectSwapTx(params: DirectSwapTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX for solver to execute a pending order against a pool */
+  buildExecuteOrderTx(params: ExecuteOrderTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to deploy the initial settings UTxO — admin bootstrap */
+  buildDeploySettingsTx(params: DeploySettingsTxParams): Promise<BuildTxResult>;
 }

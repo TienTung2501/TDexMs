@@ -17,5 +17,13 @@ export type {
   SettlementTxParams,
   OrderTxParams,
   CancelOrderTxParams,
+  ReclaimTxParams,
+  CollectFeesTxParams,
+  UpdateSettingsTxParams,
+  UpdateFactoryAdminTxParams,
+  BurnPoolNFTTxParams,
+  DirectSwapTxParams,
+  ExecuteOrderTxParams,
+  DeploySettingsTxParams,
   BuildTxResult,
 } from './ITxBuilder.js';
