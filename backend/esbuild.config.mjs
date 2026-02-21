@@ -11,8 +11,13 @@ await build({
   // ── Packages that MUST remain external ─────────────────────────────
   external: ['@prisma/client', 'prisma', 'pino-pretty', '.prisma/client'],
 
-  // BỎ HOÀN TOÀN ĐOẠN BANNER NÀY ĐI
-  // banner: { ... },
+  // ── CJS interop banner (Phiên bản chống xung đột) ──────────────────
+  banner: {
+    js: [
+      "import { createRequire as _createRequire } from 'module';",
+      "const require = _createRequire(import.meta.url);"
+    ].join('\n'),
+  },
 
   // Silence "converting circular structure" warnings from lucid
   logOverride: {
