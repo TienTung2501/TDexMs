@@ -41,12 +41,12 @@ export function createTxRouter(
         if (result.accepted) {
           res.status(200).json({
             txHash: result.txHash,
-            accepted: true,
+            status: 'accepted',
           });
         } else {
           res.status(400).json({
             txHash: '',
-            accepted: false,
+            status: 'rejected',
             error: result.error,
           });
         }
@@ -107,7 +107,8 @@ export function createTxRouter(
 
         res.json({
           txHash,
-          confirmed,
+          status: confirmed ? 'confirmed' : 'pending',
+          confirmations: confirmed ? 1 : 0,
         });
       } catch (err) {
         next(err);

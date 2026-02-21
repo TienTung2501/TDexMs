@@ -1,7 +1,6 @@
 # ═══════════════════════════════════════════════════════
 # SolverNet Backend — Production Dockerfile
-# esbuild bundles all JS deps (incl. libsodium) into a
-# single file; only @prisma/client stays external.
+# tsc build + pnpm deploy --prod for clean node_modules
 # ═══════════════════════════════════════════════════════
 
 # ── Stage 1: Install & Build ──
@@ -9,24 +8,28 @@ FROM node:20-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
 
-# Install dependencies
+# Copy manifests + patches (pnpm apply patches during install)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
-# Thêm dòng này vào để Docker mang thư mục patch vào container
-COPY patches ./patches 
+COPY patches ./patches
 
-# Bây giờ pnpm install mới có thể chạy thành công
 RUN pnpm install --frozen-lockfile
 
 # Copy source
 COPY backend/ ./backend/
 COPY tsconfig.base.json ./
 
-# Generate Prisma client (needed so esbuild can resolve @prisma/client types),
-# then bundle the entire backend into dist/index.js with esbuild.
-# libsodium-wrappers-sumo and all other JS deps are inlined at this step.
+# Generate Prisma + compile TypeScript
 RUN cd backend && npx prisma generate && pnpm build
+
+# Create self-contained production directory (resolves pnpm symlinks)
+RUN pnpm deploy --filter backend --prod /app/pruned
+
+# Copy compiled JS + Prisma schema into pruned dir, re-generate client
+RUN cp -r /app/backend/dist   /app/pruned/dist   \
+ && cp -r /app/backend/prisma /app/pruned/prisma \
+ && cd /app/pruned && npx prisma generate
 
 # ── Stage 2: Production image ──
 FROM node:20-alpine AS runner
@@ -36,17 +39,11 @@ RUN addgroup --system --gid 1001 solvernet \
 
 WORKDIR /app
 
-# Copy the single-file esbuild bundle (all JS deps inlined — no pnpm virtual store)
-COPY --from=builder /app/backend/dist/index.js ./dist/index.js
-
-# Copy Prisma schema (needed by migrate deploy and generate)
-COPY --from=builder /app/backend/prisma ./prisma
-
-# Install ONLY prisma + @prisma/client via npm (flat node_modules, no .pnpm quirks).
-# This installs the native Query Engine binary for the correct platform.
-RUN npm install --save-exact prisma@6.2.0 @prisma/client@6.2.0 \
-    && npx prisma generate \
-    && npm cache clean --force
+# Copy everything from pruned (flat node_modules, no symlinks)
+COPY --from=builder /app/pruned/package.json ./
+COPY --from=builder /app/pruned/node_modules ./node_modules
+COPY --from=builder /app/pruned/dist ./dist
+COPY --from=builder /app/pruned/prisma ./prisma
 
 USER solvernet
 

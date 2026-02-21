@@ -5,8 +5,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "build": "node esbuild.config.mjs",
-    "build:tsc": "tsc",
+    "build": "tsc",
+    "build:bundle": "node esbuild.config.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -23,6 +23,7 @@
     "@lucid-evolution/provider": "^0.1.0",
     "@prisma/client": "^6.2.0",
     "@upstash/redis": "^1.36.2",
+    "bech32": "^2.0.0",
     "cors": "^2.8.5",
     "cron": "^3.3.0",
     "dotenv": "^16.4.0",

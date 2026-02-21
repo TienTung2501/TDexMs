@@ -21,18 +21,10 @@ export function createPortfolioRouter(
 ): Router {
   const router = Router();
 
-  /** GET /v1/portfolio/:address — Wallet portfolio summary (legacy) */
-  router.get(
-    '/portfolio/:address',
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const result = await getPortfolio.execute(req.params.address as string);
-        res.json(result);
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
+  // ──────────────────────────────────────────────
+  // Static routes MUST be registered BEFORE /:address
+  // to prevent Express from matching "summary" as an address.
+  // ──────────────────────────────────────────────
 
   /** GET /v1/portfolio/:address/transactions — Recent transactions for wallet */
   router.get(
@@ -444,6 +436,23 @@ export function createPortfolioRouter(
           txHash: result.txHash,
           estimatedFee: result.estimatedFee.toString(),
         });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ──────────────────────────────────────────────
+  // Parameterized routes LAST (avoid shadowing static routes above)
+  // ──────────────────────────────────────────────
+
+  /** GET /v1/portfolio/:address — Wallet portfolio summary (legacy) */
+  router.get(
+    '/portfolio/:address',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const result = await getPortfolio.execute(req.params.address as string);
+        res.json(result);
       } catch (err) {
         next(err);
       }

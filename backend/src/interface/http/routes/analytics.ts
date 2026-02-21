@@ -65,11 +65,16 @@ export function createAnalyticsRouter(): Router {
 
         res.json({
           assetId,
+          ticker: '',
+          price: 0,
+          priceChange24h: 0,
+          volume24h: 0,
+          marketCap: 0,
           poolCount: pools.length,
           pools: pools.map((p) => ({
             poolId: p.id,
-            assetA: `${p.assetAPolicyId}.${p.assetAAssetName}`,
-            assetB: `${p.assetBPolicyId}.${p.assetBAssetName}`,
+            assetA: { policyId: p.assetAPolicyId, assetName: p.assetAAssetName },
+            assetB: { policyId: p.assetBPolicyId, assetName: p.assetBAssetName },
             reserveA: p.reserveA.toString(),
             reserveB: p.reserveB.toString(),
           })),
@@ -146,11 +151,12 @@ export function createAnalyticsRouter(): Router {
         }
 
         res.json({
-          tokens: Object.entries(prices).map(([ticker, data]) => ({
+          prices: Object.entries(prices).map(([ticker, data]) => ({
+            assetId: data.source_pool ? ticker : 'lovelace',
             ticker,
-            ...data,
+            priceAda: data.price_ada,
+            priceUsd: data.price_usd,
           })),
-          updated_at: new Date().toISOString(),
         });
       } catch (err) {
         next(err);

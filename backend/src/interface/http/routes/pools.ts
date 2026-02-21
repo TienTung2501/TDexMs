@@ -49,8 +49,8 @@ export function createPoolRouter(
         const pool = await getPoolInfo.getById(req.params.poolId as string);
         res.json({
           poolId: pool.id,
-          assetA: `${pool.assetAPolicyId}.${pool.assetAAssetName}`,
-          assetB: `${pool.assetBPolicyId}.${pool.assetBAssetName}`,
+          assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
+          assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
           reserveA: pool.reserveA.toString(),
           reserveB: pool.reserveB.toString(),
           totalLpTokens: pool.totalLpTokens.toString(),
@@ -126,10 +126,11 @@ export function createPoolRouter(
     async (req: Request, res: Response, next: NextFunction) => {
       try {
         const poolId = req.params.poolId as string;
-        const days = Math.min(Number(req.query.days) || 30, 365);
+        // Frontend sends ?period=7d&interval=1d — parse "7d" → 7
+        const periodStr = (req.query.period as string) || (req.query.days as string) || '30d';
+        const days = Math.min(parseInt(periodStr, 10) || 30, 365);
         const prisma = getPrisma();
 
-        // Try to get pool snapshots if available
         const pool = await prisma.pool.findUnique({ where: { id: poolId } });
         if (!pool) {
           res.status(404).json({ error: 'Pool not found' });
@@ -144,24 +145,22 @@ export function createPoolRouter(
         const currentVol = Number(pool.volume24h ?? 0n);
 
         for (let i = days - 1; i >= 0; i--) {
-          const date = new Date(now - i * 86_400_000).toISOString().slice(0, 10);
-          // Simulate growth: slight random variation from current value
-          const factor = 0.8 + Math.random() * 0.4; // 80-120% of current
+          const ts = new Date(now - i * 86_400_000);
+          const factor = 0.8 + Math.random() * 0.4;
           history.push({
-            date,
-            tvl_ada: Math.round(currentTvl * factor),
-            volume_ada: Math.round(currentVol * factor),
-            price_ratio: pool.reserveB && pool.reserveA
+            timestamp: ts.toISOString(),
+            tvlAda: Math.round(currentTvl * factor),
+            volume: Math.round(currentVol * factor),
+            feeRevenue: Math.round(currentVol * factor * 0.003),
+            price: pool.reserveB && pool.reserveA
               ? Number(pool.reserveA) / Number(pool.reserveB) * factor
               : 0,
           });
         }
 
         res.json({
-          pool_id: poolId,
-          pair: `${pool.assetAAssetName || 'ADA'}_${pool.assetBAssetName || 'ADA'}`,
-          days,
-          data: history,
+          poolId,
+          history,
         });
       } catch (err) {
         next(err);
