@@ -13,6 +13,10 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
+# Thêm dòng này vào để Docker mang thư mục patch vào container
+COPY patches ./patches 
+
+# Bây giờ pnpm install mới có thể chạy thành công
 RUN pnpm install --frozen-lockfile
 
 # Copy source
