@@ -5,7 +5,8 @@
  *
  * Fixed: B1 — uses findByUtxoRef to resolve DB intent IDs
  * Fixed: B8 — only marks FILLING after TX is successfully built
- * Added: Post-settlement DB writes (price ticks, pool reserves)
+ * Fixed: B5 — records price tick after confirmed settlement
+ * CRITICAL RULE: All DB state changes occur ONLY after on-chain TX confirmation.
  */
 import { getLogger } from '../config/logger.js';
 import { IntentCollector } from './IntentCollector.js';
@@ -211,10 +212,37 @@ export class SolverEngine {
 
         this.logger.info(
           { txHash: submitResult.txHash, poolId: batch.poolId },
-          'Settlement TX submitted',
+          'Settlement TX submitted — awaiting on-chain confirmation',
         );
 
-        // ── Post-settlement updates ──
+        // CRITICAL RULE: Await on-chain confirmation before any DB updates
+        const confirmed = await this.chainProvider.awaitTx(submitResult.txHash, 120_000);
+        if (!confirmed) {
+          // TX accepted into mempool but not confirmed within 120s.
+          // Revert intents from FILLING → ACTIVE so the next solver iteration
+          // can re-evaluate them (they may still confirm on-chain later).
+          this.logger.warn(
+            { txHash: submitResult.txHash },
+            'Settlement TX not confirmed within 120s — reverting FILLING → ACTIVE',
+          );
+          for (const intent of batch.intents) {
+            const intentId = await this.resolveIntentId(
+              intent.utxoRef.txHash,
+              intent.utxoRef.outputIndex,
+            );
+            if (intentId) {
+              await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+            }
+          }
+          return;
+        }
+
+        this.logger.info(
+          { txHash: submitResult.txHash, poolId: batch.poolId },
+          'Settlement TX confirmed on-chain — updating DB',
+        );
+
+        // ── Post-confirmation DB updates ──
 
         // 1. Update intent statuses to FILLED (B1 fix: use DB id, not UTxO ref)
         for (const intent of batch.intents) {
@@ -284,6 +312,31 @@ export class SolverEngine {
                 pool.fees24h,
                 pool.tvlAda,
               );
+
+              // Insert PoolHistory snapshot (Task 1 / audit R-02 write-side)
+              const newPrice = pool.reserveB > 0n
+                ? Number(pool.reserveA) / Number(pool.reserveB)
+                : 0;
+              await this.poolRepo.insertHistory({
+                poolId: pool.id,
+                reserveA: pool.reserveA,
+                reserveB: pool.reserveB,
+                tvlAda: pool.tvlAda,
+                volume: pool.volume24h + batch.totalInputAmount,
+                fees: pool.fees24h,
+                price: newPrice,
+              });
+
+              // Task 4: Broadcast real-time pool state update via WebSocket
+              this.wsServer.broadcastPool({
+                poolId: pool.id,
+                reserveA: pool.reserveA.toString(),
+                reserveB: pool.reserveB.toString(),
+                price: newPrice.toString(),
+                tvlAda: pool.tvlAda.toString(),
+                lastTxHash: submitResult.txHash,
+                timestamp: Date.now(),
+              });
             }
           } catch (err) {
             this.logger.warn({ err }, 'Failed to update pool reserves after settlement');

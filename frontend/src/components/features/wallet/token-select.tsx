@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
-import { ArrowDownUp, Search, X } from "lucide-react";
+import React, { useState, useMemo, useEffect } from "react";
+import { Search, X, Loader2, ArrowDownUp } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TokenIcon } from "@/components/ui/token-icon";
-import { TOKEN_LIST, type Token } from "@/lib/mock-data";
+import { TOKEN_LIST, TOKENS, type Token } from "@/lib/mock-data";
+import { listPools } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface TokenSelectProps {
@@ -22,6 +23,38 @@ interface TokenSelectProps {
   balances?: Record<string, number>;
 }
 
+/** Merge a raw pool asset into the TOKEN_LIST, using known metadata if available. */
+function resolvePoolToken(
+  policyId: string,
+  assetName: string,
+  ticker?: string,
+  decimals?: number
+): Token {
+  // ADA
+  if (!policyId || policyId === "") return TOKENS.ADA;
+  // Known token by ticker
+  if (ticker) {
+    const known = Object.values(TOKENS).find(
+      (t) => t.ticker.toUpperCase() === ticker.toUpperCase()
+    );
+    if (known) return known;
+  }
+  // Known token by on-chain ID
+  const byId = Object.values(TOKENS).find(
+    (t) => t.policyId === policyId && t.assetName === assetName
+  );
+  if (byId) return byId;
+  // Unknown — construct minimal metadata
+  return {
+    policyId,
+    assetName,
+    ticker: ticker || assetName.slice(0, 8).toUpperCase(),
+    name: ticker || "Unknown Token",
+    decimals: decimals ?? 0,
+    logo: "🪙",
+  };
+}
+
 export function TokenSelectDialog({
   open,
   onOpenChange,
@@ -30,9 +63,46 @@ export function TokenSelectDialog({
   balances = {},
 }: TokenSelectProps) {
   const [search, setSearch] = useState("");
+  const [dynamicTokens, setDynamicTokens] = useState<Token[]>(TOKEN_LIST);
+  const [fetching, setFetching] = useState(false);
+
+  // Fetch tokens from active pools whenever the dialog opens
+  useEffect(() => {
+    if (!open) return;
+    setFetching(true);
+    listPools({ state: "ACTIVE", limit: "100" })
+      .then((res) => {
+        const seen = new Set<string>();
+        const merged: Token[] = [...TOKEN_LIST];
+
+        // Track tickers from the static list so we don't double-add
+        TOKEN_LIST.forEach((t) => seen.add(t.ticker.toUpperCase()));
+
+        for (const pool of res.data) {
+          for (const asset of [pool.assetA, pool.assetB]) {
+            const t = resolvePoolToken(
+              asset.policyId,
+              asset.assetName,
+              asset.ticker,
+              asset.decimals
+            );
+            if (!seen.has(t.ticker.toUpperCase())) {
+              seen.add(t.ticker.toUpperCase());
+              merged.push(t);
+            }
+          }
+        }
+        setDynamicTokens(merged);
+      })
+      .catch(() => {
+        // Silently fall back to static list on error
+        setDynamicTokens(TOKEN_LIST);
+      })
+      .finally(() => setFetching(false));
+  }, [open]);
 
   const filtered = useMemo(() => {
-    return TOKEN_LIST.filter((t) => {
+    return dynamicTokens.filter((t) => {
       if (t.ticker === excludeTicker) return false;
       if (!search) return true;
       return (
@@ -40,13 +110,18 @@ export function TokenSelectDialog({
         t.name.toLowerCase().includes(search.toLowerCase())
       );
     });
-  }, [search, excludeTicker]);
+  }, [search, excludeTicker, dynamicTokens]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Select Token</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            Select Token
+            {fetching && (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+            )}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="relative">

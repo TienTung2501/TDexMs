@@ -99,6 +99,8 @@ export class CreatePool {
       fees24h: 0n,
       txHash: txResult.txHash,
       outputIndex: 0,
+      // R-07 fix: store LP policy ID so portfolio can read LP balances on-chain
+      lpPolicyId: txResult.poolMeta?.lpPolicyId ?? undefined,
       state: 'ACTIVE' as const,
       createdAt: now,
       updatedAt: now,

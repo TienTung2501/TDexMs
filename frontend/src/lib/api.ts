@@ -497,11 +497,26 @@ export async function getTxStatus(
 }
 
 // ─── Portfolio ──────────────────────────────
+
+/** On-chain LP position returned by the upgraded GetPortfolio use-case. */
+export interface LpPosition {
+  poolId: string;
+  assetATicker?: string;
+  assetBTicker?: string;
+  assetAPolicyId: string;
+  assetBPolicyId: string;
+  lpPolicyId: string;
+  /** bigint serialized as decimal string by JSON serializer */
+  lpBalance: string;
+}
+
 export interface PortfolioResponse {
   address: string;
   intents: { active: number; filled: number; total: number };
   orders: { active: number; filled: number; total: number };
   pools: { totalPools: number };
+  /** Real LP token positions resolved from on-chain UTxOs (requires IChainProvider). */
+  lpPositions?: LpPosition[];
 }
 
 export async function getPortfolio(
@@ -793,6 +808,19 @@ export async function getAdminSettings(): Promise<AdminSettings> {
   return apiFetch("/admin/settings/current");
 }
 
+// Settings - deploy initial settings
+export async function buildDeploySettings(body: {
+  admin_address: string;
+  protocol_fee_bps: number;
+  min_pool_liquidity: number;
+  fee_collector_address?: string;
+}): Promise<{ unsignedTx: string; txHash: string; estimatedFee: string }> {
+  return apiFetch("/admin/settings/build-deploy", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 // Settings - update global
 export async function buildUpdateGlobalSettings(body: {
   admin_address: string;
@@ -827,5 +855,30 @@ export async function buildBurnPoolNFT(body: {
   return apiFetch("/admin/pools/build-burn", {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+// ─── Admin Solver ─────────────────────────────────────────
+
+export interface SolverStatusResponse {
+  running: boolean;
+  lastRun: string | null;
+  batchesTotal: number;
+  batchesSuccess: number;
+  batchesFailed: number;
+  activeIntents: number;
+  pendingOrders: number;
+  queueDepth: number;
+  lastTxHash: string | null;
+}
+
+export async function getSolverStatus(): Promise<SolverStatusResponse> {
+  return apiFetch("/admin/solver/status");
+}
+
+export async function triggerSolver(): Promise<{ triggered: boolean; message: string }> {
+  return apiFetch("/admin/solver/trigger", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }

@@ -77,6 +77,42 @@ export class Order {
     return ['ACTIVE', 'PARTIALLY_FILLED'].includes(this.props.status) && !this.isExpired();
   }
 
+  /**
+   * Record a single DCA interval execution.
+   * Deducts amountPerInterval from remainingBudget and increments executedIntervals.
+   * Automatically promotes status to FILLED when budget is exhausted.
+   * MUST only be called after on-chain TX confirmation.
+   */
+  recordExecution(): void {
+    const amount = this.props.amountPerInterval ?? 0n;
+    if (this.props.remainingBudget !== undefined) {
+      this.props.remainingBudget = this.props.remainingBudget > amount
+        ? this.props.remainingBudget - amount
+        : 0n;
+    }
+    this.props.executedIntervals = (this.props.executedIntervals ?? 0) + 1;
+    // If budget is exhausted, mark fully filled; otherwise partially filled
+    if (!this.props.remainingBudget || this.props.remainingBudget === 0n) {
+      this.props.status = 'FILLED';
+    } else {
+      this.props.status = 'PARTIALLY_FILLED';
+    }
+    this.props.updatedAt = new Date();
+  }
+
+  /**
+   * Check whether enough wall-clock time has elapsed for the next DCA interval.
+   * One Cardano slot ≈ 1 second.
+   */
+  isDcaIntervalRipe(nowMs: number = Date.now()): boolean {
+    if (this.props.type !== 'DCA') return false;
+    const slots = this.props.intervalSlots ?? 0;
+    if (slots === 0) return true; // no interval limit — always ripe
+    const elapsedMs = this.props.createdAt.getTime() +
+      ((this.props.executedIntervals ?? 0) + 1) * slots * 1_000;
+    return nowMs >= elapsedMs;
+  }
+
   markActive(txHash: string, outputIndex: number): void {
     this.props.status = 'ACTIVE';
     this.props.escrowTxHash = txHash;

@@ -3,6 +3,7 @@
  */
 import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import type { ITxBuilder, BuildTxResult } from '../../domain/ports/ITxBuilder.js';
+import type { WsServer } from '../../interface/ws/WsServer.js';
 import { PoolNotFoundError, InvalidSwapParamsError } from '../../domain/errors/index.js';
 
 export interface WithdrawLiquidityInput {
@@ -26,6 +27,7 @@ export class WithdrawLiquidity {
   constructor(
     private readonly poolRepo: IPoolRepository,
     private readonly txBuilder: ITxBuilder,
+    private readonly wsServer?: WsServer,
   ) {}
 
   async execute(input: WithdrawLiquidityInput): Promise<WithdrawLiquidityOutput> {
@@ -66,6 +68,29 @@ export class WithdrawLiquidity {
       txResult.txHash,
       pool.outputIndex, // Will be corrected by ChainSync
     );
+
+    // Task 1 fix: Insert PoolHistory snapshot for charting/APY tracking
+    const newPrice = newReserveB > 0n ? Number(newReserveA) / Number(newReserveB) : 0;
+    await this.poolRepo.insertHistory({
+      poolId: pool.id,
+      reserveA: newReserveA,
+      reserveB: newReserveB,
+      tvlAda: pool.tvlAda,
+      volume: pool.volume24h,
+      fees: pool.fees24h,
+      price: newPrice,
+    });
+
+    // Task 4 fix: Emit real-time pool update via WebSocket
+    this.wsServer?.broadcastPool({
+      poolId: pool.id,
+      reserveA: newReserveA.toString(),
+      reserveB: newReserveB.toString(),
+      price: newPrice.toString(),
+      tvlAda: pool.tvlAda.toString(),
+      lastTxHash: txResult.txHash,
+      timestamp: Date.now(),
+    });
 
     return {
       unsignedTx: txResult.unsignedTx,

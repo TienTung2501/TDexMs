@@ -6,12 +6,15 @@
  *
  * This acts as the "Keeper Bot" described in the documentation.
  *
+ * CRITICAL RULE: DB state is only updated AFTER on-chain TX confirmation.
+ *
  * Flow:
  * 1. Mark overdue intents/orders as EXPIRED in DB
- * 2. Find EXPIRED intents that still have escrow UTxOs on-chain
+ * 2. Find EXPIRED intents/orders that still have escrow UTxOs on-chain
  * 3. Build Reclaim TX (permissionless — anyone can submit after deadline)
  * 4. Sign with keeper (solver) wallet and submit
- * 5. Update DB status to RECLAIMED
+ * 5. Await on-chain confirmation (lucid.awaitTx)
+ * 6. ONLY THEN update DB status to RECLAIMED / CANCELLED
  */
 import {
   Lucid,
@@ -176,39 +179,52 @@ export class ReclaimKeeperCron {
     }
   }
 
-  /** Build, sign, and submit a single reclaim TX */
+  /** Build, sign, submit, and await confirmation for a single intent reclaim TX.
+   *  CRITICAL RULE: DB is only updated after on-chain confirmation.
+   */
   private async reclaimSingle(intent: Intent, keeperAddress: string): Promise<void> {
-    this.logger.info({ intentId: intent.id }, 'Building reclaim TX');
+    this.logger.info({ intentId: intent.id }, 'Building intent reclaim TX');
 
     // Build the unsigned reclaim TX
-    const { unsignedTx, txHash } = await this.txBuilder.buildReclaimTx({
+    const { unsignedTx } = await this.txBuilder.buildReclaimTx({
       escrowTxHash: intent.escrowTxHash!,
       escrowOutputIndex: intent.escrowOutputIndex!,
       keeperAddress,
       ownerAddress: intent.creator,
     });
 
-    // Sign with keeper wallet
+    // Sign and submit
     const { lucid } = await this.getKeeperLucid();
     const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
     const submittedHash = await signed.submit();
 
     this.logger.info(
       { intentId: intent.id, txHash: submittedHash },
-      'Reclaim TX submitted',
+      'Intent reclaim TX submitted — awaiting on-chain confirmation',
     );
 
-    // Update DB status to RECLAIMED
+    // CRITICAL RULE: Await on-chain confirmation before updating DB
+    const confirmed = await lucid.awaitTx(submittedHash, 120_000);
+    if (!confirmed) {
+      this.logger.warn(
+        { intentId: intent.id, txHash: submittedHash },
+        'Reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
+      );
+      return;
+    }
+
+    // Only update DB after confirmed on-chain
     await this.intentRepo.updateStatus(intent.id, 'RECLAIMED');
 
     this.logger.info(
       { intentId: intent.id, txHash: submittedHash },
-      'Intent reclaimed successfully',
+      'Intent reclaim confirmed and DB updated',
     );
   }
 
   /**
    * B7 fix: Find expired orders with escrow UTxOs and build+submit cancel TXs.
+   * CRITICAL RULE: DB is only updated after on-chain confirmation.
    */
   private async reclaimExpiredOrders(): Promise<void> {
     const { items: expiredOrders } = await this.orderRepo.findMany({
@@ -230,7 +246,7 @@ export class ReclaimKeeperCron {
       'Found expired orders with escrow UTxOs — attempting reclaim',
     );
 
-    const { address: keeperAddress } = await this.getKeeperLucid();
+    const { address: keeperAddress, lucid } = await this.getKeeperLucid();
 
     for (const order of reclaimable) {
       try {
@@ -244,20 +260,30 @@ export class ReclaimKeeperCron {
           escrowOutputIndex: props.escrowOutputIndex!,
         });
 
-        const { lucid } = await this.getKeeperLucid();
         const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
         const submittedHash = await signed.submit();
 
         this.logger.info(
           { orderId: order.id, txHash: submittedHash },
-          'Order reclaim TX submitted',
+          'Order reclaim TX submitted — awaiting on-chain confirmation',
         );
 
+        // CRITICAL RULE: Await on-chain confirmation before updating DB
+        const confirmed = await lucid.awaitTx(submittedHash, 120_000);
+        if (!confirmed) {
+          this.logger.warn(
+            { orderId: order.id, txHash: submittedHash },
+            'Order reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
+          );
+          continue;
+        }
+
+        // Only update DB after confirmed on-chain
         await this.orderRepo.updateStatus(order.id, 'CANCELLED');
 
         this.logger.info(
-          { orderId: order.id },
-          'Order reclaimed successfully',
+          { orderId: order.id, txHash: submittedHash },
+          'Expired order reclaim confirmed and DB updated',
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

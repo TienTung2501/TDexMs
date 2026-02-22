@@ -30,6 +30,7 @@ import {
   type OpenOrderEntry,
   type OrderHistoryEntry,
   type LpPositionEntry,
+  type LpPosition,
   type CandleData,
 } from "@/lib/api";
 import { TOKENS, type Token } from "@/lib/mock-data";
@@ -364,6 +365,8 @@ export interface NormalizedOrder {
   totalBudget: number;
   remainingBudget: number;
   executedIntervals: number;
+  /** Total number of DCA intervals (null for non-DCA orders) */
+  intervalSlots: number | null;
   deadline: number;
   createdAt: string;
 }
@@ -382,6 +385,7 @@ function normalizeOrder(o: OrderResponse): NormalizedOrder {
     totalBudget: Number(o.totalBudget ?? 0),
     remainingBudget: Number(o.remainingBudget ?? 0),
     executedIntervals: o.executedIntervals,
+    intervalSlots: o.intervalSlots ?? null,
     deadline: o.deadline,
     createdAt: o.createdAt,
   };
@@ -465,4 +469,18 @@ export function usePortfolioLiquidity(address: string | undefined) {
   );
 
   return { positions: data || [], loading, error, refetch };
+}
+/**
+ * Fetches REAL on-chain LP token positions from the upgraded
+ * GET /portfolio/:address endpoint (which uses IChainProvider to scan UTxOs).
+ */
+export function usePortfolioLpPositions(address: string | undefined) {
+  const { data, loading, error, refetch } = useApi<PortfolioResponse>(
+    () => getPortfolio(address!),
+    [address],
+    { enabled: !!address, refetchInterval: 30_000 }
+  );
+
+  const lpPositions: LpPosition[] = data?.lpPositions ?? [];
+  return { lpPositions, loading, error, refetch };
 }

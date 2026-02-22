@@ -27,6 +27,8 @@ export interface PoolProps {
   fees24h: bigint;
   txHash: string;
   outputIndex: number;
+  /** LP token minting policy ID — populated on pool creation, used for LP portfolio queries */
+  lpPolicyId?: string;
   state: PoolState;
   createdAt: Date;
   updatedAt: Date;
@@ -58,6 +60,7 @@ export class Pool {
   get fees24h(): bigint { return this.props.fees24h; }
   get txHash(): string { return this.props.txHash; }
   get outputIndex(): number { return this.props.outputIndex; }
+  get lpPolicyId(): string | undefined { return this.props.lpPolicyId; }
   get state(): PoolState { return this.props.state; }
   get createdAt(): Date { return this.props.createdAt; }
   get updatedAt(): Date { return this.props.updatedAt; }

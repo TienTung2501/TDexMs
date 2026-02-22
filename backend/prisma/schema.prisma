@@ -78,6 +78,7 @@ model Pool {
   fees24h            Decimal   @default(0) @db.Decimal(38, 0)
   txHash             String    @db.VarChar(64)
   outputIndex        Int
+  lpPolicyId         String?   @db.VarChar(64)
   state              PoolState @default(ACTIVE)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt

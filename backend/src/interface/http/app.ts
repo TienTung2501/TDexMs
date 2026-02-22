@@ -37,6 +37,9 @@ import type { ITxBuilder } from '../../domain/ports/index.js';
 import type { BlockfrostClient } from '../../infrastructure/cardano/BlockfrostClient.js';
 import type { CandlestickService } from '../../application/services/CandlestickService.js';
 import type { CacheService } from '../../infrastructure/cache/CacheService.js';
+import type { SettleIntentUseCase } from '../../application/use-cases/SettleIntentUseCase.js';
+import type { ExecuteOrderUseCase } from '../../application/use-cases/ExecuteOrderUseCase.js';
+import type { UpdateSettingsUseCase } from '../../application/use-cases/UpdateSettingsUseCase.js';
 
 export interface AppDependencies {
   getQuote: GetQuote;
@@ -50,6 +53,10 @@ export interface AppDependencies {
   cancelOrder: CancelOrder;
   listOrders: ListOrders;
   getPortfolio: GetPortfolio;
+  // Task 2: new domain use-cases
+  settleIntent: SettleIntentUseCase;
+  executeOrder: ExecuteOrderUseCase;
+  updateSettings: UpdateSettingsUseCase;
   intentRepo: IIntentRepository;
   orderRepo: IOrderRepository;
   poolRepo: IPoolRepository;
@@ -115,7 +122,11 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createTxRouter(deps.blockfrost, deps.intentRepo));
   v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
   v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo, deps.poolRepo, deps.txBuilder));
-  v1.use(createSwapRouter(deps.txBuilder));
+  v1.use(createSwapRouter({
+    settleIntent: deps.settleIntent,
+    executeOrder: deps.executeOrder,
+    updateSettings: deps.updateSettings,
+  }));
   v1.use(createAdminRouter({
     poolRepo: deps.poolRepo,
     intentRepo: deps.intentRepo,

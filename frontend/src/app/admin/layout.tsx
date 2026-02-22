@@ -10,6 +10,8 @@ import {
   AlertTriangle,
   ShieldCheck,
   Loader2,
+  Rocket,
+  Cpu,
 } from "lucide-react";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
@@ -18,6 +20,8 @@ import { cn } from "@/lib/utils";
 
 const ADMIN_NAV = [
   { href: "/admin", label: "Dashboard", icon: BarChart3 },
+  { href: "/admin/deploy", label: "Deploy Settings", icon: Rocket },
+  { href: "/admin/solver", label: "Solver Engine", icon: Cpu },
   { href: "/admin/revenue", label: "Revenue & Fees", icon: DollarSign },
   { href: "/admin/settings", label: "Protocol Settings", icon: Settings },
   { href: "/admin/danger", label: "Danger Zone", icon: AlertTriangle },

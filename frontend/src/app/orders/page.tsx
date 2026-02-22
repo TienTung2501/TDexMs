@@ -15,6 +15,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Progress } from "@/components/ui/progress";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
@@ -345,8 +346,7 @@ export default function OrdersPage() {
                               {order.type === "DCA" ? (
                                 <>
                                   Budget: {order.totalBudget.toLocaleString()} ·
-                                  Remaining: {order.remainingBudget.toLocaleString()} ·
-                                  Intervals: {order.executedIntervals}
+                                  Remaining: {order.remainingBudget.toLocaleString()}
                                 </>
                               ) : (
                                 <>
@@ -359,6 +359,26 @@ export default function OrdersPage() {
                                 </>
                               )}
                             </div>
+                            {/* DCA Progress Bar */}
+                            {order.type === "DCA" && order.intervalSlots != null && order.intervalSlots > 0 && (
+                              <div className="mt-2 space-y-1 max-w-[220px]">
+                                <Progress
+                                  value={Math.min(
+                                    100,
+                                    (order.executedIntervals / order.intervalSlots) * 100
+                                  )}
+                                  className="h-1.5"
+                                />
+                                <div className="flex justify-between text-[10px] text-muted-foreground">
+                                  <span className="text-purple-500 font-medium">
+                                    DCA Progress
+                                  </span>
+                                  <span className="font-mono">
+                                    {order.executedIntervals} / {order.intervalSlots} intervals
+                                  </span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
 

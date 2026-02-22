@@ -28,6 +28,7 @@ import {
   usePortfolioOpenOrders,
   usePortfolioHistory,
   usePortfolioLiquidity,
+  usePortfolioLpPositions,
 } from "@/lib/hooks";
 import { buildPortfolioAction } from "@/lib/api";
 import { useTransaction } from "@/lib/hooks/use-transaction";
@@ -82,6 +83,13 @@ export default function PortfolioPage() {
   const { positions, loading: lpLoading } = usePortfolioLiquidity(
     isConnected ? address ?? undefined : undefined
   );
+  // Real on-chain LP positions from the upgraded GetPortfolio use-case
+  const { lpPositions, loading: lpOnChainLoading } = usePortfolioLpPositions(
+    isConnected ? address ?? undefined : undefined
+  );
+  const hasRealLpData = lpPositions.length > 0;
+  const lpTabCount = hasRealLpData ? lpPositions.length : positions.length;
+  const lpTabLoading = hasRealLpData ? lpOnChainLoading : lpLoading;
 
   // Fallback summary from wallet balances when API isn't available yet
   const fallbackSummary = useMemo(() => {
@@ -321,9 +329,9 @@ export default function PortfolioPage() {
           >
             <Droplets className="h-3.5 w-3.5 mr-1.5" />
             LP Positions
-            {positions.length > 0 && (
+            {lpTabCount > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5">
-                {positions.length}
+                {lpTabCount}
               </Badge>
             )}
           </TabsTrigger>
@@ -618,14 +626,79 @@ export default function PortfolioPage() {
         </TabsContent>
 
         {/* ──── LP Positions Tab ──── */}
-        <TabsContent value="lp-positions" className="mt-4">
+        <TabsContent value="lp-positions" className="mt-4 space-y-3">
+          {/* Source badge */}
+          {hasRealLpData && (
+            <div className="flex items-center gap-2 text-[11px] text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5 w-fit">
+              <Droplets className="h-3 w-3" />
+              On-chain UTxO scan — real balances
+            </div>
+          )}
           <Card>
             <CardContent className="p-0">
-              {lpLoading ? (
+              {lpTabLoading ? (
                 <div className="p-6 space-y-3">
                   {[1, 2].map((i) => (
                     <Skeleton key={i} className="h-20 w-full" />
                   ))}
+                </div>
+              ) : hasRealLpData ? (
+                /* ── New on-chain LP positions ── */
+                <div className="divide-y">
+                  {lpPositions.map((pos) => {
+                    const tickerA = pos.assetATicker || "Asset A";
+                    const tickerB = pos.assetBTicker || "Asset B";
+                    const tokenA = pos.assetATicker ? TOKENS[pos.assetATicker] : undefined;
+                    const tokenB = pos.assetBTicker ? TOKENS[pos.assetBTicker] : undefined;
+                    const lpBalanceNum = Number(pos.lpBalance);
+                    return (
+                      <div
+                        key={pos.poolId}
+                        className="flex flex-col md:flex-row md:items-center justify-between px-4 py-4 gap-4"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex -space-x-2">
+                            {tokenA && <TokenIcon token={tokenA} size="md" />}
+                            {tokenB && <TokenIcon token={tokenB} size="md" />}
+                            {!tokenA && !tokenB && (
+                              <div className="h-8 w-8 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-600 text-xs font-bold">
+                                LP
+                              </div>
+                            )}
+                          </div>
+                          <div>
+                            <div className="font-semibold text-sm">
+                              {tickerA}/{tickerB}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground font-mono truncate max-w-[160px]">
+                              Policy: {pos.lpPolicyId.slice(0, 12)}…
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-6 text-center">
+                          <div>
+                            <p className="text-[10px] text-muted-foreground">LP Tokens</p>
+                            <p className="font-mono text-sm font-semibold text-purple-500">
+                              {formatCompact(lpBalanceNum)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-muted-foreground">Pool ID</p>
+                            <p className="font-mono text-xs text-muted-foreground truncate max-w-[80px]">
+                              {pos.poolId.slice(0, 8)}…
+                            </p>
+                          </div>
+                        </div>
+
+                        <Link href={`/pools/${pos.poolId}`}>
+                          <Button size="sm" variant="outline" className="h-7 text-xs">
+                            Withdraw
+                          </Button>
+                        </Link>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : positions.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
@@ -633,15 +706,13 @@ export default function PortfolioPage() {
                   <p className="text-sm">No LP positions</p>
                   <p className="text-xs mt-1">
                     Provide liquidity on the{" "}
-                    <Link
-                      href="/pools"
-                      className="text-primary hover:underline"
-                    >
+                    <Link href="/pools" className="text-primary hover:underline">
                       Liquidity page
                     </Link>
                   </p>
                 </div>
               ) : (
+                /* ── Legacy LP positions (from /portfolio/liquidity) ── */
                 <div className="divide-y">
                   {positions.map((pos) => {
                     const [tickerA, tickerB] = pos.pair.split("_");
@@ -654,12 +725,8 @@ export default function PortfolioPage() {
                       >
                         <div className="flex items-center gap-3">
                           <div className="flex -space-x-2">
-                            {tokenA && (
-                              <TokenIcon token={tokenA} size="md" />
-                            )}
-                            {tokenB && (
-                              <TokenIcon token={tokenB} size="md" />
-                            )}
+                            {tokenA && <TokenIcon token={tokenA} size="md" />}
+                            {tokenB && <TokenIcon token={tokenB} size="md" />}
                           </div>
                           <div>
                             <div className="font-semibold text-sm">
@@ -673,48 +740,31 @@ export default function PortfolioPage() {
 
                         <div className="grid grid-cols-3 gap-6 text-center">
                           <div>
-                            <p className="text-[10px] text-muted-foreground">
-                              LP Tokens
-                            </p>
+                            <p className="text-[10px] text-muted-foreground">LP Tokens</p>
                             <p className="font-mono text-sm font-semibold">
                               {formatCompact(pos.lp_balance)}
                             </p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-muted-foreground">
-                              {tickerA || "Asset A"}
-                            </p>
+                            <p className="text-[10px] text-muted-foreground">{tickerA || "Asset A"}</p>
                             <p className="font-mono text-sm">
-                              {formatCompact(
-                                pos.current_value.asset_a_amount
-                              )}
+                              {formatCompact(pos.current_value.asset_a_amount)}
                             </p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-muted-foreground">
-                              {tickerB || "Asset B"}
-                            </p>
+                            <p className="text-[10px] text-muted-foreground">{tickerB || "Asset B"}</p>
                             <p className="font-mono text-sm">
-                              {formatCompact(
-                                pos.current_value.asset_b_amount
-                              )}
+                              {formatCompact(pos.current_value.asset_b_amount)}
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-primary">
-                            ≈ $
-                            {formatCompact(
-                              pos.current_value.total_value_usd
-                            )}
+                            ≈ ${formatCompact(pos.current_value.total_value_usd)}
                           </span>
                           <Link href={`/pools/${pos.pool_id}`}>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 text-xs"
-                            >
+                            <Button size="sm" variant="outline" className="h-7 text-xs">
                               Withdraw
                             </Button>
                           </Link>

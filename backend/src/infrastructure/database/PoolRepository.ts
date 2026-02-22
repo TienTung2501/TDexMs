@@ -40,6 +40,7 @@ export class PoolRepository implements IPoolRepository {
         txHash: props.txHash,
         outputIndex: props.outputIndex,
         state: props.state as never,
+        lpPolicyId: props.lpPolicyId ?? null,
       },
       update: {
         reserveA: props.reserveA.toString(),
@@ -53,6 +54,7 @@ export class PoolRepository implements IPoolRepository {
         txHash: props.txHash,
         outputIndex: props.outputIndex,
         state: props.state as never,
+        lpPolicyId: props.lpPolicyId ?? null,
       },
     });
   }
@@ -177,6 +179,28 @@ export class PoolRepository implements IPoolRepository {
     });
   }
 
+  async insertHistory(params: {
+    poolId: string;
+    reserveA: bigint;
+    reserveB: bigint;
+    tvlAda: bigint;
+    volume: bigint;
+    fees: bigint;
+    price: number;
+  }): Promise<void> {
+    await this.prisma.poolHistory.create({
+      data: {
+        poolId: params.poolId,
+        reserveA: params.reserveA.toString(),
+        reserveB: params.reserveB.toString(),
+        tvlAda: params.tvlAda.toString(),
+        volume: params.volume.toString(),
+        fees: params.fees.toString(),
+        price: params.price,
+      },
+    });
+  }
+
   private toDomain(row: PrismaPool): Pool {
     return new Pool({
       id: row.id,
@@ -201,6 +225,7 @@ export class PoolRepository implements IPoolRepository {
       fees24h: BigInt(row.fees24h.toString()),
       txHash: row.txHash,
       outputIndex: row.outputIndex,
+      lpPolicyId: (row as unknown as { lpPolicyId?: string | null }).lpPolicyId ?? undefined,
       state: row.state as PoolProps['state'],
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

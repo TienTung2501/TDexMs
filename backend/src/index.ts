@@ -19,6 +19,7 @@ import { TxBuilder } from './infrastructure/cardano/TxBuilder.js';
 import { ChainSync } from './infrastructure/cardano/ChainSync.js';
 import { PriceAggregationCron } from './infrastructure/cron/PriceAggregationCron.js';
 import { ReclaimKeeperCron } from './infrastructure/cron/ReclaimKeeperCron.js';
+import { OrderExecutorCron } from './infrastructure/cron/OrderExecutorCron.js';
 import { PoolSnapshotCron } from './infrastructure/cron/PoolSnapshotCron.js';
 import { CacheService } from './infrastructure/cache/CacheService.js';
 
@@ -35,6 +36,11 @@ import { CancelOrder } from './application/use-cases/CancelOrder.js';
 import { ListOrders } from './application/use-cases/ListOrders.js';
 import { GetPortfolio } from './application/use-cases/GetPortfolio.js';
 import { CandlestickService } from './application/services/CandlestickService.js';
+
+// New domain use-cases (Task 2 / R-14)
+import { SettleIntentUseCase } from './application/use-cases/SettleIntentUseCase.js';
+import { ExecuteOrderUseCase } from './application/use-cases/ExecuteOrderUseCase.js';
+import { UpdateSettingsUseCase } from './application/use-cases/UpdateSettingsUseCase.js';
 
 // Interface
 import { createApp } from './interface/http/app.js';
@@ -123,22 +129,29 @@ async function main(): Promise<void> {
   const cancelIntent = new CancelIntent(intentRepo, txBuilder);
   const getPoolInfo = new GetPoolInfo(poolRepo);
   const createPool = new CreatePool(poolRepo, txBuilder);
-  const depositLiquidity = new DepositLiquidity(poolRepo, txBuilder);
-  const withdrawLiquidity = new WithdrawLiquidity(poolRepo, txBuilder);
 
   // Order use cases
   const createOrder = new CreateOrder(orderRepo, txBuilder);
   const cancelOrder = new CancelOrder(orderRepo, txBuilder);
   const listOrders = new ListOrders(orderRepo);
-  const getPortfolio = new GetPortfolio(intentRepo, orderRepo, poolRepo);
+  const getPortfolio = new GetPortfolio(intentRepo, orderRepo, poolRepo, blockfrost);
 
   // Chart / OHLCV service
   const candlestickService = new CandlestickService(prisma, cache, env.CHART_MAX_CANDLES);
+
+  // Task 2: Domain use-cases for settle / execute-order / settings
+  const settleIntent = new SettleIntentUseCase(intentRepo, txBuilder);
+  const executeOrder = new ExecuteOrderUseCase(orderRepo, txBuilder);
+  const updateSettings = new UpdateSettingsUseCase(txBuilder);
 
   // ──────────────────────────────────────────────
   // 3. Interface Layer — HTTP + WebSocket
   // ──────────────────────────────────────────────
   const wsServer = new WsServer();
+
+  // Task 4: inject WsServer into liquidity use-cases so pool updates are broadcast in real-time
+  const depositLiquidity = new DepositLiquidity(poolRepo, txBuilder, wsServer);
+  const withdrawLiquidity = new WithdrawLiquidity(poolRepo, txBuilder, wsServer);
 
   const app = createApp({
     getQuote,
@@ -152,6 +165,9 @@ async function main(): Promise<void> {
     cancelOrder,
     listOrders,
     getPortfolio,
+    settleIntent,
+    executeOrder,
+    updateSettings,
     intentRepo,
     orderRepo,
     poolRepo,
@@ -217,6 +233,18 @@ async function main(): Promise<void> {
     60_000,
   );
 
+  // DCA order executor — fires ripe DCA interval executions
+  const orderExecutorCron = new OrderExecutorCron(
+    orderRepo,
+    poolRepo,
+    txBuilder,
+    env.SOLVER_SEED_PHRASE,
+    env.BLOCKFROST_URL,
+    env.BLOCKFROST_PROJECT_ID,
+    env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod',
+    60_000,
+  );
+
   // Pool snapshot cron — snapshots pool state → PoolHistory + ProtocolStats
   // B4/B6 fix: these tables were previously never populated
   const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
@@ -242,6 +270,7 @@ async function main(): Promise<void> {
 
   priceCron.start();
   reclaimKeeper.start();
+  orderExecutorCron.start();
   poolSnapshotCron.start();
 
   // ──────────────────────────────────────────────
@@ -254,6 +283,7 @@ async function main(): Promise<void> {
     chainSync.stop();
     priceCron.stop();
     reclaimKeeper.stop();
+    orderExecutorCron.stop();
     poolSnapshotCron.stop();
     wsServer.close();
 
