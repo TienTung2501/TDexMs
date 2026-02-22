@@ -13,6 +13,8 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
 COPY patches ./patches
+# THÊM DÒNG NÀY:
+COPY --from=builder /app/smartcontract ./smartcontract
 
 RUN pnpm install --frozen-lockfile
 
