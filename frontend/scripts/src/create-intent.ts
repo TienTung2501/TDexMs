@@ -6,7 +6,9 @@ import { Lucid, Blockfrost, type LucidEvolution } from '@lucid-evolution/lucid';
 import { apiFetch, log, requireEnv, parseArgs } from './shared.js';
 
 async function getWallet(): Promise<{ lucid: LucidEvolution; address: string }> {
-  const seed = requireEnv('WALLET_SEED');
+  const args = parseArgs();
+  const walletKey = args.wallet || 'WALLET_SEED';
+  const seed = requireEnv(walletKey);
   const network = (process.env.NETWORK || 'Preprod') as 'Preprod' | 'Preview' | 'Mainnet';
   const lucid = await Lucid(
     new Blockfrost(requireEnv('BLOCKFROST_URL'), requireEnv('BLOCKFROST_PROJECT_ID')),
@@ -25,7 +27,7 @@ async function main() {
   const inputAsset = args.inputAsset || 'lovelace';
   const outputAsset = args.outputAsset || 'test0001.74425443';
   const inputAmount = args.inputAmount || '5000000';
-  const deadline = Date.now() + 30 * 60 * 1000; // 30 min from now (milliseconds)
+  const deadline = Date.now() + 24 * 60 * 60 * 1000; // 24 hours from now (milliseconds)
 
   console.log(`\nCreating intent: ${inputAmount} ${inputAsset} → ${outputAsset}`);
 

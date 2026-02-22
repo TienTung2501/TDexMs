@@ -91,28 +91,53 @@ export interface NormalizedPool {
   state: "ACTIVE" | "INACTIVE";
 }
 
+/** Decode a Cardano hex-encoded asset name to UTF-8 string. Returns hex untouched if not valid UTF-8. */
+function hexToUtf8(hex: string): string {
+  if (!hex || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return hex;
+  try {
+    const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return hex;
+  }
+}
+
 function resolveToken(policyId: string, assetName: string, ticker?: string, decimals?: number): Token {
-  // Try to find by ticker first, then by policyId
+  // ADA special case
+  if (!policyId || policyId === "" || assetName === "lovelace") return TOKENS.ADA;
+
+  // Decode hex Cardano assetName → human-readable string (e.g. "484f534b59" → "HOSKY")
+  const decodedName = hexToUtf8(assetName);
+  const displayTicker = ticker || decodedName;
+
+  // Try to find by explicit ticker first
   if (ticker) {
     const found = Object.values(TOKENS).find(
       (t) => t.ticker.toUpperCase() === ticker.toUpperCase()
     );
     if (found) return found;
   }
+
+  // Try to find by decoded assetName as ticker
+  if (decodedName !== assetName) {
+    const foundByDecoded = Object.values(TOKENS).find(
+      (t) => t.ticker.toUpperCase() === decodedName.toUpperCase()
+    );
+    if (foundByDecoded) return foundByDecoded;
+  }
+
+  // Try to find by policyId + assetName
   const found = Object.values(TOKENS).find(
     (t) => t.policyId === policyId && t.assetName === assetName
   );
   if (found) return found;
 
-  // ADA special case
-  if (!policyId || policyId === "") return TOKENS.ADA;
-
-  // Unknown token, construct from data
+  // Unknown token — construct from available data, using decoded name for display
   return {
     policyId,
     assetName,
-    ticker: ticker || assetName.slice(0, 6),
-    name: ticker || "Unknown Token",
+    ticker: displayTicker.slice(0, 10),
+    name: displayTicker,
     decimals: decimals ?? 0,
     logo: "🪙",
   };
@@ -235,10 +260,17 @@ export interface NormalizedIntent {
 
 function assetToTicker(asset: string): string {
   if (!asset || asset === "" || asset === "lovelace") return "ADA";
+  const dotIdx = asset.indexOf(".");
+  const policyId = dotIdx >= 0 ? asset.slice(0, dotIdx) : asset;
+  const assetName = dotIdx >= 0 ? asset.slice(dotIdx + 1) : "";
+  // Look up in TOKENS registry first
   const found = Object.values(TOKENS).find(
-    (t) => `${t.policyId}.${t.assetName}` === asset || t.policyId === asset
+    (t) => `${t.policyId}.${t.assetName}` === asset || t.policyId === policyId
   );
-  return found?.ticker || asset.slice(0, 8);
+  if (found) return found.ticker;
+  // Decode hex assetName for display
+  const decoded = hexToUtf8(assetName);
+  return decoded.slice(0, 10) || policyId.slice(0, 8);
 }
 
 export function useIntents(params?: { address?: string; status?: string }) {

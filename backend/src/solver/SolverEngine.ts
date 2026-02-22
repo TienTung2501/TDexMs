@@ -1,13 +1,13 @@
-/**
- * Solver Engine — Main orchestrator
- * Runs the continuous loop: collect → validate → route → batch → settle.
+﻿/**
+ * Solver Engine â€” Main orchestrator
+ * Runs the continuous loop: collect â†’ validate â†’ route â†’ batch â†’ settle.
  * Uses Blockfrost for chain interaction (replaces Ogmios).
  *
- * Fixed: B1 — uses findByUtxoRef to resolve DB intent IDs
- * Fixed: B8 — only marks FILLING after TX is successfully built
- * Fixed: B5 — records price tick after confirmed settlement
- * Fixed: R-03 — writes Swap records after settlement
- * Fixed: R-15 — volume tracking respects batch direction
+ * Fixed: B1 â€” uses findByUtxoRef to resolve DB intent IDs
+ * Fixed: B8 â€” only marks FILLING after TX is successfully built
+ * Fixed: B5 â€” records price tick after confirmed settlement
+ * Fixed: R-03 â€” writes Swap records after settlement
+ * Fixed: R-15 â€” volume tracking respects batch direction
  * CRITICAL RULE: All DB state changes occur ONLY after on-chain TX confirmation.
  */
 import { getLogger } from '../config/logger.js';
@@ -22,6 +22,7 @@ import type { IChainProvider } from '../domain/ports/IChainProvider.js';
 import type { WsServer } from '../interface/ws/WsServer.js';
 import type { CandlestickService } from '../application/services/CandlestickService.js';
 import { getPrisma } from '../infrastructure/database/prisma-client.js';
+import { Lucid, Blockfrost, type LucidEvolution } from '@lucid-evolution/lucid';
 
 export interface SolverConfig {
   batchWindowMs: number;
@@ -29,11 +30,16 @@ export interface SolverConfig {
   minProfitLovelace: bigint;
   enabled: boolean;
   solverAddress: string;
+  solverSeedPhrase: string;
+  blockfrostUrl: string;
+  blockfrostProjectId: string;
+  network: 'Preprod' | 'Mainnet';
 }
 
 export class SolverEngine {
   private readonly logger;
   private running = false;
+  private lucidPromise: Promise<LucidEvolution> | null = null;
 
   constructor(
     private readonly config: SolverConfig,
@@ -49,6 +55,29 @@ export class SolverEngine {
     private readonly candlestickService?: CandlestickService,
   ) {
     this.logger = getLogger().child({ service: 'solver-engine' });
+  }
+
+  /** Get or create a Lucid instance for signing solver TXs */
+  private async getSolverLucid(): Promise<LucidEvolution> {
+    if (!this.lucidPromise) {
+      this.lucidPromise = (async () => {
+        const lucid = await Lucid(
+          new Blockfrost(this.config.blockfrostUrl, this.config.blockfrostProjectId),
+          this.config.network,
+        );
+        lucid.selectWallet.fromSeed(this.config.solverSeedPhrase);
+        return lucid;
+      })();
+    }
+    return this.lucidPromise;
+  }
+
+  /** Sign an unsigned TX CBOR with the solver wallet and submit to chain */
+  private async signAndSubmitTx(unsignedTxCbor: string): Promise<string> {
+    const lucid = await this.getSolverLucid();
+    const txSigned = await lucid.fromTx(unsignedTxCbor).sign.withWallet().complete();
+    const txHash = await txSigned.submit();
+    return txHash;
   }
 
   /** Start the solver loop */
@@ -154,7 +183,7 @@ export class SolverEngine {
   /** Settle a batch with retry on contention */
   private async settleBatch(batch: import('./BatchBuilder.js').BatchGroup): Promise<void> {
     if (!this.txBuilder || !this.chainProvider) {
-      this.logger.warn('TxBuilder or ChainProvider not configured — skipping settlement');
+      this.logger.warn('TxBuilder or ChainProvider not configured â€” skipping settlement');
       return;
     }
 
@@ -173,10 +202,7 @@ export class SolverEngine {
         // Build the settlement transaction FIRST (B8 fix: don't mark FILLING before build)
         const txResult = await this.txBuilder.buildSettlementTx({
           intentUtxoRefs: batch.intents.map((i) => i.utxoRef),
-          poolUtxoRef: {
-            txHash: batch.poolId.split('#')[0] ?? '',
-            outputIndex: parseInt(batch.poolId.split('#')[1] ?? '0', 10),
-          },
+          poolDbId: batch.poolId,
           solverAddress: this.config.solverAddress,
         });
 
@@ -196,11 +222,12 @@ export class SolverEngine {
           }
         }
 
-        // Submit the TX
-        const submitResult = await this.chainProvider.submitTx(txResult.unsignedTx);
-
-        if (!submitResult.accepted) {
-          // Revert FILLING → ACTIVE on failure
+        // Submit the TX â€” sign with solver wallet first
+        let submittedTxHash: string;
+        try {
+          submittedTxHash = await this.signAndSubmitTx(txResult.unsignedTx);
+        } catch (signErr) {
+          // Revert FILLING â†’ ACTIVE on sign/submit failure
           for (const intent of batch.intents) {
             const intentId = await this.resolveIntentId(
               intent.utxoRef.txHash,
@@ -210,23 +237,24 @@ export class SolverEngine {
               await this.intentRepo.updateStatus(intentId, 'ACTIVE');
             }
           }
-          throw new Error(`TX rejected: ${submitResult.error}`);
+          const errMsg = signErr instanceof Error ? signErr.message : String(signErr);
+          throw new Error(`TX sign/submit failed: ${errMsg}`);
         }
 
         this.logger.info(
-          { txHash: submitResult.txHash, poolId: batch.poolId },
-          'Settlement TX submitted — awaiting on-chain confirmation',
+          { txHash: submittedTxHash, poolId: batch.poolId },
+          'Settlement TX signed and submitted â€” awaiting on-chain confirmation',
         );
 
         // CRITICAL RULE: Await on-chain confirmation before any DB updates
-        const confirmed = await this.chainProvider.awaitTx(submitResult.txHash, 120_000);
+        const confirmed = await this.chainProvider.awaitTx(submittedTxHash, 120_000);
         if (!confirmed) {
           // TX accepted into mempool but not confirmed within 120s.
-          // Revert intents from FILLING → ACTIVE so the next solver iteration
+          // Revert intents from FILLING â†’ ACTIVE so the next solver iteration
           // can re-evaluate them (they may still confirm on-chain later).
           this.logger.warn(
-            { txHash: submitResult.txHash },
-            'Settlement TX not confirmed within 120s — reverting FILLING → ACTIVE',
+            { txHash: submittedTxHash },
+            'Settlement TX not confirmed within 120s â€” reverting FILLING â†’ ACTIVE',
           );
           for (const intent of batch.intents) {
             const intentId = await this.resolveIntentId(
@@ -241,11 +269,11 @@ export class SolverEngine {
         }
 
         this.logger.info(
-          { txHash: submitResult.txHash, poolId: batch.poolId },
-          'Settlement TX confirmed on-chain — updating DB',
+          { txHash: submittedTxHash, poolId: batch.poolId },
+          'Settlement TX confirmed on-chain â€” updating DB',
         );
 
-        // ── Post-confirmation DB updates ──
+        // â”€â”€ Post-confirmation DB updates â”€â”€
 
         // 0. Fetch pool entity once for direction determination and reserve updates
         const pool = this.poolRepo ? await this.poolRepo.findById(batch.poolId) : null;
@@ -268,7 +296,7 @@ export class SolverEngine {
             this.wsServer.broadcastIntent({
               intentId,
               status: 'FILLED',
-              settlementTxHash: submitResult.txHash,
+              settlementTxHash: submittedTxHash,
               timestamp: Date.now(),
             });
 
@@ -282,7 +310,7 @@ export class SolverEngine {
               // Fee estimate from the pool fee numerator (e.g. 30 = 0.3%)
               const feeNum = pool ? BigInt(pool.feeNumerator) : 30n;
               const feeEstimate = (intent.inputAmount * feeNum) / 10000n;
-              // Price impact estimate (simple – difference from ideal ratio)
+              // Price impact estimate (simple â€“ difference from ideal ratio)
               const priceImpact = batch.totalInputAmount > 0n
                 ? Math.abs(
                     Number(intent.inputAmount) / Number(batch.totalInputAmount) -
@@ -293,7 +321,7 @@ export class SolverEngine {
               await prisma.swap.create({
                 data: {
                   poolId: batch.poolId,
-                  txHash: submitResult.txHash,
+                  txHash: submittedTxHash,
                   direction,
                   inputAmount: intent.inputAmount.toString(),
                   outputAmount: outputEstimate.toString(),
@@ -309,7 +337,7 @@ export class SolverEngine {
           } else {
             this.logger.warn(
               { txHash: intent.utxoRef.txHash, outputIndex: intent.utxoRef.outputIndex },
-              'Could not find DB intent for UTxO ref — status not updated',
+              'Could not find DB intent for UTxO ref â€” status not updated',
             );
           }
         }
@@ -346,12 +374,12 @@ export class SolverEngine {
                 pool.reserveA,
                 pool.reserveB,
                 pool.totalLpTokens,
-                submitResult.txHash,
+                submittedTxHash,
                 0, // Will be corrected by ChainSync
               );
-              // R-15 fix: Normalize volume to assetA units so A→B and B→A are comparable
-              // For A→B: volumeInA = totalInputAmount (already in A)
-              // For B→A: volumeInA = totalOutputAmount (the A side of the swap)
+              // R-15 fix: Normalize volume to assetA units so Aâ†’B and Bâ†’A are comparable
+              // For Aâ†’B: volumeInA = totalInputAmount (already in A)
+              // For Bâ†’A: volumeInA = totalOutputAmount (the A side of the swap)
               const batchDirectionAToB = batch.intents.length > 0 && poolAssetA
                 ? batch.intents[0]!.inputAsset === poolAssetA
                 : true;
@@ -388,7 +416,7 @@ export class SolverEngine {
                 reserveB: pool.reserveB.toString(),
                 price: newPrice.toString(),
                 tvlAda: pool.tvlAda.toString(),
-                lastTxHash: submitResult.txHash,
+                lastTxHash: submittedTxHash,
                 timestamp: Date.now(),
               });
           } catch (err) {

@@ -146,16 +146,24 @@ async function main() {
   console.log('\n── 4. Quote ──');
   if (firstPoolId) {
     await runTest('GET /quote', async () => {
-      // Use a generic quote — may fail if pool has no reserves  
+      // First look up the pool so we can build proper inputAsset/outputAsset
+      const poolDetail = await apiFetch<any>(`/pools/${firstPoolId}`);
+      const inputAsset = 'lovelace';
+      const bPolicy = poolDetail.assetB?.policyId;
+      const bName = poolDetail.assetB?.assetName;
+      const outputAsset = (bPolicy && bPolicy !== '')
+        ? `${bPolicy}.${bName}`
+        : 'lovelace';
+
       const q = await apiFetch<any>('/quote', {
         params: {
-          from: 'lovelace',
-          to: 'lovelace',
-          amount: '1000000',
-          slippage: '50',
+          inputAsset,
+          outputAsset,
+          inputAmount: '1000000',
+          slippage: '50', // 50 BPS = 0.5%
         },
       });
-      return `output=${q.estimatedOutput}, route=${q.route?.length ?? 0} hops`;
+      return `output=${q.outputAmount}, route=${q.route?.length ?? 0} hops`;
     });
   } else {
     results.push({ name: 'GET /quote', status: 'SKIP', details: 'No pools', duration: 0 });
@@ -268,9 +276,9 @@ async function main() {
     return `factory_count=${s.factory_settings?.length ?? 0}`;
   });
 
-  // ── 10. Admin 501 Stubs ──
-  console.log('\n── 10. Admin Stubs (expect 501) ──');
-  await runTest('POST /admin/revenue/build-collect → 501', async () => {
+  // ── 10. Admin TX-Build Stubs ──
+  console.log('\n── 10. Admin TX-Build Stubs (expect 501/502) ──');
+  await runTest('POST /admin/revenue/build-collect → 501|502', async () => {
     try {
       await apiFetch<any>('/admin/revenue/build-collect', {
         method: 'POST',
@@ -278,12 +286,12 @@ async function main() {
       });
       return 'OK (unexpected)';
     } catch (err: any) {
-      if (err.message.includes('501')) return '501 as expected';
+      if (err.message.includes('501') || err.message.includes('502')) return `${err.message.match(/50[12]/)?.[0]} as expected (no on-chain UTxOs)`;
       throw err;
     }
   });
 
-  await runTest('POST /admin/settings/build-update-global → 501', async () => {
+  await runTest('POST /admin/settings/build-update-global → 501|502', async () => {
     try {
       await apiFetch<any>('/admin/settings/build-update-global', {
         method: 'POST',
@@ -291,12 +299,12 @@ async function main() {
       });
       return 'OK (unexpected)';
     } catch (err: any) {
-      if (err.message.includes('501')) return '501 as expected';
+      if (err.message.includes('501') || err.message.includes('502')) return `${err.message.match(/50[12]/)?.[0]} as expected (no on-chain UTxOs)`;
       throw err;
     }
   });
 
-  await runTest('POST /admin/pools/build-burn → 501', async () => {
+  await runTest('POST /admin/pools/build-burn → 501|502', async () => {
     try {
       await apiFetch<any>('/admin/pools/build-burn', {
         method: 'POST',
@@ -304,7 +312,7 @@ async function main() {
       });
       return 'OK (unexpected)';
     } catch (err: any) {
-      if (err.message.includes('501')) return '501 as expected';
+      if (err.message.includes('501') || err.message.includes('502')) return `${err.message.match(/50[12]/)?.[0]} as expected (no on-chain UTxOs)`;
       throw err;
     }
   });

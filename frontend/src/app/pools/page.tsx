@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
-import { Search, TrendingUp, TrendingDown, Droplets, Loader2, Plus } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Droplets, Loader2, Plus, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ export default function PoolsPage() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"tvl" | "volume" | "apy">("tvl");
 
-  const { pools: allPools, loading: poolsLoading } = usePools();
+  const { pools: allPools, loading: poolsLoading, error: poolsError } = usePools();
   const { analytics, loading: analyticsLoading } = useAnalytics();
 
   const filteredPools = useMemo(() => {
@@ -112,6 +112,14 @@ export default function PoolsPage() {
           ))}
         </div>
       </div>
+
+      {/* API error banner */}
+      {poolsError && !poolsLoading && (
+        <div className="flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/30 text-destructive p-3 text-sm">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>Failed to load pools: {poolsError.message}. Please check your connection or try refreshing.</span>
+        </div>
+      )}
 
       {/* Pool grid */}
       {poolsLoading ? (

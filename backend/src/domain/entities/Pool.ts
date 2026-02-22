@@ -47,8 +47,12 @@ export class Pool {
   get poolNftAssetName(): string { return this.props.poolNftAssetName; }
   get assetAPolicyId(): string { return this.props.assetAPolicyId; }
   get assetAAssetName(): string { return this.props.assetAAssetName; }
+  get assetADecimals(): number { return this.props.assetADecimals; }
+  get assetATicker(): string | undefined { return this.props.assetATicker; }
   get assetBPolicyId(): string { return this.props.assetBPolicyId; }
   get assetBAssetName(): string { return this.props.assetBAssetName; }
+  get assetBDecimals(): number { return this.props.assetBDecimals; }
+  get assetBTicker(): string | undefined { return this.props.assetBTicker; }
   get reserveA(): bigint { return this.props.reserveA; }
   get reserveB(): bigint { return this.props.reserveB; }
   get totalLpTokens(): bigint { return this.props.totalLpTokens; }

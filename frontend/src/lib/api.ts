@@ -16,8 +16,13 @@ async function apiFetch<T>(
 
   let url = `${API_V1}${path}`;
   if (params) {
-    const qs = new URLSearchParams(params).toString();
-    url += `?${qs}`;
+    // Filter out undefined/null values — URLSearchParams would stringify them
+    // as the literal string "undefined" which breaks Zod enum validation.
+    const filtered = Object.fromEntries(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    );
+    const qs = new URLSearchParams(filtered).toString();
+    if (qs) url += `?${qs}`;
   }
 
   const res = await fetch(url, {
@@ -124,7 +129,7 @@ export interface CreateIntentRequest {
   inputAmount: string;
   outputAsset: string;
   minOutput: string;
-  deadline: string;
+  deadline: number;       // Unix timestamp ms — backend expects z.number().int().positive()
   partialFill?: boolean;
   changeAddress: string;
   quoteId?: string;

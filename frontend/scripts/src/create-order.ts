@@ -7,7 +7,7 @@ import { apiFetch, log, requireEnv, parseArgs } from './shared.js';
 
 async function main() {
   const args = parseArgs();
-  const seed = requireEnv('WALLET_SEED');
+  const seed = requireEnv(args.wallet || 'WALLET_SEED');
   const network = (process.env.NETWORK || 'Preprod') as 'Preprod' | 'Preview' | 'Mainnet';
   const lucid = await Lucid(
     new Blockfrost(requireEnv('BLOCKFROST_URL'), requireEnv('BLOCKFROST_PROJECT_ID')),

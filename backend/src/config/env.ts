@@ -64,6 +64,11 @@ const envSchema = z.object({
   // Chart / OHLCV
   CHART_SNAPSHOT_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
   CHART_MAX_CANDLES: z.coerce.number().int().positive().default(500),
+
+  // Testnet faucet bot (preprod / preview only)
+  FAUCET_TARGET_ADDRESS: z.string().default(''),
+  FAUCET_API_KEY: z.string().default(''),
+  FAUCET_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
 });
 
 export type Env = z.infer<typeof envSchema>;

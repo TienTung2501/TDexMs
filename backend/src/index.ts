@@ -22,6 +22,7 @@ import { ReclaimKeeperCron } from './infrastructure/cron/ReclaimKeeperCron.js';
 import { OrderExecutorCron } from './infrastructure/cron/OrderExecutorCron.js';
 import { PoolSnapshotCron } from './infrastructure/cron/PoolSnapshotCron.js';
 import { CacheService } from './infrastructure/cache/CacheService.js';
+import { FaucetBot } from './infrastructure/faucet/FaucetBot.js';
 
 // Application
 import { GetQuote } from './application/use-cases/GetQuote.js';
@@ -175,6 +176,7 @@ async function main(): Promise<void> {
     blockfrost,
     candlestickService,
     cache,
+    prisma,
   });
 
   const httpServer = createServer(app);
@@ -183,7 +185,16 @@ async function main(): Promise<void> {
   // ──────────────────────────────────────────────
   // 4. Solver Engine
   // ──────────────────────────────────────────────
-  const intentCollector = new IntentCollector(blockfrost, env.ESCROW_SCRIPT_ADDRESS);
+  // Use TxBuilder's resolved escrow address (computed from blueprint) instead of env var
+  // to ensure consistency between TX building and intent collection.
+  const resolvedEscrowAddr = txBuilder.getEscrowAddress();
+  if (resolvedEscrowAddr !== env.ESCROW_SCRIPT_ADDRESS) {
+    logger.warn(
+      { envAddr: env.ESCROW_SCRIPT_ADDRESS, resolvedAddr: resolvedEscrowAddr },
+      'ESCROW_SCRIPT_ADDRESS mismatch — using resolved address from blueprint',
+    );
+  }
+  const intentCollector = new IntentCollector(blockfrost, resolvedEscrowAddr);
   const routeOptimizer = new RouteOptimizer(poolRepo);
   const batchBuilder = new BatchBuilder();
 
@@ -194,6 +205,10 @@ async function main(): Promise<void> {
       minProfitLovelace: BigInt(env.SOLVER_MIN_PROFIT_LOVELACE),
       enabled: env.SOLVER_ENABLED,
       solverAddress: env.SOLVER_ADDRESS,
+      solverSeedPhrase: env.SOLVER_SEED_PHRASE,
+      blockfrostUrl: env.BLOCKFROST_URL,
+      blockfrostProjectId: env.BLOCKFROST_PROJECT_ID,
+      network: (env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod') as 'Preprod' | 'Mainnet',
     },
     intentCollector,
     routeOptimizer,
@@ -213,7 +228,14 @@ async function main(): Promise<void> {
 
   // Chain sync — polls Blockfrost for pool state every 30s
   // B2 fix: pass pool validator address so ChainSync queries the correct Bech32 address
-  const chainSync = new ChainSync(blockfrost, prisma, env.POOL_SCRIPT_ADDRESS, 30_000);
+  const resolvedPoolAddr = txBuilder.getPoolAddress();
+  if (resolvedPoolAddr !== env.POOL_SCRIPT_ADDRESS) {
+    logger.warn(
+      { envAddr: env.POOL_SCRIPT_ADDRESS, resolvedAddr: resolvedPoolAddr },
+      'POOL_SCRIPT_ADDRESS mismatch — using resolved address from blueprint',
+    );
+  }
+  const chainSync = new ChainSync(blockfrost, prisma, resolvedPoolAddr, 30_000);
 
   // Price aggregation cron — aggregates ticks → candles
   const priceCron = new PriceAggregationCron(
@@ -249,6 +271,15 @@ async function main(): Promise<void> {
   // B4/B6 fix: these tables were previously never populated
   const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
 
+  // Testnet faucet bot — requests free test ADA every 24h
+  // Only active on preprod/preview; silently skips on mainnet
+  const faucetBot = new FaucetBot({
+    targetAddress: env.FAUCET_TARGET_ADDRESS || env.SOLVER_ADDRESS,
+    network: env.CARDANO_NETWORK,
+    apiKey: env.FAUCET_API_KEY || undefined,
+    intervalMs: env.FAUCET_INTERVAL_MS,
+  });
+
   // ──────────────────────────────────────────────
   // 6. Start
   // ──────────────────────────────────────────────
@@ -272,6 +303,7 @@ async function main(): Promise<void> {
   reclaimKeeper.start();
   orderExecutorCron.start();
   poolSnapshotCron.start();
+  faucetBot.start();
 
   // ──────────────────────────────────────────────
   // 7. Graceful Shutdown
@@ -285,6 +317,7 @@ async function main(): Promise<void> {
     reclaimKeeper.stop();
     orderExecutorCron.stop();
     poolSnapshotCron.stop();
+    faucetBot.stop();
     wsServer.close();
 
     httpServer.close(() => {

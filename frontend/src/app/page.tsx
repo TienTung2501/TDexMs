@@ -29,16 +29,17 @@ export default function SwapPage() {
   const { intents } = useIntents({});
   const { orders } = useOrders({});
 
-  // Find pool for chart
+  // Find pool for chart — match by policyId (stable) then ticker as fallback
   const pool = useMemo(() => {
+    const matchToken = (poolToken: { policyId: string; ticker?: string }, t: { policyId: string; ticker?: string }) =>
+      poolToken.policyId === t.policyId ||
+      (poolToken.ticker && t.ticker && poolToken.ticker.toUpperCase() === t.ticker.toUpperCase());
     return pools.find(
       (p) =>
-        (p.assetA.ticker === inputToken.ticker &&
-          p.assetB.ticker === outputToken.ticker) ||
-        (p.assetB.ticker === inputToken.ticker &&
-          p.assetA.ticker === outputToken.ticker)
+        (matchToken(p.assetA, inputToken) && matchToken(p.assetB, outputToken)) ||
+        (matchToken(p.assetB, inputToken) && matchToken(p.assetA, outputToken))
     );
-  }, [pools, inputToken.ticker, outputToken.ticker]);
+  }, [pools, inputToken, outputToken]);
 
   const { candles, loading: candlesLoading } = useCandles(pool?.id, TIMEFRAME_TO_INTERVAL[chartTf]);
   const { price: currentPrice } = usePrice(pool?.id);

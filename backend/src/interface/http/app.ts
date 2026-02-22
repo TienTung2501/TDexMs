@@ -40,6 +40,7 @@ import type { CacheService } from '../../infrastructure/cache/CacheService.js';
 import type { SettleIntentUseCase } from '../../application/use-cases/SettleIntentUseCase.js';
 import type { ExecuteOrderUseCase } from '../../application/use-cases/ExecuteOrderUseCase.js';
 import type { UpdateSettingsUseCase } from '../../application/use-cases/UpdateSettingsUseCase.js';
+import type { PrismaClient } from '@prisma/client';
 
 export interface AppDependencies {
   getQuote: GetQuote;
@@ -64,6 +65,7 @@ export interface AppDependencies {
   blockfrost: BlockfrostClient;
   candlestickService: CandlestickService;
   cache: CacheService | null;
+  prisma?: PrismaClient;
 }
 
 export function createApp(deps: AppDependencies): express.Express {
@@ -119,7 +121,7 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createPoolRouter(deps.getPoolInfo, deps.createPool, deps.depositLiquidity, deps.withdrawLiquidity));
   v1.use(createAnalyticsRouter());
   v1.use(createChartRouter(deps.candlestickService));
-  v1.use(createTxRouter(deps.blockfrost, deps.intentRepo));
+  v1.use(createTxRouter(deps.blockfrost, deps.intentRepo, deps.poolRepo));
   v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
   v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo, deps.poolRepo, deps.txBuilder));
   v1.use(createSwapRouter({
@@ -133,6 +135,7 @@ export function createApp(deps: AppDependencies): express.Express {
     orderRepo: deps.orderRepo,
     candlestickService: deps.candlestickService,
     txBuilder: deps.txBuilder,
+    prisma: deps.prisma,
   }));
 
   app.use('/v1', v1);

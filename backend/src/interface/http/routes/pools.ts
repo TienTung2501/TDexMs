@@ -39,8 +39,18 @@ export function createPoolRouter(
         res.json({
           data: result.items.map((pool) => ({
             poolId: pool.id,
-            assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
-            assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
+            assetA: {
+              policyId: pool.assetAPolicyId,
+              assetName: pool.assetAAssetName,
+              ticker: pool.assetATicker ?? undefined,
+              decimals: pool.assetADecimals,
+            },
+            assetB: {
+              policyId: pool.assetBPolicyId,
+              assetName: pool.assetBAssetName,
+              ticker: pool.assetBTicker ?? undefined,
+              decimals: pool.assetBDecimals,
+            },
             reserveA: pool.reserveA.toString(),
             reserveB: pool.reserveB.toString(),
             totalLpTokens: pool.totalLpTokens.toString(),
@@ -73,8 +83,18 @@ export function createPoolRouter(
         const pool = await getPoolInfo.getById(req.params.poolId as string);
         res.json({
           poolId: pool.id,
-          assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
-          assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
+          assetA: {
+            policyId: pool.assetAPolicyId,
+            assetName: pool.assetAAssetName,
+            ticker: pool.assetATicker ?? undefined,
+            decimals: pool.assetADecimals,
+          },
+          assetB: {
+            policyId: pool.assetBPolicyId,
+            assetName: pool.assetBAssetName,
+            ticker: pool.assetBTicker ?? undefined,
+            decimals: pool.assetBDecimals,
+          },
           reserveA: pool.reserveA.toString(),
           reserveB: pool.reserveB.toString(),
           totalLpTokens: pool.totalLpTokens.toString(),

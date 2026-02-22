@@ -13,7 +13,7 @@ async function main() {
     process.exit(1);
   }
 
-  const seed = requireEnv('WALLET_SEED');
+  const seed = requireEnv(args.wallet || 'WALLET_SEED');
   const network = (process.env.NETWORK || 'Preprod') as 'Preprod' | 'Preview' | 'Mainnet';
   const lucid = await Lucid(
     new Blockfrost(requireEnv('BLOCKFROST_URL'), requireEnv('BLOCKFROST_PROJECT_ID')),

@@ -47,11 +47,16 @@ export interface CreatePoolTxParams {
 export interface CancelIntentTxParams {
   intentId: string;
   senderAddress: string;
+  escrowTxHash?: string;
+  escrowOutputIndex?: number;
 }
 
 export interface SettlementTxParams {
   intentUtxoRefs: Array<{ txHash: string; outputIndex: number }>;
-  poolUtxoRef: { txHash: string; outputIndex: number };
+  /** Pool UTxO reference (if known) — will be looked up on-chain by poolDbId if not provided */
+  poolUtxoRef?: { txHash: string; outputIndex: number };
+  /** DB pool ID — used to look up pool NFT on-chain if poolUtxoRef is not provided */
+  poolDbId?: string;
   solverAddress: string;
 }
 

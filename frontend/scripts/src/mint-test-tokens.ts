@@ -161,6 +161,10 @@ async function main() {
     tx = tx.attachMetadata(721, fullMetadata721 as any);
   }
 
+  // Must set validFrom so Native Script's InvalidBefore constraint is satisfied
+  // The scripts use small slot values (0-4), so any recent time works
+  tx = tx.validFrom(Date.now() - 120_000); // 2 minutes ago
+
   const completed = await tx.complete({ changeAddress: address });
   const signed = await completed.sign.withWallet().complete();
   const txHash = await signed.submit();

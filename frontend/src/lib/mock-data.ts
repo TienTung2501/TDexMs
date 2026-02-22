@@ -24,7 +24,7 @@ export const TOKENS: Record<string, Token> = {
     name: "Cardano",
     decimals: 6,
     logo: "₳",
-    image: "https://raw.githubusercontent.com/nicholasgasior/cardano-logos/master/ada.svg",
+    image: "https://ivory-deaf-guineafowl-894.mypinata.cloud/ipfs/bafkreif6tchtgcyxdk2xk2cxmkymbzc2i475ptq6qravf3fbkczxq3swva?pinataGatewayToken=ZF-2NSDMZeCixzMlrJNPo0-N-mcMc51IGpbOuHB5uduKMyNRGFVkOu9QbYj8HO13",
     color: "#0033ad",
   },
   tBTC: {

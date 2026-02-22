@@ -25,7 +25,7 @@ export function TradingFooter({ poolId }: TradingFooterProps) {
   const { orders: userOrders, loading: ordersLoading, refetch: refetchOrders } = useOrders({
     creator: isConnected ? address ?? undefined : undefined,
   });
-  const { intents: filledIntents, loading: tradesLoading } = useIntents({ status: "FILLED" });
+  const { intents: recentTrades, loading: tradesLoading } = useIntents({});
 
   const openIntents = useMemo(
     () => userIntents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING"),
@@ -117,7 +117,7 @@ export function TradingFooter({ poolId }: TradingFooterProps) {
         )}
         {tab === "trades" && (
           <MarketTradesTab
-            trades={filledIntents.slice(0, 20)}
+            trades={recentTrades.slice(0, 20)}
             loading={tradesLoading}
           />
         )}

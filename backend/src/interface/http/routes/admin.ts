@@ -6,6 +6,7 @@
  */
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
+import type { PrismaClient } from '@prisma/client';
 import { writeLimiter } from '../middleware/rate-limiter.js';
 import { env } from '../../../config/env.js';
 import type { IPoolRepository } from '../../../domain/ports/IPoolRepository.js';
@@ -21,6 +22,7 @@ export interface AdminDependencies {
   orderRepo: IOrderRepository;
   candlestickService: CandlestickService;
   txBuilder?: ITxBuilder;
+  prisma?: PrismaClient;
 }
 
 export function createAdminRouter(deps: AdminDependencies): Router {
@@ -303,6 +305,54 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           unsignedTx: result.unsignedTx,
           txHash: result.txHash,
           estimatedFee: result.estimatedFee.toString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Danger Zone: Reset Database ─────────────
+  router.post(
+    '/admin/reset-db',
+    writeLimiter,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { admin_address, confirm } = req.body;
+
+        // Require admin auth
+        if (!admin_address || admin_address !== env.ADMIN_ADDRESS) {
+          res.status(403).json({ error: 'Forbidden: admin_address does not match ADMIN_ADDRESS' });
+          return;
+        }
+
+        if (confirm !== 'RESET_ALL_DATA') {
+          res.status(400).json({ error: 'Must send confirm: "RESET_ALL_DATA"' });
+          return;
+        }
+
+        if (!deps.prisma) {
+          res.status(503).json({ error: 'Prisma client not available' });
+          return;
+        }
+
+        const prisma = deps.prisma;
+
+        // Delete in FK-safe order
+        const deleted: Record<string, number> = {};
+        deleted.swap = (await prisma.swap.deleteMany()).count;
+        deleted.poolHistory = (await prisma.poolHistory.deleteMany()).count;
+        deleted.candle = (await prisma.candle.deleteMany()).count;
+        deleted.priceTick = (await prisma.priceTick.deleteMany()).count;
+        deleted.protocolStats = (await prisma.protocolStats.deleteMany()).count;
+        deleted.order = (await prisma.order.deleteMany()).count;
+        deleted.intent = (await prisma.intent.deleteMany()).count;
+        deleted.pool = (await prisma.pool.deleteMany()).count;
+
+        res.json({
+          success: true,
+          message: 'All data deleted',
+          deleted,
         });
       } catch (err) {
         next(err);

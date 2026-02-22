@@ -23,7 +23,18 @@ interface TokenSelectProps {
   balances?: Record<string, number>;
 }
 
-/** Merge a raw pool asset into the TOKEN_LIST, using known metadata if available. */
+/** Decode a Cardano hex-encoded asset name to UTF-8. Returns hex if not valid UTF-8. */
+function hexToUtf8(hex: string): string {
+  if (!hex || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return hex;
+  try {
+    const bytes = new Uint8Array(hex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return hex;
+  }
+}
+
+/** Resolve a raw pool asset to a Token, hex-decoding the assetName and looking up known metadata. */
 function resolvePoolToken(
   policyId: string,
   assetName: string,
@@ -31,25 +42,35 @@ function resolvePoolToken(
   decimals?: number
 ): Token {
   // ADA
-  if (!policyId || policyId === "") return TOKENS.ADA;
-  // Known token by ticker
+  if (!policyId || policyId === "" || assetName === "lovelace") return TOKENS.ADA;
+  // Decode hex assetName for display (e.g. "484f534b59" → "HOSKY")
+  const decodedName = hexToUtf8(assetName);
+  const displayTicker = ticker || decodedName;
+  // Known token by explicit ticker
   if (ticker) {
     const known = Object.values(TOKENS).find(
       (t) => t.ticker.toUpperCase() === ticker.toUpperCase()
     );
     if (known) return known;
   }
+  // Match by decoded assetName as ticker
+  if (decodedName !== assetName) {
+    const byDecoded = Object.values(TOKENS).find(
+      (t) => t.ticker.toUpperCase() === decodedName.toUpperCase()
+    );
+    if (byDecoded) return byDecoded;
+  }
   // Known token by on-chain ID
   const byId = Object.values(TOKENS).find(
     (t) => t.policyId === policyId && t.assetName === assetName
   );
   if (byId) return byId;
-  // Unknown — construct minimal metadata
+  // Unknown — construct minimal metadata using decoded name
   return {
     policyId,
     assetName,
-    ticker: ticker || assetName.slice(0, 8).toUpperCase(),
-    name: ticker || "Unknown Token",
+    ticker: displayTicker.slice(0, 10),
+    name: displayTicker,
     decimals: decimals ?? 0,
     logo: "🪙",
   };
@@ -63,7 +84,7 @@ export function TokenSelectDialog({
   balances = {},
 }: TokenSelectProps) {
   const [search, setSearch] = useState("");
-  const [dynamicTokens, setDynamicTokens] = useState<Token[]>(TOKEN_LIST);
+  const [dynamicTokens, setDynamicTokens] = useState<Token[]>([TOKENS.ADA]);
   const [fetching, setFetching] = useState(false);
 
   // Fetch tokens from active pools whenever the dialog opens
@@ -73,10 +94,9 @@ export function TokenSelectDialog({
     listPools({ state: "ACTIVE", limit: "100" })
       .then((res) => {
         const seen = new Set<string>();
-        const merged: Token[] = [...TOKEN_LIST];
-
-        // Track tickers from the static list so we don't double-add
-        TOKEN_LIST.forEach((t) => seen.add(t.ticker.toUpperCase()));
+        // Start with ADA only — show only tokens that exist in real pools
+        const merged: Token[] = [TOKENS.ADA];
+        seen.add("ADA");
 
         for (const pool of res.data) {
           for (const asset of [pool.assetA, pool.assetB]) {
@@ -92,7 +112,8 @@ export function TokenSelectDialog({
             }
           }
         }
-        setDynamicTokens(merged);
+        // If no pools returned, fall back to static list so UI is never empty
+        setDynamicTokens(merged.length > 1 ? merged : TOKEN_LIST);
       })
       .catch(() => {
         // Silently fall back to static list on error
@@ -207,17 +228,17 @@ export function TokenButton({ token, onClick }: TokenButtonProps) {
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-secondary hover:bg-secondary/80 transition-colors text-sm font-medium whitespace-nowrap cursor-pointer"
+      className="flex shrink-0 items-center gap-2 px-3 py-1.5 rounded-xl bg-secondary hover:bg-secondary/80 transition-colors text-sm font-medium cursor-pointer"
     >
       {token ? (
         <>
           <TokenIcon token={token} size="sm" />
-          {token.ticker}
+          <span className="max-w-[90px] truncate">{token.ticker}</span>
         </>
       ) : (
-        <>Select token</>
+        <span className="whitespace-nowrap">Select token</span>
       )}
-      <ArrowDownUp className="h-3 w-3 opacity-50" />
+      <ArrowDownUp className="h-3 w-3 opacity-50 shrink-0" />
     </button>
   );
 }

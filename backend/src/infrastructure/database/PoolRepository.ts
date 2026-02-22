@@ -179,6 +179,13 @@ export class PoolRepository implements IPoolRepository {
     });
   }
 
+  async updateState(id: string, state: string): Promise<void> {
+    await this.prisma.pool.update({
+      where: { id },
+      data: { state: state as never },
+    });
+  }
+
   async insertHistory(params: {
     poolId: string;
     reserveA: bigint;

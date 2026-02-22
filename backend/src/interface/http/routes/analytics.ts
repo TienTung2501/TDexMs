@@ -100,7 +100,7 @@ export function createAnalyticsRouter(): Router {
           const now = new Date();
           const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
           const oldCandle = await prisma.candle.findFirst({
-            where: { poolId: bestPool.id, interval: '1h', openTime: { lte: yesterday } },
+            where: { poolId: bestPool.id, interval: 'D1', openTime: { lte: yesterday } },
             orderBy: { openTime: 'desc' },
           }).catch(() => null);
           if (oldCandle && Number(oldCandle.open) > 0 && price > 0) {

@@ -7,10 +7,12 @@ import type { Request, Response, NextFunction } from 'express';
 import { writeLimiter } from '../middleware/rate-limiter.js';
 import type { BlockfrostClient } from '../../../infrastructure/cardano/BlockfrostClient.js';
 import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.js';
+import type { IPoolRepository } from '../../../domain/ports/IPoolRepository.js';
 
 export function createTxRouter(
   blockfrost: BlockfrostClient,
   intentRepo: IIntentRepository,
+  poolRepo?: IPoolRepository,
 ): Router {
   const router = Router();
 
@@ -66,9 +68,10 @@ export function createTxRouter(
     writeLimiter,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { txHash, intentId, action } = req.body as {
+        const { txHash, intentId, poolId, action } = req.body as {
           txHash?: string;
           intentId?: string;
+          poolId?: string;
           action?: string;
         };
 
@@ -83,8 +86,14 @@ export function createTxRouter(
 
         // If an intentId was provided, update its status
         if (intentId) {
-          const newStatus = action === 'cancel' ? 'CANCELLED' : 'ACTIVE';
+          const isCancel = action === 'cancel' || action === 'cancel_intent';
+          const newStatus = isCancel ? 'CANCELLED' : 'ACTIVE';
           await intentRepo.updateStatus(intentId, newStatus);
+        }
+
+        // If a poolId was provided with burn action, mark pool INACTIVE
+        if (poolId && action === 'burn_pool' && poolRepo) {
+          await poolRepo.updateState(poolId, 'INACTIVE');
         }
 
         res.json({ status: 'ok', txHash });

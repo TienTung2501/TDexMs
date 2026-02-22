@@ -70,9 +70,9 @@ export class IntentCollector {
       const intent = await this.parseEscrowDatum(utxo);
       if (!intent) continue;
 
-      // Skip expired intents
+      // Skip expired intents (deadline already passed)
       if (intent.deadline <= now) {
-        this.logger.debug({ key, deadline: intent.deadline.toString() }, 'Skipping expired intent');
+        this.logger.debug({ key, deadline: intent.deadline.toString(), now: now.toString() }, 'Skipping expired intent');
         continue;
       }
 

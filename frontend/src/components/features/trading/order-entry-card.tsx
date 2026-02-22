@@ -41,7 +41,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
 
   const [activeTab, setActiveTab] = useState<OrderTab>("LIMIT");
   const [inputToken, setInputToken] = useState<Token>(TOKENS.ADA);
-  const [outputToken, setOutputToken] = useState<Token>(TOKENS.HOSKY);
+  const [outputToken, setOutputToken] = useState<Token>(TOKENS.tBTC);
   const [selectingFor, setSelectingFor] = useState<"input" | "output" | null>(null);
 
   // Common
@@ -58,22 +58,30 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
 
   const [txResult, setTxResult] = useState<string | null>(null);
 
-  // Calculate price from pool
+  // Use policyId for pool matching (tickers can be ambiguous with hex names)
   const pool = useMemo(() => {
+    const matchToken = (poolToken: { policyId: string; ticker?: string }, t: Token) =>
+      poolToken.policyId === t.policyId ||
+      (poolToken.policyId === '' && t.policyId === '' &&
+        poolToken.ticker?.toLowerCase() === t.ticker?.toLowerCase());
     return (pools || []).find(
       (p) =>
-        (p.assetA.ticker === inputToken.ticker && p.assetB.ticker === outputToken.ticker) ||
-        (p.assetB.ticker === inputToken.ticker && p.assetA.ticker === outputToken.ticker),
+        (matchToken(p.assetA, inputToken) && matchToken(p.assetB, outputToken)) ||
+        (matchToken(p.assetB, inputToken) && matchToken(p.assetA, outputToken)),
     );
-  }, [pools, inputToken.ticker, outputToken.ticker]);
+  }, [pools, inputToken, outputToken]);
 
   const currentPrice = useMemo(() => {
     if (!pool) return 0;
-    const isForward = pool.assetA.ticker === inputToken.ticker;
-    return isForward
-      ? pool.reserveB / pool.reserveA
-      : pool.reserveA / pool.reserveB;
-  }, [pool, inputToken.ticker]);
+    const isForward =
+      pool.assetA.policyId === inputToken.policyId ||
+      (pool.assetA.policyId === '' && inputToken.policyId === '' &&
+        pool.assetA.ticker?.toLowerCase() === inputToken.ticker?.toLowerCase());
+    // Reserves are in base units — convert to human-readable for price display
+    const reserveAHuman = pool.reserveA / Math.pow(10, pool.assetA.decimals ?? 6);
+    const reserveBHuman = pool.reserveB / Math.pow(10, pool.assetB.decimals ?? 0);
+    return isForward ? reserveBHuman / reserveAHuman : reserveAHuman / reserveBHuman;
+  }, [pool, inputToken]);
 
   const tabs: { key: OrderTab; label: string; icon: React.ElementType }[] = [
     { key: "LIMIT", label: "Limit", icon: Target },

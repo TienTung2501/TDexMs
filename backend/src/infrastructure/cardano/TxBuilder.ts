@@ -54,6 +54,19 @@ import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+/** Integer square root using Newton's method — matches Aiken stdlib math.sqrt exactly */
+function bigIntSqrt(n: bigint): bigint {
+  if (n < 0n) throw new Error('Square root of negative number');
+  if (n === 0n) return 0n;
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+
 // â”€â”€â”€ Plutus Blueprint Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface BlueprintValidator {
@@ -492,6 +505,22 @@ export class TxBuilder implements ITxBuilder {
     return this.lucidPromise;
   }
 
+  /** Get actual chain time (POSIX ms) from Blockfrost latest block.
+   *  Falls back to Date.now() if Blockfrost API fails. */
+  private async getChainTimeMs(): Promise<number> {
+    try {
+      const resp = await fetch(`${this.blockfrostUrl}/blocks/latest`, {
+        headers: { project_id: this.blockfrostProjectId },
+      });
+      if (resp.ok) {
+        const block = (await resp.json()) as { time: number };
+        // Blockfrost returns time in POSIX seconds
+        return block.time * 1000;
+      }
+    } catch { /* fallback */ }
+    return Date.now();
+  }
+
   private getBlueprint(): PlutusBlueprint {
     if (!this.blueprint) {
       this.blueprint = loadBlueprint();
@@ -557,6 +586,18 @@ export class TxBuilder implements ITxBuilder {
       type: 'PlutusV3' as const,
       script: applyDoubleCborEncoding(settingsBp.compiledCode),
     };
+  }
+
+  /** Get the resolved escrow script address (computed from blueprint). */
+  getEscrowAddress(): string {
+    const r = this.getResolved();
+    return r.escrowAddr;
+  }
+
+  /** Get the resolved pool script address (computed from blueprint). */
+  getPoolAddress(): string {
+    const r = this.getResolved();
+    return r.poolAddr;
   }
 
   /** Build or retrieve the escrow validator + intent minting policy. */
@@ -685,13 +726,32 @@ export class TxBuilder implements ITxBuilder {
       const userUtxos = await lucid.utxosAt(params.senderAddress);
       lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
 
-      // Find all UTxOs at escrow address
-      const escrowUtxos = await lucid.utxosAt(escrowAddr);
+      // Find the specific escrow UTxO for this intent
+      let escrowUtxo: LucidUTxO | undefined;
 
-      // Find the one with an intent token belonging to this policy
-      const escrowUtxo = escrowUtxos.find((u) =>
-        Object.keys(u.assets).some((unit) => unit.startsWith(intentPolicyId)),
-      );
+      // Prefer direct lookup by UTxO reference (escrowTxHash#outputIndex)
+      if (params.escrowTxHash && params.escrowOutputIndex !== undefined) {
+        const utxosByRef = await lucid.utxosByOutRef([{
+          txHash: params.escrowTxHash,
+          outputIndex: params.escrowOutputIndex,
+        }]);
+        escrowUtxo = utxosByRef[0];
+        this.logger.info(
+          { txHash: params.escrowTxHash, outputIndex: params.escrowOutputIndex, found: !!escrowUtxo },
+          'Looked up escrow UTxO by ref',
+        );
+      }
+
+      // Fallback: scan all UTxOs at escrow address for any intent token
+      if (!escrowUtxo) {
+        const escrowUtxos = await lucid.utxosAt(escrowAddr);
+        escrowUtxo = escrowUtxos.find((u) =>
+          Object.keys(u.assets).some((unit) => unit.startsWith(intentPolicyId)),
+        );
+        if (escrowUtxo) {
+          this.logger.warn('Used fallback scan to find escrow UTxO — escrowTxHash not set in DB');
+        }
+      }
 
       if (!escrowUtxo) {
         throw new ChainError(
@@ -763,11 +823,7 @@ export class TxBuilder implements ITxBuilder {
       const lpTokenUnit = toUnit(r.lpPolicyId, poolNftNameHex);
 
       // Initial LP tokens: sqrt(a * b) - 1000 (Minimum Liquidity locked)
-      const sqrtAB = BigInt(
-        Math.floor(
-          Math.sqrt(Number(params.initialAmountA * params.initialAmountB)),
-        ),
-      );
+      const sqrtAB = bigIntSqrt(params.initialAmountA * params.initialAmountB);
       const initialLp = sqrtAB - 1000n;
       if (initialLp <= 0n) {
         throw new ChainError('Initial liquidity too low');
@@ -968,9 +1024,7 @@ export class TxBuilder implements ITxBuilder {
       let lpToMint: bigint;
       if (totalLpOld === 0n) {
         // Initial deposit: sqrt(depositA * depositB) - 1000
-        const sqrtAB = BigInt(
-          Math.floor(Math.sqrt(Number(params.amountA * params.amountB))),
-        );
+        const sqrtAB = bigIntSqrt(params.amountA * params.amountB);
         lpToMint = sqrtAB - 1000n;
       } else {
         // Subsequent deposit: min(totalLp * depositA / reserveA, totalLp * depositB / reserveB)
@@ -1008,9 +1062,7 @@ export class TxBuilder implements ITxBuilder {
       // So we use raw values directly.
 
       // Compute new root K = floor(sqrt(reserveA_out * reserveB_out))
-      const newRootK = BigInt(
-        Math.floor(Math.sqrt(Number(newReserveA * newReserveB))),
-      );
+      const newRootK = bigIntSqrt(newReserveA * newReserveB);
 
       // Build updated pool datum
       const updatedPoolDatum = Data.to(
@@ -1148,9 +1200,7 @@ export class TxBuilder implements ITxBuilder {
       const newReserveB = reserveBIn - withdrawB;
 
       // Compute new root K
-      const newRootK = BigInt(
-        Math.floor(Math.sqrt(Number(newReserveA * newReserveB))),
-      );
+      const newRootK = bigIntSqrt(newReserveA * newReserveB);
 
       // Build updated pool datum
       const updatedPoolDatum = Data.to(
@@ -1233,15 +1283,33 @@ export class TxBuilder implements ITxBuilder {
         throw new ChainError('No escrow UTxOs found for settlement');
       }
 
-      // Fetch pool UTxO
-      const poolRef = params.poolUtxoRef;
-      const poolUtxos = await lucid.utxosByOutRef([
-        { txHash: poolRef.txHash, outputIndex: poolRef.outputIndex },
-      ]);
-      if (poolUtxos.length === 0) {
-        throw new ChainError('Pool UTxO not found for settlement');
+      // Fetch pool UTxO — try direct ref first, then scan pool address for NFT match
+      let poolUtxo: LucidUTxO | undefined;
+
+      if (params.poolUtxoRef && params.poolUtxoRef.txHash.length === 64) {
+        // Direct lookup by UTxO reference
+        const poolUtxos = await lucid.utxosByOutRef([
+          { txHash: params.poolUtxoRef.txHash, outputIndex: params.poolUtxoRef.outputIndex },
+        ]);
+        poolUtxo = poolUtxos[0];
       }
-      const poolUtxo = poolUtxos[0];
+
+      if (!poolUtxo) {
+        // Fallback: scan all UTxOs at pool validator address for any pool NFT
+        this.logger.info('Pool UTxO not found by ref — scanning pool address for NFT match');
+        const allPoolUtxos = await lucid.utxosAt(r.poolAddr);
+        // Find UTxOs with a pool NFT (starts with poolNftPolicyId)
+        poolUtxo = allPoolUtxos.find((u) =>
+          Object.keys(u.assets).some((unit) => unit.startsWith(r.poolNftPolicyId)),
+        );
+        if (!poolUtxo) {
+          throw new ChainError(`Pool UTxO not found at pool address ${r.poolAddr}`);
+        }
+        this.logger.info(
+          { poolUtxoRef: `${poolUtxo.txHash}#${poolUtxo.outputIndex}` },
+          'Found pool UTxO by scanning pool address',
+        );
+      }
 
       // Parse pool datum
       // PoolDatum = Constr(0, [pool_nft, asset_a, asset_b, total_lp, fee_num, fees_a, fees_b, root_k])
@@ -1473,9 +1541,7 @@ export class TxBuilder implements ITxBuilder {
         .attach.SpendingValidator(r.poolScript);
 
       // Build updated pool datum
-      const newRootK = BigInt(
-        Math.floor(Math.sqrt(Number(reserveA * reserveB))),
-      );
+      const newRootK = bigIntSqrt(reserveA * reserveB);
       const updatedPoolDatum = Data.to(
         new Constr(0, [
           pdf[0],          // pool_nft (unchanged)
@@ -1516,19 +1582,68 @@ export class TxBuilder implements ITxBuilder {
         tx = tx.pay.ToAddress(payment.address, payment.assets);
       }
 
+      // Use actual chain time for validTo — critical when local clock is skewed.
+      // Also cap at earliest escrow deadline - 60s to satisfy check_before_deadline.
+      const chainTimeMs = await this.getChainTimeMs();
+      let validToMs = chainTimeMs + 15 * 60 * 1000; // 15min from chain tip
+
+      // Find earliest deadline among escrow UTxOs and cap validTo
+      for (const eu of escrowUtxos) {
+        const ed = Data.from(eu.datum!) as Constr<Data>;
+        const deadlineMs = Number(ed.fields[6] as bigint);
+        if (deadlineMs > 0 && validToMs >= deadlineMs) {
+          validToMs = deadlineMs - 60_000; // 1 minute before deadline
+        }
+      }
+
+      this.logger.info({
+        chainTimeMs, validToMs, localTimeMs: Date.now(),
+      }, 'Settlement TX timing (using chain time)');
+
       tx = tx
         .addSigner(params.solverAddress)
-        .validTo(Date.now() + 15 * 60 * 1000); // 15min validity
+        .validTo(validToMs);
 
-      const completed = await tx.complete({
-        changeAddress: params.solverAddress,
-      });
+      // ─── DEBUG: Log all settlement TX details ───
+      this.logger.info({
+        escrowCount: escrowUtxos.length,
+        poolUtxoRef: `${poolUtxo.txHash}#${poolUtxo.outputIndex}`,
+        poolReserves: { reserveA: reserveA.toString(), reserveB: reserveB.toString() },
+        protocolFees: { a: protocolFeesA.toString(), b: protocolFeesB.toString() },
+        newRootK: newRootK.toString(),
+        burnAssets: Object.fromEntries(Object.entries(burnAssets).map(([k, v]) => [k, v.toString()])),
+        ownerPayments: ownerPayments.map(p => ({
+          address: p.address,
+          assets: Object.fromEntries(Object.entries(p.assets).map(([k, v]) => [k, v.toString()])),
+        })),
+        overallDirection,
+        solverAddress: params.solverAddress,
+        intentPolicyId,
+      }, 'Settlement TX details before complete()');
 
-      return {
-        unsignedTx: completed.toCBOR(),
-        txHash: completed.toHash(),
-        estimatedFee: 0n,
-      };
+      try {
+        const completed = await tx.complete({
+          changeAddress: params.solverAddress,
+        });
+
+        return {
+          unsignedTx: completed.toCBOR(),
+          txHash: completed.toHash(),
+          estimatedFee: 0n,
+        };
+      } catch (completeError) {
+        const errMsg = completeError instanceof Error ? completeError.message : String(completeError);
+        this.logger.error({
+          error: errMsg,
+          escrowUtxos: escrowUtxos.map(u => ({
+            ref: `${u.txHash}#${u.outputIndex}`,
+            assets: Object.fromEntries(Object.entries(u.assets).map(([k, v]) => [k, v.toString()])),
+            datumHex: u.datum?.substring(0, 120) + '...',
+          })),
+          poolDatum: poolUtxo.datum?.substring(0, 120) + '...',
+        }, 'tx.complete() FAILED — detailed context');
+        throw completeError;
+      }
     } catch (error) {
       if (error instanceof ChainError) throw error;
       const msg = error instanceof Error ? error.message : String(error);
@@ -2326,9 +2441,7 @@ export class TxBuilder implements ITxBuilder {
       const newRemainingBudget = remainingBudget - amountConsumed;
 
       // Build pool datum update
-      const newRootK = BigInt(
-        Math.floor(Math.sqrt(Number(reserveA * reserveB))),
-      );
+      const newRootK = bigIntSqrt(reserveA * reserveB);
       const updatedPoolDatum = Data.to(
         new Constr(0, [
           pdf[0], pdf[1], pdf[2], pdf[3],

@@ -66,6 +66,18 @@ async function main() {
       const txHash = await signed.submit();
       console.log(`\n✅ Pool burned! TX: ${txHash}`);
       console.log(`   View: https://preprod.cardanoscan.io/transaction/${txHash}`);
+
+      // Confirm to backend to mark pool INACTIVE
+      console.log('\nConfirming burn in DB...');
+      const confirmResult = await apiFetch<any>('/tx/confirm', {
+        method: 'POST',
+        body: JSON.stringify({
+          txHash,
+          poolId,
+          action: 'burn_pool',
+        }),
+      });
+      console.log('DB updated:', confirmResult);
     } else {
       console.log('⚠️ No unsigned TX returned');
     }

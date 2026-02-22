@@ -72,6 +72,8 @@ export class CreateIntent {
       maxPartialFills: input.partialFill ? 5 : 1,
       fillCount: 0,
       remainingInput: BigInt(input.inputAmount),
+      escrowTxHash: txResult.txHash,
+      escrowOutputIndex: 0,  // Escrow output is always the first output in the TX
       createdAt: new Date(),
       updatedAt: new Date(),
     });

@@ -35,6 +35,8 @@ export class CancelIntent {
     const txResult = await this.txBuilder.buildCancelIntentTx({
       intentId: input.intentId,
       senderAddress: input.senderAddress,
+      escrowTxHash: intent.escrowTxHash,
+      escrowOutputIndex: intent.escrowOutputIndex,
     });
 
     // R-08 fix: Save CANCELLING (not CANCELLED) to DB when TX is built.

@@ -81,37 +81,46 @@ export function SwapCard({
   const [quoteLoading, setQuoteLoading] = useState(false);
 
 
-  // Find pool
+  // Find pool — match by policyId (stable) then ticker as fallback
   const pool = useMemo(() => {
     const poolList = externalPools || [];
+    const matchToken = (poolToken: { policyId: string; ticker?: string }, t: { policyId: string; ticker?: string }) =>
+      poolToken.policyId === t.policyId ||
+      (poolToken.ticker && t.ticker && poolToken.ticker.toUpperCase() === t.ticker.toUpperCase());
     return poolList.find(
       (p) =>
-        (p.assetA.ticker === inputToken.ticker &&
-          p.assetB.ticker === outputToken.ticker) ||
-        (p.assetB.ticker === inputToken.ticker &&
-          p.assetA.ticker === outputToken.ticker)
+        (matchToken(p.assetA, inputToken) && matchToken(p.assetB, outputToken)) ||
+        (matchToken(p.assetB, inputToken) && matchToken(p.assetA, outputToken))
     );
-  }, [externalPools, inputToken.ticker, outputToken.ticker]);
+  }, [externalPools, inputToken, outputToken]);
 
   // Calculate output
   const quote = useMemo(() => {
     if (!pool || !inputAmount || parseFloat(inputAmount) <= 0)
       return { output: 0, priceImpact: 0, fee: 0, rate: 0 };
 
-    const amountIn = parseFloat(inputAmount);
-    const isForward = pool.assetA.ticker === inputToken.ticker;
+    // Reserves are stored in base units (lovelace for ADA, etc.).
+    // Convert user input to base units so AMM arithmetic stays consistent.
+    const inDecimals = inputToken.decimals ?? 0;
+    const outDecimals = outputToken.decimals ?? 0;
+    const amountInBase = parseFloat(inputAmount) * Math.pow(10, inDecimals);
+
+    const isForward = pool.assetA.policyId === inputToken.policyId ||
+      (pool.assetA.policyId === '' && inputToken.policyId === '' &&
+        pool.assetA.ticker?.toUpperCase() === inputToken.ticker?.toUpperCase());
     const reserveIn = isForward ? pool.reserveA : pool.reserveB;
     const reserveOut = isForward ? pool.reserveB : pool.reserveA;
 
-    const feeAmount = amountIn * (pool.feePercent / 100);
-    const amountInAfterFee = amountIn - feeAmount;
-    const output =
-      (amountInAfterFee * reserveOut) / (reserveIn + amountInAfterFee);
+    const feeAmount = amountInBase * (pool.feePercent / 100);
+    const amountInAfterFee = amountInBase - feeAmount;
+    const outputBase = (amountInAfterFee * reserveOut) / (reserveIn + amountInAfterFee);
+    // Convert output back to human-readable units
+    const output = outputBase / Math.pow(10, outDecimals);
     const priceImpact = (amountInAfterFee / (reserveIn + amountInAfterFee)) * 100;
-    const rate = output / amountIn;
+    const rate = output / parseFloat(inputAmount);
 
-    return { output, priceImpact, fee: feeAmount, rate };
-  }, [pool, inputAmount, inputToken.ticker]);
+    return { output, priceImpact, fee: feeAmount / Math.pow(10, inDecimals), rate };
+  }, [pool, inputAmount, inputToken, outputToken]);
 
   // B8 fix: Fetch server-side quote with debounce (uses RouteOptimizer for multi-hop)
   useEffect(() => {
@@ -133,7 +142,7 @@ export function SwapCard({
         inputAsset,
         outputAsset,
         inputAmount,
-        slippage: String(slippage),
+        slippage: String(Math.round(slippage * 100)),   // Convert % → basis points (0.5% → 50 BPS)
       })
         .then((q) => setServerQuote(q))
         .catch(() => setServerQuote(null))
@@ -164,12 +173,10 @@ export function SwapCard({
     setInputAmount("");
   }, [inputToken, outputToken]);
 
-  // Input balance
+  // Input balance — wallet-provider already returns human-readable amounts,
+  // so no further unit conversion is needed here.
   const inputBalance = useMemo(() => {
-    const raw = balances[inputToken.ticker] || 0;
-    return inputToken.decimals > 0
-      ? raw / Math.pow(10, inputToken.decimals)
-      : raw;
+    return (balances[inputToken.ticker] ?? balances[inputToken.ticker.toLowerCase()] ?? 0) as number;
   }, [balances, inputToken]);
 
   // Handle swap — submit intent to backend via centralized TX flow
@@ -184,20 +191,37 @@ export function SwapCard({
       outputToken.policyId === ""
         ? "lovelace"
         : `${outputToken.policyId}.${outputToken.assetName}`;
-    const minOut = effectiveMinOutput;
-    const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
+
+    // Convert to base units (lovelace for ADA) — backend expects positive integer string
+    const inDecimals = inputToken.decimals ?? 0;
+    const inputAmountBase = String(Math.round(parseFloat(inputAmount) * Math.pow(10, inDecimals)));
+
+    // minOutput must also be in base units
+    const outDecimals = outputToken.decimals ?? 0;
+    let minOut: string;
+    if (serverQuote) {
+      // Server quote already returns base units
+      minOut = serverQuote.minOutput;
+    } else {
+      const minOutHuman = quote.output * (1 - slippage / 100);
+      minOut = String(Math.floor(minOutHuman * Math.pow(10, outDecimals)));
+    }
+
+    // Backend expects deadline as Unix timestamp in milliseconds (z.number().int().positive())
+    const deadline = Date.now() + 30 * 60_000;
 
     await execute(
       () =>
         createIntent({
           senderAddress: address,
           inputAsset,
-          inputAmount: inputAmount,
+          inputAmount: inputAmountBase,
           outputAsset,
           minOutput: minOut,
           deadline,
           partialFill: false,
           changeAddress: changeAddress || address,
+          ...(serverQuote?.quoteId ? { quoteId: serverQuote.quoteId } : {}),
         }),
       {
         buildingMsg: "Building swap transaction...",
@@ -207,7 +231,7 @@ export function SwapCard({
         onSuccess: () => setInputAmount(""),
       },
     );
-  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, effectiveMinOutput, slippage, execute]);
+  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote, serverQuote, slippage, execute]);
 
   // Price impact color
   const impactColor =
@@ -282,7 +306,7 @@ export function SwapCard({
                 value={inputAmount}
                 onChange={(e) => setInputAmount(e.target.value)}
                 placeholder="0.00"
-                className="flex-1 bg-transparent text-2xl font-semibold outline-none placeholder:text-muted-foreground/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                className="flex-1 w-full min-w-0 bg-transparent text-2xl font-semibold outline-none placeholder:text-muted-foreground/50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
               />
               <TokenButton
                 token={inputToken}

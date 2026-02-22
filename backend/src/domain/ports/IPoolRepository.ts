@@ -52,6 +52,9 @@ export interface IPoolRepository {
   /** Update 24h volume and fees */
   updateStats(id: string, volume24h: bigint, fees24h: bigint, tvlAda: bigint): Promise<void>;
 
+  /** Update pool state */
+  updateState(id: string, state: PoolState): Promise<void>;
+
   /** Insert a PoolHistory snapshot (called after deposit/withdraw/settlement) */
   insertHistory(params: {
     poolId: string;
