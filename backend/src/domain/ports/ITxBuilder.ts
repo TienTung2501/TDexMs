@@ -125,23 +125,6 @@ export interface BurnPoolNFTTxParams {
   poolId: string;
 }
 
-export interface DirectSwapTxParams {
-  /** User address initiating the swap */
-  senderAddress: string;
-  /** Address to receive change */
-  changeAddress: string;
-  /** Asset being sold */
-  inputAssetId: string;
-  /** Amount of input asset */
-  inputAmount: bigint;
-  /** Asset being bought */
-  outputAssetId: string;
-  /** Minimum acceptable output (slippage protection) */
-  minOutput: bigint;
-  /** TX validity deadline (POSIX ms) */
-  deadline: number;
-}
-
 export interface ExecuteOrderTxParams {
   /** Solver/keeper address that signs and pays fees */
   solverAddress: string;
@@ -219,8 +202,6 @@ export interface ITxBuilder {
   /** Build a TX to burn a pool NFT (pool closure) — admin only */
   buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult>;
 
-  /** Build a direct swap TX against a pool (no escrow) */
-  buildDirectSwapTx(params: DirectSwapTxParams): Promise<BuildTxResult>;
 
   /** Build a TX for solver to execute a pending order against a pool */
   buildExecuteOrderTx(params: ExecuteOrderTxParams): Promise<BuildTxResult>;

@@ -2,6 +2,9 @@
  * Chain Sync Service
  * Monitors the blockchain for relevant events and updates local state.
  * Uses Blockfrost API instead of self-hosted Kupo.
+ *
+ * Fixed: B2 — uses pool validator address + getUtxosByAsset instead of
+ *        passing policyId directly to getUtxos (which expects Bech32).
  */
 import { getLogger } from '../../config/logger.js';
 import type { PrismaClient } from '@prisma/client';
@@ -15,6 +18,7 @@ export class ChainSync {
   constructor(
     private readonly blockfrost: BlockfrostClient,
     private readonly prisma: PrismaClient,
+    private readonly poolValidatorAddress: string,
     syncIntervalMs = 30_000, // 30s default — conservative for free tier
   ) {
     this.logger = getLogger().child({ service: 'chain-sync' });
@@ -47,13 +51,23 @@ export class ChainSync {
   private async syncPools(): Promise<void> {
     const pools = await this.prisma.pool.findMany({
       where: { state: 'ACTIVE' },
-      select: { id: true, txHash: true, outputIndex: true, poolNftPolicyId: true },
+      select: { id: true, txHash: true, outputIndex: true, poolNftPolicyId: true, poolNftAssetName: true },
     });
 
     for (const pool of pools) {
       try {
-        // Query current pool UTxO via Blockfrost
-        const utxos = await this.blockfrost.getUtxos(pool.poolNftPolicyId);
+        // B2 fix: Query pool validator address and filter by NFT asset
+        // instead of passing policyId (hex) to getUtxos (which expects Bech32)
+        const utxos = this.poolValidatorAddress
+          ? await this.blockfrost.getUtxosByAsset(
+              this.poolValidatorAddress,
+              pool.poolNftPolicyId,
+              pool.poolNftAssetName,
+            )
+          : await this.blockfrost.getAssetUtxos(
+              pool.poolNftPolicyId,
+              pool.poolNftAssetName,
+            );
 
         if (utxos.length > 0) {
           const poolUtxo = utxos[0]!;
@@ -65,8 +79,6 @@ export class ChainSync {
               'Pool state updated',
             );
 
-            // Update pool with new UTxO reference
-            // In full implementation, also parse datum to update reserves
             await this.prisma.pool.update({
               where: { id: pool.id },
               data: {

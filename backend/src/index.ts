@@ -186,6 +186,8 @@ async function main(): Promise<void> {
     wsServer,
     txBuilder,
     chainProvider,
+    poolRepo,
+    candlestickService,
   );
 
   // ──────────────────────────────────────────────
@@ -193,7 +195,8 @@ async function main(): Promise<void> {
   // ──────────────────────────────────────────────
 
   // Chain sync — polls Blockfrost for pool state every 30s
-  const chainSync = new ChainSync(blockfrost, prisma, 30_000);
+  // B2 fix: pass pool validator address so ChainSync queries the correct Bech32 address
+  const chainSync = new ChainSync(blockfrost, prisma, env.POOL_SCRIPT_ADDRESS, 30_000);
 
   // Price aggregation cron — aggregates ticks → candles
   const priceCron = new PriceAggregationCron(

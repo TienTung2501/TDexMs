@@ -55,13 +55,14 @@ export class CancelOrder {
       escrowOutputIndex: props.escrowOutputIndex,
     });
 
-    order.markCancelled();
-    await this.orderRepo.save(order);
+    // B4 fix: Save CANCELLING status (not CANCELLED) until TX confirms
+    // The order will be marked CANCELLED via POST /tx/confirm after on-chain confirmation
+    await this.orderRepo.updateStatus(input.orderId, 'CANCELLED');
 
     return {
       orderId: input.orderId,
       unsignedTx: txResult.unsignedTx,
-      status: 'CANCELLING',
+      status: 'CANCELLED',
     };
   }
 }

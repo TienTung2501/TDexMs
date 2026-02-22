@@ -47,8 +47,18 @@ console.log('');
 const T_WALLET_SEED_1 = "daring hybrid aerobic pair history dentist park race nothing twist leave autumn notice animal spring safe render matter exact wasp hole cotton drift evil";
 const T_WALLET_SEED_2 = "bleak gentle smart accident squeeze truth country cluster report fuel table rural fan sleep melt neglect goddess speed avoid place vibrant area strong degree";
 
+const MNEMONIC0 = "advice august trigger tired catch visa deposit squirrel metal roast quick hotel forget electric acid prize fog casino safe admit author sick morning concert";
+const MNEMONIC2 = "absent cruise crack series beef equip leisure feature wash first now veteran more dentist will dose antenna eight aisle lemon climb ramp vivid uphold";
+const MNEMONIC3 = "spin slot sugar denial design planet rug sell trial tube lizard exit solution wife orbit autumn truck energy adult shaft goose absurd loyal radio";
+const MNEMONIC4 = "cinnamon torch deputy open satoshi sick sword leisure place dynamic feature cream urban brave floor tackle obtain universe ensure anchor level talk assist rescue";
+const MNEMONIC1 = "orbit turkey plastic december corn move idle satisfy skate sleep tortoise struggle unhappy alert dust draft park captain grocery shock fix pond scout gain";
 const w1Preprod = walletFromSeed(T_WALLET_SEED_1, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
 const w2Preprod = walletFromSeed(T_WALLET_SEED_2, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+const v3Preprod = walletFromSeed(MNEMONIC0, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+const v3Preprod2 = walletFromSeed(MNEMONIC2, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+const v3Preprod3 = walletFromSeed(MNEMONIC3, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+const v3Preprod4 = walletFromSeed(MNEMONIC4, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+const v3Preprod1 = walletFromSeed(MNEMONIC1, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
 
 console.log('── WALLET 1 (T_WALLET_SEED) ──');
 console.log('  Preprod Address:  ', w1Preprod.address);
@@ -59,4 +69,11 @@ console.log('');
 
 console.log('── For .env (Preprod) ──');
 console.log(`  ADMIN_ADDRESS=${w1Preprod.address}`);
+console.log('');
+console.log('── For .env (Preprod) ──');
+console.log(`  MNEMONIC0_ADDRESS=${v3Preprod.address}`);
+console.log(`  MNEMONIC1_ADDRESS=${v3Preprod1.address}`);
+console.log(`  MNEMONIC2_ADDRESS=${v3Preprod2.address}`);
+console.log(`  MNEMONIC3_ADDRESS=${v3Preprod3.address}`);
+console.log(`  MNEMONIC4_ADDRESS=${v3Preprod4.address}`);
 console.log('');

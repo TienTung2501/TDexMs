@@ -128,7 +128,14 @@ export class ReclaimKeeperCron {
     try {
       await this.reclaimExpiredIntents();
     } catch (err) {
-      this.logger.error({ err }, 'On-chain reclaim batch failed');
+      this.logger.error({ err }, 'On-chain intent reclaim batch failed');
+    }
+
+    // B7 fix: also reclaim expired orders on-chain
+    try {
+      await this.reclaimExpiredOrders();
+    } catch (err) {
+      this.logger.error({ err }, 'On-chain order reclaim batch failed');
     }
   }
 
@@ -198,5 +205,67 @@ export class ReclaimKeeperCron {
       { intentId: intent.id, txHash: submittedHash },
       'Intent reclaimed successfully',
     );
+  }
+
+  /**
+   * B7 fix: Find expired orders with escrow UTxOs and build+submit cancel TXs.
+   */
+  private async reclaimExpiredOrders(): Promise<void> {
+    const { items: expiredOrders } = await this.orderRepo.findMany({
+      status: 'EXPIRED',
+      limit: 10,
+    });
+
+    const reclaimable = expiredOrders.filter(
+      (order) => {
+        const props = order.toProps();
+        return props.escrowTxHash && props.escrowOutputIndex !== undefined;
+      },
+    );
+
+    if (reclaimable.length === 0) return;
+
+    this.logger.info(
+      { count: reclaimable.length },
+      'Found expired orders with escrow UTxOs — attempting reclaim',
+    );
+
+    const { address: keeperAddress } = await this.getKeeperLucid();
+
+    for (const order of reclaimable) {
+      try {
+        const props = order.toProps();
+        this.logger.info({ orderId: order.id }, 'Building order cancel TX for reclaim');
+
+        const { unsignedTx } = await this.txBuilder.buildCancelOrderTx({
+          orderId: order.id,
+          senderAddress: keeperAddress,
+          escrowTxHash: props.escrowTxHash!,
+          escrowOutputIndex: props.escrowOutputIndex!,
+        });
+
+        const { lucid } = await this.getKeeperLucid();
+        const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
+        const submittedHash = await signed.submit();
+
+        this.logger.info(
+          { orderId: order.id, txHash: submittedHash },
+          'Order reclaim TX submitted',
+        );
+
+        await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+
+        this.logger.info(
+          { orderId: order.id },
+          'Order reclaimed successfully',
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          { orderId: order.id, error: msg },
+          'Failed to reclaim order — will retry next tick',
+        );
+      }
+    }
   }
 }

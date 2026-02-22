@@ -1,6 +1,6 @@
 /**
  * Swap & Solver Routes
- * Direct pool swaps, escrow fill (settlement), and order execution.
+ * Solver fill-intent (settlement) and order execution.
  */
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
@@ -9,54 +9,6 @@ import type { ITxBuilder } from '../../../domain/ports/index.js';
 
 export function createSwapRouter(txBuilder: ITxBuilder): Router {
   const router = Router();
-
-  // ═══════════════════════════════════════════
-  // POST /v1/swap/build — Build a direct pool swap TX (no escrow)
-  // ═══════════════════════════════════════════
-  router.post(
-    '/swap/build',
-    writeLimiter,
-    async (req: Request, res: Response, next: NextFunction) => {
-      try {
-        const {
-          sender_address,
-          change_address,
-          input_asset_id,
-          input_amount,
-          output_asset_id,
-          min_output,
-          deadline,
-        } = req.body;
-
-        if (!sender_address || !input_asset_id || !input_amount || !output_asset_id) {
-          res.status(400).json({
-            status: 'error',
-            code: 'INVALID_REQUEST',
-            message: 'sender_address, input_asset_id, input_amount, output_asset_id are required',
-          });
-          return;
-        }
-
-        const result = await txBuilder.buildDirectSwapTx({
-          senderAddress: sender_address,
-          changeAddress: change_address || sender_address,
-          inputAssetId: input_asset_id,
-          inputAmount: BigInt(input_amount),
-          outputAssetId: output_asset_id,
-          minOutput: BigInt(min_output || 0),
-          deadline: deadline || Date.now() + 15 * 60 * 1000, // 15min default
-        });
-
-        res.status(200).json({
-          unsignedTx: result.unsignedTx,
-          txHash: result.txHash,
-          estimatedFee: result.estimatedFee.toString(),
-        });
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
 
   // ═══════════════════════════════════════════
   // POST /v1/solver/fill-intent — Solver fills escrow intents against pool

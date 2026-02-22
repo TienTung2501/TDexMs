@@ -22,7 +22,6 @@ export type {
   UpdateSettingsTxParams,
   UpdateFactoryAdminTxParams,
   BurnPoolNFTTxParams,
-  DirectSwapTxParams,
   ExecuteOrderTxParams,
   DeploySettingsTxParams,
   BuildTxResult,

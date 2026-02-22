@@ -1,11 +1,11 @@
-/**
- * Transaction Builder — Lucid Evolution implementation
+﻿/**
+ * Transaction Builder â€” Lucid Evolution implementation
  * Constructs unsigned Cardano transactions for all protocol operations.
  *
  * Uses @lucid-evolution/lucid v0.4 with Blockfrost provider on Preprod.
  * Reads compiled validators from smartcontract/plutus.json (Aiken CIP-57 blueprint).
  *
- * Flow: Backend builds unsigned TX → returns CBOR hex → frontend signs via CIP-30.
+ * Flow: Backend builds unsigned TX â†’ returns CBOR hex â†’ frontend signs via CIP-30.
  */
 import {
   Lucid,
@@ -41,7 +41,6 @@ import type {
   UpdateSettingsTxParams,
   UpdateFactoryAdminTxParams,
   BurnPoolNFTTxParams,
-  DirectSwapTxParams,
   ExecuteOrderTxParams,
   DeploySettingsTxParams,
   BuildTxResult,
@@ -53,7 +52,7 @@ import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-// ─── Plutus Blueprint Types ──────────────────
+// â”€â”€â”€ Plutus Blueprint Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface BlueprintValidator {
   title: string;
@@ -66,19 +65,19 @@ interface PlutusBlueprint {
   validators: BlueprintValidator[];
 }
 
-// ─── Script Resolver ─────────────────────────
+// â”€â”€â”€ Script Resolver â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Resolves parameterized validators from the Aiken blueprint
 // in DAG order (no circular dependencies).
 //
 // Resolution order:
-// 1. escrow_validator (no params) → escrow_hash
-// 2. pool_validator(admin_vkh) → pool_hash
-// 3. intent_token_policy(escrow_hash) → intent_policy_id
-// 4. factory_validator(pool_hash) → factory_hash
-// 5. lp_token_policy(pool_hash, factory_hash) → lp_id
-// 6. pool_nft_policy(factory_hash, admin_vkh) → nft_id
+// 1. escrow_validator (no params) â†’ escrow_hash
+// 2. pool_validator(admin_vkh) â†’ pool_hash
+// 3. intent_token_policy(escrow_hash) â†’ intent_policy_id
+// 4. factory_validator(pool_hash) â†’ factory_hash
+// 5. lp_token_policy(pool_hash, factory_hash) â†’ lp_id
+// 6. pool_nft_policy(factory_hash, admin_vkh) â†’ nft_id
 // 7. order_validator(intent_policy_id)
-// 8. settings_validator(settings_nft) — deferred
+// 8. settings_validator(settings_nft) â€” deferred
 
 interface ResolvedScripts {
   // Escrow system
@@ -108,7 +107,7 @@ function resolveScripts(
   network: Network,
   adminVkh: string,
 ): ResolvedScripts {
-  // Step 1: escrow_validator — NO parameters
+  // Step 1: escrow_validator â€” NO parameters
   const escrowBp = findValidator(bp, 'escrow_validator.escrow_validator');
   const escrowScript: Script = {
     type: 'PlutusV3',
@@ -127,7 +126,7 @@ function resolveScripts(
   const poolAddr = validatorToAddress(network, poolScript);
   const poolHash = validatorToScriptHash(poolScript);
 
-  // Step 3: intent_token_policy — NO parameters (standalone one-shot policy)
+  // Step 3: intent_token_policy â€” NO parameters (standalone one-shot policy)
   const intentBp = findValidator(bp, 'intent_token_policy.intent_token_policy');
   const intentPolicyScript: Script = {
     type: 'PlutusV3',
@@ -183,15 +182,15 @@ function resolveScripts(
   };
 }
 
-// ─── Datum / Redeemer helpers ────────────────
+// â”€â”€â”€ Datum / Redeemer helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These mirror Aiken types from lib/solvernet/types.ak
 
-/** AssetClass { policy_id, asset_name } — Constr(0, [bytes, bytes]) */
+/** AssetClass { policy_id, asset_name } â€” Constr(0, [bytes, bytes]) */
 function mkAssetClass(policyId: string, assetName: string): Constr<Data> {
   return new Constr(0, [policyId, assetName]);
 }
 
-/** Convert Address bech32 → Plutus Address data (payment cred, optional stake cred) */
+/** Convert Address bech32 â†’ Plutus Address data (payment cred, optional stake cred) */
 function addressToPlutusData(addr: string): Constr<Data> {
   const details = getAddressDetails(addr);
   const paymentCred = details.paymentCredential!;
@@ -277,7 +276,7 @@ const IntentTokenRedeemer = {
   Burn: () => Data.to(new Constr(1, [])),
 };
 
-/** PoolNFTRedeemer — MintPoolNFT { consumed_utxo } | BurnPoolNFT */
+/** PoolNFTRedeemer â€” MintPoolNFT { consumed_utxo } | BurnPoolNFT */
 const PoolNFTRedeemer = {
   Mint: (txHash: string, outputIndex: bigint) =>
     Data.to(
@@ -316,7 +315,7 @@ function buildOrderDatumCbor(p: {
   );
 }
 
-/** Build OrderParams datum — 7 flat fields matching Aiken OrderParams */
+/** Build OrderParams datum â€” 7 flat fields matching Aiken OrderParams */
 function mkOrderParams(p: {
   priceNum: bigint;
   priceDen: bigint;
@@ -368,7 +367,7 @@ function mkFactoryCreatePoolRedeemer(
   );
 }
 
-// ─── Utilities ───────────────────────────────
+// â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Convert AssetId string to Lucid unit ("policyId" + "assetName" hex or "lovelace") */
 function assetIdToUnit(assetIdStr: string): string {
@@ -415,9 +414,9 @@ function findValidator(
 /** Minimum ADA for script outputs (5 ADA is safe for datum-bearing outputs) */
 const MIN_SCRIPT_LOVELACE = 2_000_000n;
 
-// ═══════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // TxBuilder
-// ═══════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 export class TxBuilder implements ITxBuilder {
   private readonly logger;
@@ -447,7 +446,7 @@ export class TxBuilder implements ITxBuilder {
     this.adminVkh = adminVkh || '';
   }
 
-  // ── Lazy init ──────────────────────────────
+  // â”€â”€ Lazy init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   private async getLucid(): Promise<LucidEvolution> {
     if (!this.lucidPromise) {
@@ -511,9 +510,9 @@ export class TxBuilder implements ITxBuilder {
     };
   }
 
-  // ═══════════════════════════════════════════
-  // 1. CREATE INTENT — lock funds in escrow
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 1. CREATE INTENT â€” lock funds in escrow
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildCreateIntentTx(params: SwapTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -529,7 +528,7 @@ export class TxBuilder implements ITxBuilder {
       // Select wallet context from sender address
       const userUtxos = await lucid.utxosAt(params.senderAddress);
       if (userUtxos.length === 0) {
-        throw new ChainError('No UTxOs at sender address — wallet may be empty');
+        throw new ChainError('No UTxOs at sender address â€” wallet may be empty');
       }
       lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
 
@@ -608,9 +607,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 2. CANCEL INTENT — owner reclaims from escrow
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 2. CANCEL INTENT â€” owner reclaims from escrow
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildCancelIntentTx(
     params: CancelIntentTxParams,
@@ -669,9 +668,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 3. CREATE POOL — factory + NFT + LP mint
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 3. CREATE POOL â€” factory + NFT + LP mint
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildCreatePoolTx(params: CreatePoolTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -838,9 +837,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 4. DEPOSIT LIQUIDITY — LP mint
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 4. DEPOSIT LIQUIDITY â€” LP mint
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildDepositTx(params: DepositTxParams): Promise<BuildTxResult> {
     this.logger.info({ poolId: params.poolId }, 'Building deposit TX');
@@ -917,7 +916,7 @@ export class TxBuilder implements ITxBuilder {
         lpToMint = lpFromA < lpFromB ? lpFromA : lpFromB;
       }
       if (lpToMint <= 0n) {
-        throw new ChainError('Deposit amounts too small — LP tokens to mint would be 0');
+        throw new ChainError('Deposit amounts too small â€” LP tokens to mint would be 0');
       }
 
       // Build new pool output value: existing + deposits
@@ -997,9 +996,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 5. WITHDRAW LIQUIDITY — LP burn
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 5. WITHDRAW LIQUIDITY â€” LP burn
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildWithdrawTx(params: WithdrawTxParams): Promise<BuildTxResult> {
     this.logger.info({ poolId: params.poolId }, 'Building withdraw TX');
@@ -1146,9 +1145,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 6. SETTLEMENT — solver batch fills intents
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 6. SETTLEMENT â€” solver batch fills intents
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildSettlementTx(params: SettlementTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1282,7 +1281,7 @@ export class TxBuilder implements ITxBuilder {
           );
         }
 
-        // Collect escrow UTxO with Fill redeemer — complete fill
+        // Collect escrow UTxO with Fill redeemer â€” complete fill
         tx = tx.collectFrom(
           [eu],
           EscrowRedeemer.Fill(inputConsumed, outputAmount),
@@ -1302,7 +1301,7 @@ export class TxBuilder implements ITxBuilder {
         // Use sender's staking credential if present
         const ownerStakePart = owner.fields[1] as Constr<Data>;
         
-        // Build owner payment — deliver output asset
+        // Build owner payment â€” deliver output asset
         const outputPolicyId = (outputAssetClass.fields[0] as string);
         const outputAssetName = (outputAssetClass.fields[1] as string);
         const outputUnit = outputPolicyId === '' ? 'lovelace' : toUnit(outputPolicyId, outputAssetName);
@@ -1362,7 +1361,7 @@ export class TxBuilder implements ITxBuilder {
           pdf[0],          // pool_nft (unchanged)
           pdf[1],          // asset_a (unchanged)
           pdf[2],          // asset_b (unchanged)
-          pdf[3],          // total_lp_tokens (unchanged — swap doesn't affect LP)
+          pdf[3],          // total_lp_tokens (unchanged â€” swap doesn't affect LP)
           feeNumerator,    // fee_numerator (unchanged)
           protocolFeesA,   // updated protocol_fees_a
           protocolFeesB,   // updated protocol_fees_b
@@ -1419,9 +1418,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 7. CREATE ORDER — lock funds in order validator
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 7. CREATE ORDER â€” lock funds in order validator
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildOrderTx(params: OrderTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1521,9 +1520,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 8. CANCEL ORDER — owner reclaims from order validator
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 8. CANCEL ORDER â€” owner reclaims from order validator
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildCancelOrderTx(params: CancelOrderTxParams): Promise<BuildTxResult> {
     this.logger.info({ orderId: params.orderId }, 'Building cancel order TX');
@@ -1584,9 +1583,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 9. RECLAIM — permissionless reclaim of expired escrow
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 9. RECLAIM â€” permissionless reclaim of expired escrow
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1599,10 +1598,10 @@ export class TxBuilder implements ITxBuilder {
       const { escrowScript, escrowAddr, intentPolicyScript, intentPolicyId } =
         this.getEscrowScripts();
 
-      // Keeper pays fees — select keeper UTxOs
+      // Keeper pays fees â€” select keeper UTxOs
       const keeperUtxos = await lucid.utxosAt(params.keeperAddress);
       if (keeperUtxos.length === 0) {
-        throw new ChainError('No UTxOs at keeper address — keeper wallet may be empty');
+        throw new ChainError('No UTxOs at keeper address â€” keeper wallet may be empty');
       }
       lucid.selectWallet.fromAddress(params.keeperAddress, keeperUtxos);
 
@@ -1626,7 +1625,7 @@ export class TxBuilder implements ITxBuilder {
       );
 
       if (!intentTokenUnit) {
-        throw new ChainError('Escrow UTxO has no intent token — cannot reclaim');
+        throw new ChainError('Escrow UTxO has no intent token â€” cannot reclaim');
       }
 
       // Parse the inline datum to extract owner + remaining input info
@@ -1635,9 +1634,9 @@ export class TxBuilder implements ITxBuilder {
       // For now, we build the TX and let the validator+Lucid resolve it via datum.
       //
       // The validator requires:
-      //  1. check_after_deadline — set validFrom to now (after deadline)
-      //  2. check_burn_one — burn the intent token
-      //  3. check_payment_output — remaining input to owner
+      //  1. check_after_deadline â€” set validFrom to now (after deadline)
+      //  2. check_burn_one â€” burn the intent token
+      //  3. check_payment_output â€” remaining input to owner
       //
       // We pay ALL non-ADA assets from the escrow to the owner.
       // The keeper gets the ADA change minus min-ADA that goes to owner.
@@ -1687,9 +1686,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 10. COLLECT FEES — admin collects protocol fees from pool(s)
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 10. COLLECT FEES â€” admin collects protocol fees from pool(s)
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildCollectFeesTx(params: CollectFeesTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1774,7 +1773,7 @@ export class TxBuilder implements ITxBuilder {
         const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
         const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-        // Build updated pool datum — zero the protocol fee counters
+        // Build updated pool datum â€” zero the protocol fee counters
         // Validator requires: new_datum.protocol_fees_a == 0, new_datum.protocol_fees_b == 0
         // and last_root_k preserved (fee collection doesn't change trading reserves)
         const updatedPoolDatum = Data.to(
@@ -1786,7 +1785,7 @@ export class TxBuilder implements ITxBuilder {
             df[4],    // fee_numerator (unchanged)
             0n,       // protocol_fees_a = 0 (zeroed after collection)
             0n,       // protocol_fees_b = 0 (zeroed after collection)
-            df[7],    // last_root_k (unchanged — fee collection doesn't affect K)
+            df[7],    // last_root_k (unchanged â€” fee collection doesn't affect K)
           ]),
         );
 
@@ -1844,9 +1843,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 11. UPDATE SETTINGS — admin updates global protocol settings
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 11. UPDATE SETTINGS â€” admin updates global protocol settings
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildUpdateSettingsTx(params: UpdateSettingsTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1931,9 +1930,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 12. UPDATE FACTORY ADMIN — transfer factory admin to new VKH
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 12. UPDATE FACTORY ADMIN â€” transfer factory admin to new VKH
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildUpdateFactoryAdminTx(params: UpdateFactoryAdminTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2011,9 +2010,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 13. BURN POOL NFT — admin closes pool by burning NFT
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 13. BURN POOL NFT â€” admin closes pool by burning NFT
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2091,175 +2090,8 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 14. DIRECT SWAP — swap directly against pool (no escrow)
-  // ═══════════════════════════════════════════
-
-  async buildDirectSwapTx(params: DirectSwapTxParams): Promise<BuildTxResult> {
-    this.logger.info(
-      {
-        sender: params.senderAddress,
-        inputAsset: params.inputAssetId,
-        inputAmount: params.inputAmount.toString(),
-        outputAsset: params.outputAssetId,
-      },
-      'Building direct swap TX',
-    );
-
-    try {
-      const lucid = await this.getLucid();
-      const r = this.getResolved();
-
-      // User wallet
-      const userUtxos = await lucid.utxosAt(params.senderAddress);
-      if (userUtxos.length === 0) {
-        throw new ChainError('No UTxOs at sender address');
-      }
-      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
-
-      // Find pool UTxO
-      const poolUtxos = await lucid.utxosAt(r.poolAddr);
-      const poolUtxo = poolUtxos.find((u) =>
-        Object.keys(u.assets).some((unit) => unit.startsWith(r.poolNftPolicyId)),
-      );
-      if (!poolUtxo) {
-        throw new ChainError('Pool UTxO with NFT not found');
-      }
-
-      // Parse pool datum
-      // PoolDatum = Constr(0, [pool_nft, asset_a, asset_b, total_lp, fee_num, fees_a, fees_b, root_k])
-      const poolDatumParsed = Data.from(poolUtxo.datum!) as Constr<Data>;
-      const pdf = poolDatumParsed.fields;
-      const totalLp = pdf[3] as bigint;
-      const feeNumerator = pdf[4] as bigint;
-      let protocolFeesA = pdf[5] as bigint;
-      let protocolFeesB = pdf[6] as bigint;
-
-      // Extract asset units from datum
-      const assetADatum = pdf[1] as Constr<Data>;
-      const assetBDatum = pdf[2] as Constr<Data>;
-      const assetAPolicyId = assetADatum.fields[0] as string;
-      const assetAAssetName = assetADatum.fields[1] as string;
-      const assetBPolicyId = assetBDatum.fields[0] as string;
-      const assetBAssetName = assetBDatum.fields[1] as string;
-
-      const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
-      const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
-
-      // Current on-chain reserves
-      const reserveA = unitA === 'lovelace'
-        ? (poolUtxo.assets.lovelace || 0n)
-        : (poolUtxo.assets[unitA] || 0n);
-      const reserveB = unitB === 'lovelace'
-        ? (poolUtxo.assets.lovelace || 0n)
-        : (poolUtxo.assets[unitB] || 0n);
-
-      // Determine swap direction
-      const inputAsset = AssetId.fromString(params.inputAssetId);
-      const inputUnit = assetIdToUnit(params.inputAssetId);
-      const isInputA = (inputAsset.isAda && assetAPolicyId === '') ||
-        (!inputAsset.isAda && inputAsset.policyId === assetAPolicyId && inputAsset.assetName === assetAAssetName);
-      const direction: 'AToB' | 'BToA' = isInputA ? 'AToB' : 'BToA';
-
-      const inputAmount = params.inputAmount;
-
-      // Calculate swap output using constant product with fee
-      let outputAmount: bigint;
-      let newReserveA: bigint;
-      let newReserveB: bigint;
-
-      if (direction === 'AToB') {
-        const effectiveInput = (inputAmount * (10000n - feeNumerator)) / 10000n;
-        outputAmount = (reserveB * effectiveInput) / (reserveA + effectiveInput);
-        const protocolFee = (inputAmount * feeNumerator / 10000n) / 6n;
-        protocolFeesA += protocolFee;
-        newReserveA = reserveA + inputAmount;
-        newReserveB = reserveB - outputAmount;
-      } else {
-        const effectiveInput = (inputAmount * (10000n - feeNumerator)) / 10000n;
-        outputAmount = (reserveA * effectiveInput) / (reserveB + effectiveInput);
-        const protocolFee = (inputAmount * feeNumerator / 10000n) / 6n;
-        protocolFeesB += protocolFee;
-        newReserveA = reserveA - outputAmount;
-        newReserveB = reserveB + inputAmount;
-      }
-
-      // Check minimum output (slippage protection)
-      if (outputAmount < params.minOutput) {
-        throw new ChainError(
-          `Swap output ${outputAmount} below minimum ${params.minOutput}`,
-        );
-      }
-
-      // Compute new root K
-      const newRootK = BigInt(
-        Math.floor(Math.sqrt(Number(newReserveA * newReserveB))),
-      );
-
-      // Build updated pool datum
-      const updatedPoolDatum = Data.to(
-        new Constr(0, [
-          pdf[0],           // pool_nft (unchanged)
-          pdf[1],           // asset_a (unchanged)
-          pdf[2],           // asset_b (unchanged)
-          totalLp,          // total_lp_tokens (unchanged)
-          feeNumerator,     // fee_numerator (unchanged)
-          protocolFeesA,    // updated protocol_fees_a
-          protocolFeesB,    // updated protocol_fees_b
-          newRootK,         // updated last_root_k
-        ]),
-      );
-
-      // Build new pool output assets
-      const newPoolAssets: Assets = { ...poolUtxo.assets };
-      if (unitA === 'lovelace') {
-        newPoolAssets.lovelace = newReserveA;
-      } else {
-        newPoolAssets[unitA] = newReserveA;
-      }
-      if (unitB === 'lovelace') {
-        newPoolAssets.lovelace = newReserveB;
-      } else {
-        newPoolAssets[unitB] = newReserveB;
-      }
-
-      const tx = lucid
-        .newTx()
-        .collectFrom([poolUtxo], PoolRedeemer.Swap(direction, params.minOutput))
-        .attach.SpendingValidator(r.poolScript)
-        .pay.ToContract(
-          r.poolAddr,
-          { kind: 'inline', value: updatedPoolDatum },
-          newPoolAssets,
-        )
-        .addSigner(params.senderAddress)
-        .validTo(params.deadline);
-
-      const completed = await tx.complete({
-        changeAddress: params.changeAddress,
-      });
-
-      this.logger.info(
-        { txHash: completed.toHash(), outputAmount: outputAmount.toString() },
-        'Direct swap TX built',
-      );
-
-      return {
-        unsignedTx: completed.toCBOR(),
-        txHash: completed.toHash(),
-        estimatedFee: 0n,
-      };
-    } catch (error) {
-      if (error instanceof ChainError) throw error;
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.error({ error: msg }, 'Failed to build direct swap TX');
-      throw new ChainError(`Failed to build direct swap TX: ${msg}`);
-    }
-  }
-
-  // ═══════════════════════════════════════════
-  // 15. EXECUTE ORDER — solver executes a pending order against pool
-  // ═══════════════════════════════════════════
+  // 14. EXECUTE ORDER â€” solver executes a pending order against pool
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildExecuteOrderTx(params: ExecuteOrderTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2465,7 +2297,7 @@ export class TxBuilder implements ITxBuilder {
             .attach.MintingPolicy(r.intentPolicyScript);
         }
       } else {
-        // Partial fill — continue order with updated datum
+        // Partial fill â€” continue order with updated datum
         const updatedOrderDatum = Data.to(
           new Constr(0, [
             odf[0], // order_type
@@ -2533,9 +2365,9 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // ═══════════════════════════════════════════
-  // 16. DEPLOY SETTINGS — bootstrap settings UTxO
-  // ═══════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 16. DEPLOY SETTINGS â€” bootstrap settings UTxO
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   async buildDeploySettingsTx(params: DeploySettingsTxParams): Promise<BuildTxResult> {
     this.logger.info(

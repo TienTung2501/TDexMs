@@ -54,6 +54,19 @@ export class WithdrawLiquidity {
       minAmountB: BigInt(input.minAmountB),
     });
 
+    // B3 fix: Optimistically update pool reserves in DB after building TX
+    const newReserveA = pool.reserveA - amountA;
+    const newReserveB = pool.reserveB - amountB;
+    const newTotalLp = pool.totalLpTokens - lpAmount;
+    await this.poolRepo.updateReserves(
+      pool.id,
+      newReserveA,
+      newReserveB,
+      newTotalLp,
+      txResult.txHash,
+      pool.outputIndex, // Will be corrected by ChainSync
+    );
+
     return {
       unsignedTx: txResult.unsignedTx,
       txHash: txResult.txHash,

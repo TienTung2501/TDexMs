@@ -59,6 +59,19 @@ export class DepositLiquidity {
       lpToMint: estimatedLp,
     });
 
+    // B3 fix: Optimistically update pool reserves in DB after building TX
+    const newReserveA = pool.reserveA + BigInt(input.amountA);
+    const newReserveB = pool.reserveB + BigInt(input.amountB);
+    const newTotalLp = pool.totalLpTokens + estimatedLp;
+    await this.poolRepo.updateReserves(
+      pool.id,
+      newReserveA,
+      newReserveB,
+      newTotalLp,
+      txResult.txHash,
+      pool.outputIndex, // Will be corrected by ChainSync
+    );
+
     return {
       unsignedTx: txResult.unsignedTx,
       txHash: txResult.txHash,
