@@ -37,21 +37,9 @@ export default function AdminSettingsPage() {
         setMaxFeeBps(String(data.global_settings.max_protocol_fee_bps));
         setMinLiquidity(String(data.global_settings.min_pool_liquidity));
       })
-      .catch(() => {
-        // Dev fallback
-        const fallback: AdminSettings = {
-          global_settings: {
-            max_protocol_fee_bps: 50,
-            min_pool_liquidity: 1_000_000_000,
-            current_version: 5,
-          },
-          factory_settings: {
-            admin_vkh: "abc123def456...",
-          },
-        };
-        setSettings(fallback);
-        setMaxFeeBps("50");
-        setMinLiquidity("1000000000");
+      .catch((err) => {
+        console.error('Failed to load admin settings:', err);
+        setSettings(null);
       })
       .finally(() => setLoading(false));
   }, []);

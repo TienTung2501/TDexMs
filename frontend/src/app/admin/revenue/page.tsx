@@ -29,37 +29,9 @@ export default function AdminRevenuePage() {
         const items = Array.isArray(data) ? data : [];
         setFees(items);
       })
-      .catch(() => {
-        // Dev fallback
-        setFees([
-          {
-            pool_id: "pool_nft_hash_1",
-            pair: "ADA/USDT",
-            pending_fees: {
-              asset_a_amount: 1_500_000_000,
-              asset_b_amount: 750_000_000,
-              total_usd_value: 2100,
-            },
-          },
-          {
-            pool_id: "pool_nft_hash_2",
-            pair: "ADA/SNEK",
-            pending_fees: {
-              asset_a_amount: 500_000_000,
-              asset_b_amount: 25_000_000_000,
-              total_usd_value: 850,
-            },
-          },
-          {
-            pool_id: "pool_nft_hash_3",
-            pair: "ADA/HOSKY",
-            pending_fees: {
-              asset_a_amount: 200_000_000,
-              asset_b_amount: 100_000_000_000,
-              total_usd_value: 350,
-            },
-          },
-        ]);
+      .catch((err) => {
+        console.error('Failed to load pending fees:', err);
+        setFees([]);
       })
       .finally(() => setLoading(false));
   }, []);

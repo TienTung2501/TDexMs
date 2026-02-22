@@ -26,7 +26,7 @@ import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect
 import { useWallet } from "@/providers/wallet-provider";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import type { NormalizedPool } from "@/lib/hooks";
-import { createIntent } from "@/lib/api";
+import { createIntent, getQuote, type QuoteResponse } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
 import { useTransaction } from "@/lib/hooks/use-transaction";
 
@@ -76,6 +76,10 @@ export function SwapCard({
     null
   );
 
+  // Server-side quote (overrides local calculation when available)
+  const [serverQuote, setServerQuote] = useState<QuoteResponse | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+
 
   // Find pool
   const pool = useMemo(() => {
@@ -109,6 +113,50 @@ export function SwapCard({
     return { output, priceImpact, fee: feeAmount, rate };
   }, [pool, inputAmount, inputToken.ticker]);
 
+  // B8 fix: Fetch server-side quote with debounce (uses RouteOptimizer for multi-hop)
+  useEffect(() => {
+    setServerQuote(null);
+    if (!inputAmount || parseFloat(inputAmount) <= 0) return;
+
+    const inputAsset =
+      inputToken.policyId === ""
+        ? "lovelace"
+        : `${inputToken.policyId}.${inputToken.assetName}`;
+    const outputAsset =
+      outputToken.policyId === ""
+        ? "lovelace"
+        : `${outputToken.policyId}.${outputToken.assetName}`;
+
+    setQuoteLoading(true);
+    const timer = setTimeout(() => {
+      getQuote({
+        inputAsset,
+        outputAsset,
+        inputAmount,
+        slippage: String(slippage),
+      })
+        .then((q) => setServerQuote(q))
+        .catch(() => setServerQuote(null))
+        .finally(() => setQuoteLoading(false));
+    }, 400); // 400ms debounce
+
+    return () => {
+      clearTimeout(timer);
+      setQuoteLoading(false);
+    };
+  }, [inputAmount, inputToken, outputToken, slippage]);
+
+  // Use server quote when available, fall back to local calculation
+  const effectiveOutput = serverQuote
+    ? parseFloat(serverQuote.outputAmount)
+    : quote.output;
+  const effectivePriceImpact = serverQuote
+    ? serverQuote.priceImpact
+    : quote.priceImpact;
+  const effectiveMinOutput = serverQuote
+    ? serverQuote.minOutput
+    : String(Math.floor(quote.output * (1 - slippage / 100)));
+
   // Flip tokens
   const handleFlip = useCallback(() => {
     setInputToken(outputToken);
@@ -136,9 +184,7 @@ export function SwapCard({
       outputToken.policyId === ""
         ? "lovelace"
         : `${outputToken.policyId}.${outputToken.assetName}`;
-    const minOut = Math.floor(
-      quote.output * (1 - slippage / 100)
-    ).toString();
+    const minOut = effectiveMinOutput;
     const deadline = new Date(Date.now() + 30 * 60_000).toISOString();
 
     await execute(
@@ -161,13 +207,13 @@ export function SwapCard({
         onSuccess: () => setInputAmount(""),
       },
     );
-  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote.output, slippage, execute]);
+  }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, effectiveMinOutput, slippage, execute]);
 
   // Price impact color
   const impactColor =
-    quote.priceImpact > 5
+    effectivePriceImpact > 5
       ? "text-destructive"
-      : quote.priceImpact > 1
+      : effectivePriceImpact > 1
       ? "text-yellow-500"
       : "text-primary";
 
@@ -261,10 +307,11 @@ export function SwapCard({
           <div className="rounded-xl bg-secondary/50 p-4 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">You receive</span>
+              {quoteLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
             </div>
             <div className="flex items-center gap-3">
               <div className="flex-1 text-2xl font-semibold">
-                {quote.output > 0 ? formatAmount(quote.output) : "0.00"}
+                {effectiveOutput > 0 ? formatAmount(effectiveOutput) : "0.00"}
               </div>
               <TokenButton
                 token={outputToken}
@@ -274,8 +321,16 @@ export function SwapCard({
           </div>
 
           {/* Quote details */}
-          {quote.output > 0 && (
+          {effectiveOutput > 0 && (
             <div className="rounded-xl border border-border/50 p-3 space-y-2 text-xs">
+              {serverQuote && (
+                <div className="flex items-center gap-1 text-primary mb-1">
+                  <Zap className="h-3 w-3" />
+                  <span className="text-[10px]">
+                    {serverQuote.route.length > 1 ? `Multi-hop (${serverQuote.route.length} hops)` : "Direct route"}
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground flex items-center gap-1">
                   Rate
@@ -296,7 +351,7 @@ export function SwapCard({
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Price Impact</span>
                 <span className={cn("font-mono", impactColor)}>
-                  {quote.priceImpact.toFixed(2)}%
+                  {effectivePriceImpact.toFixed(2)}%
                 </span>
               </div>
               <div className="flex items-center justify-between">
@@ -308,7 +363,7 @@ export function SwapCard({
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Min. received</span>
                 <span className="font-mono">
-                  {formatAmount(quote.output * (1 - slippage / 100))}{" "}
+                  {formatAmount(parseFloat(effectiveMinOutput))}{" "}
                   {outputToken.ticker}
                 </span>
               </div>

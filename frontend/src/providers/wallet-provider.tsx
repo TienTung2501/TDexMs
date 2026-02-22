@@ -7,7 +7,9 @@ import React, {
   useCallback,
   useEffect,
   useRef,
+  useMemo,
 } from "react";
+import { TOKEN_LIST } from "@/lib/mock-data";
 
 // ─── CIP-30 type declarations ───────────────
 // These match the CIP-30 wallet connector standard
@@ -224,6 +226,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [networkId, setNetworkId] = useState<number | null>(null);
   const [walletName, setWalletName] = useState<string | null>(null);
   const [lovelaceBalance, setLovelaceBalance] = useState<bigint>(0n);
+  const [nativeBalances, setNativeBalances] = useState<Record<string, bigint>>({});
   const [availableWallets, setAvailableWallets] = useState<DetectedWallet[]>(
     []
   );
@@ -289,10 +292,40 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setAddress(bech32Addr);
       setChangeAddress(bech32Change);
 
-      // Balance
+      // Balance (lovelace + native tokens via UTxOs)
       const balanceCbor = await api.getBalance();
       const lovelace = parseBalanceCbor(balanceCbor);
       setLovelaceBalance(lovelace);
+
+      // B10 fix: Parse native token balances from UTxOs
+      try {
+        const utxosCbor = await api.getUtxos();
+        if (utxosCbor && utxosCbor.length > 0) {
+          const { Lucid, Blockfrost } = await getLucidModule();
+          const lucidInst = await Lucid(
+            new Blockfrost(
+              process.env.NEXT_PUBLIC_BLOCKFROST_URL ||
+                "https://cardano-preprod.blockfrost.io/api/v0",
+              process.env.NEXT_PUBLIC_BLOCKFROST_PROJECT_ID || ""
+            ),
+            "Preprod",
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          lucidInst.selectWallet.fromAPI(api as any);
+          const utxos = await lucidInst.wallet().getUtxos();
+
+          const tokenTotals: Record<string, bigint> = {};
+          for (const utxo of utxos) {
+            for (const [unit, qty] of Object.entries(utxo.assets)) {
+              if (unit === "lovelace") continue;
+              tokenTotals[unit] = (tokenTotals[unit] || 0n) + qty;
+            }
+          }
+          setNativeBalances(tokenTotals);
+        }
+      } catch (e) {
+        console.warn("Failed to parse native token balances:", e);
+      }
 
       setWalletName(cardano[walletId].name || walletId);
       setIsConnected(true);
@@ -318,6 +351,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setNetworkId(null);
     setWalletName(null);
     setLovelaceBalance(0n);
+    setNativeBalances({});
     localStorage.removeItem(STORAGE_KEY);
   }, []);
 
@@ -393,10 +427,36 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
-  // Legacy balances object for backward compat
-  const balances: Record<string, number> = {
-    ADA: Number(lovelaceBalance) / 1_000_000,
-  };
+  // B10 fix: Build balances object with ADA + all native tokens
+  // Maps ticker → human-readable amount using TOKEN_LIST for decimals
+  const balances: Record<string, number> = useMemo(() => {
+    const result: Record<string, number> = {
+      ADA: Number(lovelaceBalance) / 1_000_000,
+    };
+
+    // Build a unit→Token lookup for known tokens
+    for (const token of TOKEN_LIST) {
+      if (!token.policyId) continue; // skip ADA
+      const unit = token.policyId + token.assetName;
+      const qty = nativeBalances[unit];
+      if (qty !== undefined && qty > 0n) {
+        result[token.ticker] =
+          Number(qty) / Math.pow(10, token.decimals);
+      }
+    }
+
+    // Also include unknown tokens by their unit ID
+    for (const [unit, qty] of Object.entries(nativeBalances)) {
+      const isKnown = TOKEN_LIST.some(
+        (t) => t.policyId && t.policyId + t.assetName === unit,
+      );
+      if (!isKnown && qty > 0n) {
+        result[unit] = Number(qty); // raw quantity for unknown tokens
+      }
+    }
+
+    return result;
+  }, [lovelaceBalance, nativeBalances]);
 
   return (
     <WalletContext.Provider

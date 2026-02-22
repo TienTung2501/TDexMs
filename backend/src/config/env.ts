@@ -32,6 +32,10 @@ const envSchema = z.object({
   ESCROW_SCRIPT_ADDRESS: z.string().default(''),
   POOL_SCRIPT_ADDRESS: z.string().default(''),
 
+  // Settings NFT (identifies the singleton settings UTxO param for settings_validator)
+  SETTINGS_NFT_POLICY_ID: z.string().default(''),
+  SETTINGS_NFT_ASSET_NAME: z.string().default(''),
+
   // Admin
   ADMIN_ADDRESS: z.string().default(''), // Bech32 address of the factory admin
 

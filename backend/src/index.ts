@@ -19,6 +19,7 @@ import { TxBuilder } from './infrastructure/cardano/TxBuilder.js';
 import { ChainSync } from './infrastructure/cardano/ChainSync.js';
 import { PriceAggregationCron } from './infrastructure/cron/PriceAggregationCron.js';
 import { ReclaimKeeperCron } from './infrastructure/cron/ReclaimKeeperCron.js';
+import { PoolSnapshotCron } from './infrastructure/cron/PoolSnapshotCron.js';
 import { CacheService } from './infrastructure/cache/CacheService.js';
 
 // Application
@@ -216,6 +217,10 @@ async function main(): Promise<void> {
     60_000,
   );
 
+  // Pool snapshot cron — snapshots pool state → PoolHistory + ProtocolStats
+  // B4/B6 fix: these tables were previously never populated
+  const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
+
   // ──────────────────────────────────────────────
   // 6. Start
   // ──────────────────────────────────────────────
@@ -237,6 +242,7 @@ async function main(): Promise<void> {
 
   priceCron.start();
   reclaimKeeper.start();
+  poolSnapshotCron.start();
 
   // ──────────────────────────────────────────────
   // 7. Graceful Shutdown
@@ -248,6 +254,7 @@ async function main(): Promise<void> {
     chainSync.stop();
     priceCron.stop();
     reclaimKeeper.stop();
+    poolSnapshotCron.stop();
     wsServer.close();
 
     httpServer.close(() => {

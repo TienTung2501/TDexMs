@@ -1,5 +1,5 @@
 ﻿/**
- * Transaction Builder â€” Lucid Evolution implementation
+ * Transaction Builder Lucid Evolution implementation
  * Constructs unsigned Cardano transactions for all protocol operations.
  *
  * Uses @lucid-evolution/lucid v0.4 with Blockfrost provider on Preprod.
@@ -14,6 +14,7 @@ import {
   Constr,
   toUnit,
   getAddressDetails,
+  credentialToAddress,
   validatorToAddress,
   validatorToScriptHash,
   mintingPolicyToId,
@@ -25,6 +26,7 @@ import {
   type Network,
   type Assets,
   type UTxO as LucidUTxO,
+  type Credential,
 } from '@lucid-evolution/lucid';
 import type {
   ITxBuilder,
@@ -77,7 +79,7 @@ interface PlutusBlueprint {
 // 5. lp_token_policy(pool_hash, factory_hash) â†’ lp_id
 // 6. pool_nft_policy(factory_hash, admin_vkh) â†’ nft_id
 // 7. order_validator(intent_policy_id)
-// 8. settings_validator(settings_nft) â€” deferred
+// 8. settings_validator(settings_nft) deferred
 
 interface ResolvedScripts {
   // Escrow system
@@ -107,7 +109,7 @@ function resolveScripts(
   network: Network,
   adminVkh: string,
 ): ResolvedScripts {
-  // Step 1: escrow_validator â€” NO parameters
+  // Step 1: escrow_validator NO parameters
   const escrowBp = findValidator(bp, 'escrow_validator.escrow_validator');
   const escrowScript: Script = {
     type: 'PlutusV3',
@@ -126,7 +128,7 @@ function resolveScripts(
   const poolAddr = validatorToAddress(network, poolScript);
   const poolHash = validatorToScriptHash(poolScript);
 
-  // Step 3: intent_token_policy â€” NO parameters (standalone one-shot policy)
+  // Step 3: intent_token_policy NO parameters (standalone one-shot policy)
   const intentBp = findValidator(bp, 'intent_token_policy.intent_token_policy');
   const intentPolicyScript: Script = {
     type: 'PlutusV3',
@@ -185,7 +187,7 @@ function resolveScripts(
 // â”€â”€â”€ Datum / Redeemer helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // These mirror Aiken types from lib/solvernet/types.ak
 
-/** AssetClass { policy_id, asset_name } â€” Constr(0, [bytes, bytes]) */
+/** AssetClass { policy_id, asset_name } Constr(0, [bytes, bytes]) */
 function mkAssetClass(policyId: string, assetName: string): Constr<Data> {
   return new Constr(0, [policyId, assetName]);
 }
@@ -210,6 +212,38 @@ function addressToPlutusData(addr: string): Constr<Data> {
     : new Constr(1, []); // None
 
   return new Constr(0, [credConstr, stakePart]);
+}
+
+/**
+ * Reverse of addressToPlutusData: convert Plutus Address Constr back to bech32.
+ * Plutus Address = Constr(0, [paymentCred, stakePart])
+ *   paymentCred = Constr(0=Key|1=Script, [hash])
+ *   stakePart   = Constr(0=Some, [Constr(0=Inline, [stakeCred])]) | Constr(1=None, [])
+ *   stakeCred   = Constr(0=Key|1=Script, [hash])
+ */
+function plutusAddressToAddress(
+  plutusAddr: Constr<Data>,
+  network: Network,
+): string {
+  const paymentConstr = plutusAddr.fields[0] as Constr<Data>;
+  const paymentCred: Credential = {
+    type: paymentConstr.index === 0 ? 'Key' : 'Script',
+    hash: paymentConstr.fields[0] as string,
+  };
+
+  const stakePart = plutusAddr.fields[1] as Constr<Data>;
+  let stakeCred: Credential | undefined;
+  if (stakePart.index === 0) {
+    // Some → Constr(0, [Constr(0=Inline, [stakeCred])])
+    const inlineWrapper = stakePart.fields[0] as Constr<Data>;
+    const stakeConstr = inlineWrapper.fields[0] as Constr<Data>;
+    stakeCred = {
+      type: stakeConstr.index === 0 ? 'Key' : 'Script',
+      hash: stakeConstr.fields[0] as string,
+    };
+  }
+
+  return credentialToAddress(network, paymentCred, stakeCred);
 }
 
 /** Build EscrowDatum CBOR hex */
@@ -276,7 +310,7 @@ const IntentTokenRedeemer = {
   Burn: () => Data.to(new Constr(1, [])),
 };
 
-/** PoolNFTRedeemer â€” MintPoolNFT { consumed_utxo } | BurnPoolNFT */
+/** PoolNFTRedeemer MintPoolNFT { consumed_utxo } | BurnPoolNFT */
 const PoolNFTRedeemer = {
   Mint: (txHash: string, outputIndex: bigint) =>
     Data.to(
@@ -315,7 +349,7 @@ function buildOrderDatumCbor(p: {
   );
 }
 
-/** Build OrderParams datum â€” 7 flat fields matching Aiken OrderParams */
+/** Build OrderParams datum 7 flat fields matching Aiken OrderParams */
 function mkOrderParams(p: {
   priceNum: bigint;
   priceDen: bigint;
@@ -494,6 +528,37 @@ export class TxBuilder implements ITxBuilder {
     return this.resolved;
   }
 
+  /**
+   * Resolve the settings_validator script, applying the settings_nft parameter
+   * if SETTINGS_NFT_POLICY_ID is configured in env.
+   * The Aiken settings_validator(settings_nft: AssetClass) is parameterized.
+   */
+  private resolveSettingsScript(settingsBp: BlueprintValidator): Script {
+    const settingsNftPolicy = process.env.SETTINGS_NFT_POLICY_ID || '';
+    const settingsNftName = process.env.SETTINGS_NFT_ASSET_NAME || '';
+
+    if (settingsNftPolicy) {
+      // Apply settings_nft parameter: AssetClass = Constr(0, [policy_id, asset_name])
+      const applied = applyParamsToScript(settingsBp.compiledCode, [
+        Data.to(mkAssetClass(settingsNftPolicy, settingsNftName)),
+      ]);
+      return {
+        type: 'PlutusV3' as const,
+        script: applyDoubleCborEncoding(applied),
+      };
+    }
+
+    // Fallback: no settings NFT configured (development mode)
+    this.logger.warn(
+      'SETTINGS_NFT_POLICY_ID not set — using un-parameterized settings validator. ' +
+      'This will NOT work on-chain for updates. Set SETTINGS_NFT_POLICY_ID and SETTINGS_NFT_ASSET_NAME.',
+    );
+    return {
+      type: 'PlutusV3' as const,
+      script: applyDoubleCborEncoding(settingsBp.compiledCode),
+    };
+  }
+
   /** Build or retrieve the escrow validator + intent minting policy. */
   private getEscrowScripts(): {
     escrowScript: Script;
@@ -510,9 +575,7 @@ export class TxBuilder implements ITxBuilder {
     };
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 1. CREATE INTENT â€” lock funds in escrow
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 1. CREATE INTENT lock funds in escrow
 
   async buildCreateIntentTx(params: SwapTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -528,7 +591,7 @@ export class TxBuilder implements ITxBuilder {
       // Select wallet context from sender address
       const userUtxos = await lucid.utxosAt(params.senderAddress);
       if (userUtxos.length === 0) {
-        throw new ChainError('No UTxOs at sender address â€” wallet may be empty');
+        throw new ChainError('No UTxOs at sender address wallet may be empty');
       }
       lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
 
@@ -607,9 +670,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 2. CANCEL INTENT â€” owner reclaims from escrow
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 2. CANCEL INTENT owner reclaims from escrow
 
   async buildCancelIntentTx(
     params: CancelIntentTxParams,
@@ -668,9 +729,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 3. CREATE POOL â€” factory + NFT + LP mint
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 3. CREATE POOL factory + NFT + LP mint
 
   async buildCreatePoolTx(params: CreatePoolTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -837,9 +896,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 4. DEPOSIT LIQUIDITY â€” LP mint
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 4. DEPOSIT LIQUIDITY LP mint
 
   async buildDepositTx(params: DepositTxParams): Promise<BuildTxResult> {
     this.logger.info({ poolId: params.poolId }, 'Building deposit TX');
@@ -916,7 +973,7 @@ export class TxBuilder implements ITxBuilder {
         lpToMint = lpFromA < lpFromB ? lpFromA : lpFromB;
       }
       if (lpToMint <= 0n) {
-        throw new ChainError('Deposit amounts too small â€” LP tokens to mint would be 0');
+        throw new ChainError('Deposit amounts too small LP tokens to mint would be 0');
       }
 
       // Build new pool output value: existing + deposits
@@ -996,9 +1053,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 5. WITHDRAW LIQUIDITY â€” LP burn
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 5. WITHDRAW LIQUIDITY LP burn
 
   async buildWithdrawTx(params: WithdrawTxParams): Promise<BuildTxResult> {
     this.logger.info({ poolId: params.poolId }, 'Building withdraw TX');
@@ -1145,9 +1200,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 6. SETTLEMENT â€” solver batch fills intents
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 6. SETTLEMENT solver batch fills intents
 
   async buildSettlementTx(params: SettlementTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1281,7 +1334,7 @@ export class TxBuilder implements ITxBuilder {
           );
         }
 
-        // Collect escrow UTxO with Fill redeemer â€” complete fill
+        // Collect escrow UTxO with Fill redeemer complete fill
         tx = tx.collectFrom(
           [eu],
           EscrowRedeemer.Fill(inputConsumed, outputAmount),
@@ -1295,13 +1348,10 @@ export class TxBuilder implements ITxBuilder {
         }
 
         // Resolve owner address for payment output
-        // Convert Plutus Address data back to bech32
-        const ownerPayCred = owner.fields[0] as Constr<Data>;
-        const ownerPayHash = ownerPayCred.fields[0] as string;
-        // Use sender's staking credential if present
-        const ownerStakePart = owner.fields[1] as Constr<Data>;
+        // Convert Plutus Address data back to bech32 using our reverse helper
+        const ownerBech32 = plutusAddressToAddress(owner, this.network);
         
-        // Build owner payment â€” deliver output asset
+        // Build owner payment deliver output asset
         const outputPolicyId = (outputAssetClass.fields[0] as string);
         const outputAssetName = (outputAssetClass.fields[1] as string);
         const outputUnit = outputPolicyId === '' ? 'lovelace' : toUnit(outputPolicyId, outputAssetName);
@@ -1315,16 +1365,9 @@ export class TxBuilder implements ITxBuilder {
         }
 
         ownerPayments.push({
-          address: params.solverAddress, // Will be overridden by actual owner address below
+          address: ownerBech32,
           assets: ownerAssets,
         });
-
-        // We need to pay to the owner address from escrow datum
-        // Reconstruct bech32 address from Plutus data is complex,
-        // so we use the check_payment_output pattern: pay to a Plutus-data address
-        // For now, use Lucid's pay.ToAddress with reconstructed address
-        // The validator checks: check_payment_output(tx.outputs, datum.owner, datum.output_asset, output_delivered)
-        // which means an output with the owner address must contain >= output_delivered of output_asset
       }
 
       tx = tx.attach.SpendingValidator(escrowScript);
@@ -1361,7 +1404,7 @@ export class TxBuilder implements ITxBuilder {
           pdf[0],          // pool_nft (unchanged)
           pdf[1],          // asset_a (unchanged)
           pdf[2],          // asset_b (unchanged)
-          pdf[3],          // total_lp_tokens (unchanged â€” swap doesn't affect LP)
+          pdf[3],          // total_lp_tokens (unchanged swap doesn't affect LP)
           feeNumerator,    // fee_numerator (unchanged)
           protocolFeesA,   // updated protocol_fees_a
           protocolFeesB,   // updated protocol_fees_b
@@ -1392,9 +1435,8 @@ export class TxBuilder implements ITxBuilder {
       // Pay outputs to escrow owners
       // The escrow validator's check_payment_output verifies that an output exists
       // with: address == datum.owner AND asset_quantity >= output_delivered
-      // We encode this as pay.ToAddressWithData using the Plutus address
       for (const payment of ownerPayments) {
-        tx = tx.pay.ToAddress(params.solverAddress, payment.assets);
+        tx = tx.pay.ToAddress(payment.address, payment.assets);
       }
 
       tx = tx
@@ -1418,9 +1460,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 7. CREATE ORDER â€” lock funds in order validator
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 7. CREATE ORDER lock funds in order validator
 
   async buildOrderTx(params: OrderTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1520,9 +1560,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 8. CANCEL ORDER â€” owner reclaims from order validator
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 8. CANCEL ORDER owner reclaims from order validator
 
   async buildCancelOrderTx(params: CancelOrderTxParams): Promise<BuildTxResult> {
     this.logger.info({ orderId: params.orderId }, 'Building cancel order TX');
@@ -1583,9 +1621,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 9. RECLAIM â€” permissionless reclaim of expired escrow
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 9. RECLAIM permissionless reclaim of expired escrow
 
   async buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1598,10 +1634,10 @@ export class TxBuilder implements ITxBuilder {
       const { escrowScript, escrowAddr, intentPolicyScript, intentPolicyId } =
         this.getEscrowScripts();
 
-      // Keeper pays fees â€” select keeper UTxOs
+      // Keeper pays fees select keeper UTxOs
       const keeperUtxos = await lucid.utxosAt(params.keeperAddress);
       if (keeperUtxos.length === 0) {
-        throw new ChainError('No UTxOs at keeper address â€” keeper wallet may be empty');
+        throw new ChainError('No UTxOs at keeper address keeper wallet may be empty');
       }
       lucid.selectWallet.fromAddress(params.keeperAddress, keeperUtxos);
 
@@ -1625,7 +1661,7 @@ export class TxBuilder implements ITxBuilder {
       );
 
       if (!intentTokenUnit) {
-        throw new ChainError('Escrow UTxO has no intent token â€” cannot reclaim');
+        throw new ChainError('Escrow UTxO has no intent token cannot reclaim');
       }
 
       // Parse the inline datum to extract owner + remaining input info
@@ -1634,9 +1670,9 @@ export class TxBuilder implements ITxBuilder {
       // For now, we build the TX and let the validator+Lucid resolve it via datum.
       //
       // The validator requires:
-      //  1. check_after_deadline â€” set validFrom to now (after deadline)
-      //  2. check_burn_one â€” burn the intent token
-      //  3. check_payment_output â€” remaining input to owner
+      //  1. check_after_deadline set validFrom to now (after deadline)
+      //  2. check_burn_one burn the intent token
+      //  3. check_payment_output remaining input to owner
       //
       // We pay ALL non-ADA assets from the escrow to the owner.
       // The keeper gets the ADA change minus min-ADA that goes to owner.
@@ -1686,9 +1722,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 10. COLLECT FEES â€” admin collects protocol fees from pool(s)
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 10. COLLECT FEES admin collects protocol fees from pool(s)
 
   async buildCollectFeesTx(params: CollectFeesTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1773,7 +1807,7 @@ export class TxBuilder implements ITxBuilder {
         const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
         const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-        // Build updated pool datum â€” zero the protocol fee counters
+        // Build updated pool datum zero the protocol fee counters
         // Validator requires: new_datum.protocol_fees_a == 0, new_datum.protocol_fees_b == 0
         // and last_root_k preserved (fee collection doesn't change trading reserves)
         const updatedPoolDatum = Data.to(
@@ -1785,7 +1819,7 @@ export class TxBuilder implements ITxBuilder {
             df[4],    // fee_numerator (unchanged)
             0n,       // protocol_fees_a = 0 (zeroed after collection)
             0n,       // protocol_fees_b = 0 (zeroed after collection)
-            df[7],    // last_root_k (unchanged â€” fee collection doesn't affect K)
+            df[7],    // last_root_k (unchanged fee collection doesn't affect K)
           ]),
         );
 
@@ -1843,9 +1877,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 11. UPDATE SETTINGS â€” admin updates global protocol settings
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 11. UPDATE SETTINGS admin updates global protocol settings
 
   async buildUpdateSettingsTx(params: UpdateSettingsTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -1857,12 +1889,9 @@ export class TxBuilder implements ITxBuilder {
       const lucid = await this.getLucid();
       const bp = this.getBlueprint();
 
-      // Load settings validator
+      // Load settings validator (parameterized by settings_nft: AssetClass)
       const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
-      const settingsScript: Script = {
-        type: 'PlutusV3',
-        script: applyDoubleCborEncoding(settingsBp.compiledCode),
-      };
+      const settingsScript = this.resolveSettingsScript(settingsBp);
       const settingsAddr = validatorToAddress(this.network, settingsScript);
 
       // Admin wallet
@@ -1930,9 +1959,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 12. UPDATE FACTORY ADMIN â€” transfer factory admin to new VKH
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 12. UPDATE FACTORY ADMIN transfer factory admin to new VKH
 
   async buildUpdateFactoryAdminTx(params: UpdateFactoryAdminTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2010,9 +2037,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 13. BURN POOL NFT â€” admin closes pool by burning NFT
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 13. BURN POOL NFT admin closes pool by burning NFT
 
   async buildBurnPoolNFTTx(params: BurnPoolNFTTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2090,8 +2115,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // 14. EXECUTE ORDER â€” solver executes a pending order against pool
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 14. EXECUTE ORDER solver executes a pending order against pool
 
   async buildExecuteOrderTx(params: ExecuteOrderTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2271,7 +2295,8 @@ export class TxBuilder implements ITxBuilder {
         newPoolAssets,
       );
 
-      // Deliver output to owner
+      // Deliver output to owner — reconstruct bech32 from Plutus Address datum
+      const ownerBech32 = plutusAddressToAddress(owner, this.network);
       const outPolicyId = assetOut.fields[0] as string;
       const outAssetName = assetOut.fields[1] as string;
       const outUnit = outPolicyId === '' ? 'lovelace' : toUnit(outPolicyId, outAssetName);
@@ -2283,8 +2308,8 @@ export class TxBuilder implements ITxBuilder {
         ownerPayment[outUnit] = outputDelivered;
       }
 
-      // Pay to solver address (validator checks owner address in datum)
-      tx = tx.pay.ToAddress(params.solverAddress, ownerPayment);
+      // Pay to owner address (validator checks datum.owner matches output address)
+      tx = tx.pay.ToAddress(ownerBech32, ownerPayment);
 
       if (isCompleteFill) {
         // Burn order auth token
@@ -2297,7 +2322,7 @@ export class TxBuilder implements ITxBuilder {
             .attach.MintingPolicy(r.intentPolicyScript);
         }
       } else {
-        // Partial fill â€” continue order with updated datum
+        // Partial fill continue order with updated datum
         const updatedOrderDatum = Data.to(
           new Constr(0, [
             odf[0], // order_type
@@ -2365,9 +2390,7 @@ export class TxBuilder implements ITxBuilder {
     }
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-  // 16. DEPLOY SETTINGS â€” bootstrap settings UTxO
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // 16. DEPLOY SETTINGS bootstrap settings UTxO
 
   async buildDeploySettingsTx(params: DeploySettingsTxParams): Promise<BuildTxResult> {
     this.logger.info(
@@ -2379,12 +2402,9 @@ export class TxBuilder implements ITxBuilder {
       const lucid = await this.getLucid();
       const bp = this.getBlueprint();
 
-      // Load settings validator
+      // Load settings validator (parameterized by settings_nft: AssetClass)
       const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
-      const settingsScript: Script = {
-        type: 'PlutusV3',
-        script: applyDoubleCborEncoding(settingsBp.compiledCode),
-      };
+      const settingsScript = this.resolveSettingsScript(settingsBp);
       const settingsAddr = validatorToAddress(this.network, settingsScript);
 
       // Admin wallet

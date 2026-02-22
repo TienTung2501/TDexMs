@@ -23,22 +23,9 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     getAdminDashboardMetrics()
       .then(setMetrics)
-      .catch(() => {
-        // Dev fallback
-        setMetrics({
-          total_tvl_usd: 45_000_000,
-          volume_24h_usd: 12_500_000,
-          active_pools: 142,
-          total_pending_fees_usd: 12_500,
-          charts: {
-            fee_growth_30d: Array.from({ length: 30 }, (_, i) => ({
-              date: new Date(Date.now() - (29 - i) * 86400000)
-                .toISOString()
-                .slice(0, 10),
-              accumulated_usd: 5000 + i * 300 + Math.random() * 200,
-            })),
-          },
-        });
+      .catch((err) => {
+        console.error('Failed to load admin dashboard metrics:', err);
+        setMetrics(null);
       })
       .finally(() => setLoading(false));
   }, []);

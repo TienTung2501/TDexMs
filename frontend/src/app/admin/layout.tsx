@@ -50,14 +50,10 @@ export default function AdminLayout({
           setAuthState("unauthorized");
         }
       })
-      .catch(() => {
-        // If admin endpoint doesn't exist yet, allow access for dev
-        setAuthState("authorized");
-        setAuthData({
-          is_admin: true,
-          roles: { is_factory_admin: true, is_settings_admin: true },
-          system_status: { current_version: 1 },
-        });
+      .catch((err) => {
+        // Auth check failed — deny access by default
+        console.error('Admin auth check failed:', err);
+        setAuthState("unauthorized");
       });
   }, [isConnected, address]);
 
