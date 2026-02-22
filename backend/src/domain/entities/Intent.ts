@@ -77,7 +77,7 @@ export class Intent {
 
   /** Check if intent can be cancelled */
   canBeCancelled(): boolean {
-    const cancellableStatuses: IntentStatus[] = ['CREATED', 'PENDING', 'ACTIVE', 'FILLING'];
+    const cancellableStatuses: IntentStatus[] = ['CREATED', 'PENDING', 'ACTIVE', 'FILLING', 'CANCELLING'];
     return cancellableStatuses.includes(this.props.status);
   }
 
@@ -114,7 +114,13 @@ export class Intent {
     this.props.updatedAt = new Date();
   }
 
-  /** Mark as cancelled */
+  /** Mark as cancelling (TX built but not yet confirmed on-chain) — R-08 fix */
+  markCancelling(): void {
+    this.props.status = 'CANCELLING' as IntentStatus;
+    this.props.updatedAt = new Date();
+  }
+
+  /** Mark as cancelled (TX confirmed on-chain) */
   markCancelled(): void {
     this.props.status = 'CANCELLED';
     this.props.updatedAt = new Date();

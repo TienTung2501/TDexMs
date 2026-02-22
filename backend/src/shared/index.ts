@@ -16,6 +16,7 @@ export type IntentStatus =
   | 'ACTIVE'
   | 'FILLING'
   | 'FILLED'
+  | 'CANCELLING'
   | 'CANCELLED'
   | 'EXPIRED'
   | 'RECLAIMED';
@@ -115,7 +116,7 @@ export const intentSchema = z.object({
 
 export const intentListSchema = z.object({
   address: z.string().optional(),
-  status: z.enum(['CREATED', 'PENDING', 'ACTIVE', 'FILLING', 'FILLED', 'CANCELLED', 'EXPIRED', 'RECLAIMED']).optional(),
+  status: z.enum(['CREATED', 'PENDING', 'ACTIVE', 'FILLING', 'FILLED', 'CANCELLING', 'CANCELLED', 'EXPIRED', 'RECLAIMED']).optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().int().positive().max(100).default(20).optional(),
 });

@@ -161,31 +161,110 @@ export function createPoolRouter(
           return;
         }
 
-        // Generate placeholder history based on current state
-        // In production, this would query a pool_snapshots table
-        const now = Date.now();
-        const history = [];
-        const currentTvl = Number(pool.tvlAda ?? 0n);
-        const currentVol = Number(pool.volume24h ?? 0n);
+        // R-02 fix: Query real PoolHistory rows written by PoolSnapshotCron / SolverEngine / Deposit / Withdraw
+        const since = new Date(Date.now() - days * 86_400_000);
+        const historyRows = await prisma.poolHistory.findMany({
+          where: {
+            poolId,
+            timestamp: { gte: since },
+          },
+          orderBy: { timestamp: 'asc' },
+        });
 
-        for (let i = days - 1; i >= 0; i--) {
-          const ts = new Date(now - i * 86_400_000);
-          const factor = 0.8 + Math.random() * 0.4;
-          history.push({
-            timestamp: ts.toISOString(),
-            tvlAda: Math.round(currentTvl * factor),
-            volume: Math.round(currentVol * factor),
-            feeRevenue: Math.round(currentVol * factor * 0.003),
-            price: pool.reserveB && pool.reserveA
-              ? Number(pool.reserveA) / Number(pool.reserveB) * factor
-              : 0,
-          });
-        }
+        // If no snapshot rows exist yet (fresh deployment), fall back to
+        // a single-entry "current" snapshot so the UI is not blank.
+        const history = historyRows.length > 0
+          ? historyRows.map((h) => ({
+              timestamp: h.timestamp.toISOString(),
+              tvlAda: Number(h.tvlAda ?? 0),
+              volume: Number(h.volume ?? 0),
+              feeRevenue: Number(h.fees ?? 0),
+              price: h.price ?? 0,
+            }))
+          : [{
+              timestamp: new Date().toISOString(),
+              tvlAda: Number(pool.tvlAda ?? 0n),
+              volume: Number(pool.volume24h ?? 0n),
+              feeRevenue: Number(pool.fees24h ?? 0n) * 0.003,
+              price: pool.reserveB && pool.reserveA
+                ? Number(pool.reserveA) / Number(pool.reserveB)
+                : 0,
+            }];
 
         res.json({
           poolId,
           history,
         });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  /** GET /v1/tokens — Dynamic token registry derived from active pools (R-10 fix) */
+  router.get(
+    '/tokens',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const prisma = getPrisma();
+        const pools = await prisma.pool.findMany({
+          where: { state: 'ACTIVE' },
+          select: {
+            assetAPolicyId: true,
+            assetAAssetName: true,
+            assetATicker: true,
+            assetADecimals: true,
+            assetBPolicyId: true,
+            assetBAssetName: true,
+            assetBTicker: true,
+            assetBDecimals: true,
+          },
+        });
+
+        // De-duplicate tokens from all pool pairs
+        const tokenMap = new Map<string, {
+          policyId: string;
+          assetName: string;
+          ticker: string;
+          decimals: number;
+        }>();
+
+        // Always include ADA
+        tokenMap.set('lovelace', {
+          policyId: '',
+          assetName: '',
+          ticker: 'ADA',
+          decimals: 6,
+        });
+
+        for (const pool of pools) {
+          const keyA = pool.assetAPolicyId
+            ? `${pool.assetAPolicyId}.${pool.assetAAssetName}`
+            : 'lovelace';
+          if (!tokenMap.has(keyA)) {
+            tokenMap.set(keyA, {
+              policyId: pool.assetAPolicyId,
+              assetName: pool.assetAAssetName,
+              ticker: pool.assetATicker ?? pool.assetAAssetName.slice(0, 8) ?? keyA.slice(0, 12),
+              decimals: pool.assetADecimals ?? 6,
+            });
+          }
+
+          const keyB = pool.assetBPolicyId
+            ? `${pool.assetBPolicyId}.${pool.assetBAssetName}`
+            : 'lovelace';
+          if (!tokenMap.has(keyB)) {
+            tokenMap.set(keyB, {
+              policyId: pool.assetBPolicyId,
+              assetName: pool.assetBAssetName,
+              ticker: pool.assetBTicker ?? pool.assetBAssetName.slice(0, 8) ?? keyB.slice(0, 12),
+              decimals: pool.assetBDecimals ?? 6,
+            });
+          }
+        }
+
+        const tokens = Array.from(tokenMap.values());
+        res.json({ tokens, count: tokens.length });
       } catch (err) {
         next(err);
       }

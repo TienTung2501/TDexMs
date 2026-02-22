@@ -4,7 +4,8 @@
  */
 import 'dotenv/config';
 
-const API_BASE = process.env.API_BASE || 'https://tdexms.onrender.com';
+// R-11 fix: Default to localhost for local development (was production URL)
+const API_BASE = process.env.API_BASE || 'http://localhost:3001';
 const API_V1 = `${API_BASE}/v1`;
 
 export async function apiFetch<T>(

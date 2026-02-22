@@ -1,11 +1,11 @@
 "use client";
 
-import React from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowRight, ExternalLink, Loader2, Wifi, WifiOff } from "lucide-react";
 import { truncateAddress } from "@/lib/utils";
-import { useIntents, type NormalizedIntent } from "@/lib/hooks";
+import { useIntents, useWebSocket, type NormalizedIntent } from "@/lib/hooks";
 
 interface RecentTradesTableProps {
   poolId?: string;
@@ -14,13 +14,72 @@ interface RecentTradesTableProps {
 
 export function RecentTradesTable({ poolId, limit = 10 }: RecentTradesTableProps) {
   const { intents, loading } = useIntents({ status: "FILLED" });
+  const [liveTrades, setLiveTrades] = useState<NormalizedIntent[]>([]);
 
-  const trades = intents.slice(0, limit);
+  // R-09 fix: Subscribe to real-time intent updates via WebSocket
+  const channels = useMemo(
+    () => [{ channel: "intents", params: poolId ? { poolId } : {} }],
+    [poolId]
+  );
+
+  const handleWsMessage = useCallback(
+    (type: string, data: unknown) => {
+      if (type === "intent:update") {
+        const d = data as { intentId: string; status: string; settlementTxHash?: string };
+        if (d.status === "FILLED") {
+          // Prepend the new trade; dedup by intentId
+          setLiveTrades((prev) => {
+            const exists = prev.some((t) => t.id === d.intentId);
+            if (exists) return prev;
+            return [
+              {
+                id: d.intentId,
+                inputTicker: "?",
+                outputTicker: "?",
+                inputAmount: 0,
+                outputAmount: 0,
+                status: "FILLED",
+                creator: "",
+                createdAt: new Date().toISOString(),
+                settlementTxHash: d.settlementTxHash ?? null,
+              } as unknown as NormalizedIntent,
+              ...prev,
+            ].slice(0, limit);
+          });
+        }
+      }
+    },
+    [limit]
+  );
+
+  const { connected } = useWebSocket(channels, handleWsMessage);
+
+  // Merge live trades (newest first) with HTTP-fetched trades, dedup
+  const allTrades = useMemo(() => {
+    const seen = new Set<string>();
+    const merged: NormalizedIntent[] = [];
+    for (const t of [...liveTrades, ...intents]) {
+      if (!seen.has(t.id)) {
+        seen.add(t.id);
+        merged.push(t);
+      }
+    }
+    return merged.slice(0, limit);
+  }, [liveTrades, intents, limit]);
+
+  const trades = allTrades;
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Recent Trades</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Recent Trades</CardTitle>
+          {connected ? (
+            <Wifi className="h-3.5 w-3.5 text-green-500" />
+          ) : (
+            <WifiOff className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {loading ? (

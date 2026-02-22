@@ -37,7 +37,11 @@ export class CancelIntent {
       senderAddress: input.senderAddress,
     });
 
-    intent.markCancelled();
+    // R-08 fix: Save CANCELLING (not CANCELLED) to DB when TX is built.
+    // The intent transitions to CANCELLED only after on-chain TX confirmation
+    // via POST /tx/confirm. This prevents DB/chain state mismatch if the
+    // user never signs or submits the cancel TX.
+    intent.markCancelling();
     await this.intentRepo.save(intent);
 
     return {

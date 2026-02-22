@@ -127,9 +127,9 @@ export function createPortfolioRouter(
           total_balance_usd: 0, // Client fills from CIP-30 wallet
           total_balance_ada: 0, // Client fills from CIP-30 wallet
           status_breakdown: {
-            available_in_wallet: 0, // Client-side data
+            available_in_wallet: 0, // Client-side data (CIP-30 getBalance)
             locked_in_orders: lockedInOrders,
-            locked_in_lp: 0,
+            locked_in_lp: 0, // Requires CIP-30 wallet UTxO scan on frontend; see /portfolio/liquidity for pool LP metadata
           },
           allocation_chart: allocation,
         });
@@ -328,16 +328,39 @@ export function createPortfolioRouter(
           return;
         }
 
-        // In a full implementation, we'd query on-chain LP token balances
-        // For now, return empty array — the frontend handles this gracefully
+        // In a full implementation, we'd query on-chain LP token balances via Blockfrost.
+        // Since this route doesn't have direct chain access, return pool LP metadata
+        // so the frontend can match its CIP-30 wallet UTxOs against known LP policies.
         const positions: any[] = [];
 
         if (poolRepo) {
           const pools = await poolRepo.findAllActive();
-          // Placeholder: In production, scan wallet UTxOs for LP token policy IDs
-          // and match them against known pools
-          for (const _pool of pools) {
-            // Future: check if wallet holds LP tokens for this pool
+          // Return LP-eligible pool data; the frontend matches these lpPolicyIds
+          // against the user's wallet UTxOs (obtained through CIP-30 getUtxos).
+          for (const pool of pools) {
+            if (!pool.lpPolicyId) continue;
+
+            const reserveA = Number(pool.reserveA);
+            const reserveB = Number(pool.reserveB);
+            const totalLp = Number(pool.totalLpTokens);
+            const pricePerLp = totalLp > 0
+              ? (reserveA + reserveB) / totalLp
+              : 0;
+
+            positions.push({
+              poolId: pool.id,
+              lpPolicyId: pool.lpPolicyId,
+              pair: `${pool.assetAAssetName || 'ADA'}_${pool.assetBAssetName || 'ADA'}`,
+              assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
+              assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
+              reserveA: pool.reserveA.toString(),
+              reserveB: pool.reserveB.toString(),
+              totalLpTokens: pool.totalLpTokens.toString(),
+              pricePerLpToken: pricePerLp,
+              tvlAda: pool.tvlAda.toString(),
+              // Frontend should: filter this list by checking if walletUtxos
+              // contain tokens matching lpPolicyId, then compute its share.
+            });
           }
         }
 

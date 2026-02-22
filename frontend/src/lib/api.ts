@@ -882,3 +882,20 @@ export async function triggerSolver(): Promise<{ triggered: boolean; message: st
     body: JSON.stringify({}),
   });
 }
+
+// ─── Token Registry (R-10) ─────────────────
+export interface TokenRegistryEntry {
+  policyId: string;
+  assetName: string;
+  ticker: string;
+  decimals: number;
+}
+
+export async function fetchTokenRegistry(): Promise<TokenRegistryEntry[]> {
+  try {
+    const data = await apiFetch<{ tokens: TokenRegistryEntry[]; count: number }>("/tokens");
+    return data.tokens;
+  } catch {
+    return []; // Fallback: return empty; static TOKENS will still be used
+  }
+}

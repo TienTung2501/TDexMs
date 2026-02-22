@@ -13,6 +13,7 @@ import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.
 import type { IOrderRepository } from '../../../domain/ports/IOrderRepository.js';
 import type { ITxBuilder } from '../../../domain/ports/index.js';
 import type { CandlestickService } from '../../../application/services/CandlestickService.js';
+import { UpdateSettingsUseCase } from '../../../application/use-cases/UpdateSettingsUseCase.js';
 
 export interface AdminDependencies {
   poolRepo: IPoolRepository;
@@ -190,19 +191,20 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           return;
         }
 
-        const result = await deps.txBuilder.buildUpdateSettingsTx({
+        // R-14 fix: Route through UpdateSettingsUseCase for domain validation
+        const useCase = new UpdateSettingsUseCase(deps.txBuilder);
+        const result = await useCase.execute({
           adminAddress: admin_address,
-          newSettings: {
-            maxProtocolFeeBps: new_settings.max_protocol_fee_bps ?? 30,
-            minPoolLiquidity: BigInt(new_settings.min_pool_liquidity ?? 1_000_000),
-            nextVersion: new_settings.next_version ?? 1,
-          },
+          protocolFeeBps: new_settings.max_protocol_fee_bps ?? 30,
+          minPoolLiquidity: String(new_settings.min_pool_liquidity ?? 1_000_000),
+          nextVersion: new_settings.next_version ?? 1,
+          mode: 'update',
         });
 
         res.json({
           unsignedTx: result.unsignedTx,
           txHash: result.txHash,
-          estimatedFee: result.estimatedFee.toString(),
+          estimatedFee: result.estimatedFee,
         });
       } catch (err) {
         next(err);
@@ -230,6 +232,38 @@ export function createAdminRouter(deps: AdminDependencies): Router {
         const result = await deps.txBuilder.buildUpdateFactoryAdminTx({
           currentAdminAddress: current_admin_address,
           newAdminVkh: new_admin_vkh,
+        });
+
+        res.json({
+          unsignedTx: result.unsignedTx,
+          txHash: result.txHash,
+          estimatedFee: result.estimatedFee.toString(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Factory: Build Deploy ────────────────────
+  router.post(
+    '/admin/factory/build-deploy',
+    writeLimiter,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const { admin_address } = req.body;
+        if (!admin_address) {
+          res.status(400).json({ error: 'admin_address is required' });
+          return;
+        }
+
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const result = await deps.txBuilder.buildDeployFactoryTx({
+          adminAddress: admin_address,
         });
 
         res.json({

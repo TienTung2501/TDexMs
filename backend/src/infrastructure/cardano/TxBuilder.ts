@@ -877,6 +877,11 @@ export class TxBuilder implements ITxBuilder {
         changeAddress: params.changeAddress,
       });
 
+      // R-13 fix: Determine pool output index based on TX construction order.
+      // If factory UTxO was consumed, factory re-output is at index 0, pool at 1.
+      // If no factory, pool output is at index 0.
+      const poolOutputIdx = factoryUtxos.length > 0 ? 1 : 0;
+
       return {
         unsignedTx: completed.toCBOR(),
         txHash: completed.toHash(),
@@ -886,6 +891,7 @@ export class TxBuilder implements ITxBuilder {
           poolNftAssetName: poolNftNameHex,
           lpPolicyId: r.lpPolicyId,
           initialLp,
+          poolOutputIndex: poolOutputIdx,
         },
       };
     } catch (error) {
@@ -1298,53 +1304,124 @@ export class TxBuilder implements ITxBuilder {
         // output = (reserve_out * input) / (reserve_in + input)
         // This is equivalent to: new_reserve_in * new_reserve_out >= old_reserve_in * old_reserve_out
         const inputConsumed = remainingInput; // Complete fill
+        const maxPartialFills = edf[7] as bigint;
+        const fillCount = edf[8] as bigint;
+        const isPartialFill = maxPartialFills > 0n && fillCount < maxPartialFills;
+        // For partial fills with multiple escrows in a batch, the solver
+        // can choose to consume only part of remainingInput. For now,
+        // always do a complete fill per-intent. Partial fill support is
+        // activated when pool liquidity is insufficient — see below.
+        let actualInput = inputConsumed;
         let outputAmount: bigint;
 
         if (direction === 'AToB') {
           // Selling A for B: input is A, output is B
           // Fee deduction: effective_input = input * (10000 - fee) / 10000
-          const effectiveInput = (inputConsumed * (10000n - feeNumerator)) / 10000n;
+          const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
           outputAmount = (reserveB * effectiveInput) / (reserveA + effectiveInput);
+
+          // Partial fill check: if output would drain too much of reserve, cap it
+          if (outputAmount >= reserveB && isPartialFill) {
+            // Reserve can't fully satisfy — cap at 50% of reserve, re-derive input
+            const maxOutput = reserveB / 2n;
+            // reverse AMM: input = (reserveA * maxOutput) / ((reserveB - maxOutput) * (10000 - fee) / 10000)
+            const denominator = ((reserveB - maxOutput) * (10000n - feeNumerator)) / 10000n;
+            actualInput = denominator > 0n ? (reserveA * maxOutput) / denominator : 0n;
+            if (actualInput <= 0n) {
+              throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
+            }
+            const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
+            outputAmount = (reserveB * recalcEffective) / (reserveA + recalcEffective);
+          }
           
           // Protocol fee accrues on input side (A)
-          const protocolFee = (inputConsumed * feeNumerator / 10000n) / 6n; // protocol_fee_share = 6
+          const protocolFee = (actualInput * feeNumerator / 10000n) / 6n; // protocol_fee_share = 6
           protocolFeesA += protocolFee;
           
           // Update reserves
-          reserveA += inputConsumed;
+          reserveA += actualInput;
           reserveB -= outputAmount;
         } else {
           // Selling B for A: input is B, output is A
-          const effectiveInput = (inputConsumed * (10000n - feeNumerator)) / 10000n;
+          const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
           outputAmount = (reserveA * effectiveInput) / (reserveB + effectiveInput);
+
+          // Partial fill check
+          if (outputAmount >= reserveA && isPartialFill) {
+            const maxOutput = reserveA / 2n;
+            const denominator = ((reserveA - maxOutput) * (10000n - feeNumerator)) / 10000n;
+            actualInput = denominator > 0n ? (reserveB * maxOutput) / denominator : 0n;
+            if (actualInput <= 0n) {
+              throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
+            }
+            const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
+            outputAmount = (reserveA * recalcEffective) / (reserveB + recalcEffective);
+          }
           
-          const protocolFee = (inputConsumed * feeNumerator / 10000n) / 6n;
+          const protocolFee = (actualInput * feeNumerator / 10000n) / 6n;
           protocolFeesB += protocolFee;
           
-          reserveB += inputConsumed;
+          reserveB += actualInput;
           reserveA -= outputAmount;
         }
 
+        const isCompleteFill = actualInput >= remainingInput;
+
         // Check minimum output (slippage protection)
         // min_required = min_output * input_consumed / input_amount
-        const minRequired = (minOutput * inputConsumed) / inputAmount;
+        const minRequired = (minOutput * actualInput) / inputAmount;
         if (outputAmount < minRequired) {
           throw new ChainError(
             `Swap output ${outputAmount} below minimum ${minRequired} for escrow ${eu.txHash}`,
           );
         }
 
-        // Collect escrow UTxO with Fill redeemer complete fill
+        // Collect escrow UTxO with Fill redeemer
         tx = tx.collectFrom(
           [eu],
-          EscrowRedeemer.Fill(inputConsumed, outputAmount),
+          EscrowRedeemer.Fill(actualInput, outputAmount),
         );
 
-        // Burn intent token
-        for (const unit of Object.keys(eu.assets)) {
-          if (unit.startsWith(intentPolicyId)) {
-            burnAssets[unit] = (burnAssets[unit] || 0n) - 1n;
+        if (isCompleteFill) {
+          // Burn intent token on complete fill
+          for (const unit of Object.keys(eu.assets)) {
+            if (unit.startsWith(intentPolicyId)) {
+              burnAssets[unit] = (burnAssets[unit] || 0n) - 1n;
+            }
           }
+        } else {
+          // Partial fill: re-output escrow with updated datum
+          const newRemainingInput = remainingInput - actualInput;
+          const newFillCount = fillCount + 1n;
+          const updatedEscrowDatum = Data.to(
+            new Constr(0, [
+              edf[0], // escrow_token
+              edf[1], // owner
+              edf[2], // input_asset
+              edf[3], // input_amount (original, unchanged)
+              edf[4], // output_asset
+              edf[5], // min_output
+              edf[6], // deadline
+              edf[7], // max_partial_fills
+              newFillCount,
+              newRemainingInput,
+            ]),
+          );
+
+          // Re-output escrow with reduced input amount
+          const inputUnit = inputPolicyId === '' ? 'lovelace' : toUnit(inputPolicyId, inputAssetName);
+          const newEscrowAssets: Assets = { ...eu.assets };
+          if (inputUnit === 'lovelace') {
+            newEscrowAssets.lovelace = newRemainingInput + MIN_SCRIPT_LOVELACE;
+          } else {
+            newEscrowAssets[inputUnit] = newRemainingInput;
+          }
+
+          tx = tx.pay.ToContract(
+            escrowAddr,
+            { kind: 'inline', value: updatedEscrowDatum },
+            newEscrowAssets,
+          );
         }
 
         // Resolve owner address for payment output
@@ -2470,6 +2547,70 @@ export class TxBuilder implements ITxBuilder {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: msg }, 'Failed to build deploy settings TX');
       throw new ChainError(`Failed to build deploy settings TX: ${msg}`);
+    }
+  }
+
+  async buildDeployFactoryTx(params: import('../../domain/ports/ITxBuilder.js').DeployFactoryTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { admin: params.adminAddress },
+      'Building deploy factory TX',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const resolved = this.getResolved();
+
+      const factoryAddr = resolved.factoryAddr;
+
+      // Admin wallet
+      const adminUtxos = await lucid.utxosAt(params.adminAddress);
+      if (adminUtxos.length === 0) {
+        throw new ChainError('No UTxOs at admin address');
+      }
+      lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
+
+      // Check no factory UTxO already exists
+      const existingFactory = await lucid.utxosAt(factoryAddr);
+      if (existingFactory.length > 0) {
+        throw new ChainError('Factory UTxO already exists on-chain');
+      }
+
+      // Build a simple factory datum — empty pool list
+      // FactoryDatum { pools: List<AssetClass> }
+      const factoryDatum = Data.to(new Constr(0, [[]]));
+
+      const factoryAssets: Assets = {
+        lovelace: MIN_SCRIPT_LOVELACE,
+      };
+
+      const tx = lucid
+        .newTx()
+        .pay.ToContract(
+          factoryAddr,
+          { kind: 'inline', value: factoryDatum },
+          factoryAssets,
+        )
+        .addSigner(params.adminAddress);
+
+      const completed = await tx.complete({
+        changeAddress: params.adminAddress,
+      });
+
+      this.logger.info(
+        { txHash: completed.toHash(), factoryAddr },
+        'Deploy factory TX built',
+      );
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build deploy factory TX');
+      throw new ChainError(`Failed to build deploy factory TX: ${msg}`);
     }
   }
 }

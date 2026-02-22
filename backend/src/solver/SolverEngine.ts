@@ -6,6 +6,8 @@
  * Fixed: B1 — uses findByUtxoRef to resolve DB intent IDs
  * Fixed: B8 — only marks FILLING after TX is successfully built
  * Fixed: B5 — records price tick after confirmed settlement
+ * Fixed: R-03 — writes Swap records after settlement
+ * Fixed: R-15 — volume tracking respects batch direction
  * CRITICAL RULE: All DB state changes occur ONLY after on-chain TX confirmation.
  */
 import { getLogger } from '../config/logger.js';
@@ -19,6 +21,7 @@ import type { ITxBuilder } from '../domain/ports/ITxBuilder.js';
 import type { IChainProvider } from '../domain/ports/IChainProvider.js';
 import type { WsServer } from '../interface/ws/WsServer.js';
 import type { CandlestickService } from '../application/services/CandlestickService.js';
+import { getPrisma } from '../infrastructure/database/prisma-client.js';
 
 export interface SolverConfig {
   batchWindowMs: number;
@@ -244,7 +247,15 @@ export class SolverEngine {
 
         // ── Post-confirmation DB updates ──
 
-        // 1. Update intent statuses to FILLED (B1 fix: use DB id, not UTxO ref)
+        // 0. Fetch pool entity once for direction determination and reserve updates
+        const pool = this.poolRepo ? await this.poolRepo.findById(batch.poolId) : null;
+        // Helper: Build assetId string for comparison (same format as EscrowIntent.inputAsset)
+        const poolAssetA = pool
+          ? (pool.assetAPolicyId ? `${pool.assetAPolicyId}.${pool.assetAAssetName}` : 'lovelace')
+          : null;
+
+        // 1. Update intent statuses to FILLED and write Swap records (R-03 fix)
+        const prisma = getPrisma();
         for (const intent of batch.intents) {
           const intentId = await this.resolveIntentId(
             intent.utxoRef.txHash,
@@ -260,6 +271,41 @@ export class SolverEngine {
               settlementTxHash: submitResult.txHash,
               timestamp: Date.now(),
             });
+
+            // R-03: Write Swap record for each settled intent
+            try {
+              const direction = (poolAssetA && intent.inputAsset === poolAssetA) ? 'AToB' : 'BToA';
+              // Compute approximate output: pro-rata share of batch totals
+              const outputEstimate = batch.totalInputAmount > 0n
+                ? (intent.inputAmount * batch.totalOutputAmount) / batch.totalInputAmount
+                : 0n;
+              // Fee estimate from the pool fee numerator (e.g. 30 = 0.3%)
+              const feeNum = pool ? BigInt(pool.feeNumerator) : 30n;
+              const feeEstimate = (intent.inputAmount * feeNum) / 10000n;
+              // Price impact estimate (simple – difference from ideal ratio)
+              const priceImpact = batch.totalInputAmount > 0n
+                ? Math.abs(
+                    Number(intent.inputAmount) / Number(batch.totalInputAmount) -
+                    1 / batch.intents.length,
+                  )
+                : 0;
+
+              await prisma.swap.create({
+                data: {
+                  poolId: batch.poolId,
+                  txHash: submitResult.txHash,
+                  direction,
+                  inputAmount: intent.inputAmount.toString(),
+                  outputAmount: outputEstimate.toString(),
+                  fee: feeEstimate.toString(),
+                  priceImpact,
+                  senderAddress: intent.owner,
+                  intentId,
+                },
+              });
+            } catch (swapErr) {
+              this.logger.warn({ err: swapErr, intentId }, 'Failed to write Swap record');
+            }
           } else {
             this.logger.warn(
               { txHash: intent.utxoRef.txHash, outputIndex: intent.utxoRef.outputIndex },
@@ -287,10 +333,8 @@ export class SolverEngine {
         }
 
         // 3. Update pool reserves in DB (if poolRepo available)
-        if (this.poolRepo) {
+        if (this.poolRepo && pool) {
           try {
-            const pool = await this.poolRepo.findById(batch.poolId);
-            if (pool) {
               // Apply swap to domain entity to compute new reserves
               pool.applySwap(
                 batch.totalInputAmount,
@@ -305,10 +349,20 @@ export class SolverEngine {
                 submitResult.txHash,
                 0, // Will be corrected by ChainSync
               );
+              // R-15 fix: Normalize volume to assetA units so A→B and B→A are comparable
+              // For A→B: volumeInA = totalInputAmount (already in A)
+              // For B→A: volumeInA = totalOutputAmount (the A side of the swap)
+              const batchDirectionAToB = batch.intents.length > 0 && poolAssetA
+                ? batch.intents[0]!.inputAsset === poolAssetA
+                : true;
+              const normalizedVolume = batchDirectionAToB
+                ? batch.totalInputAmount
+                : batch.totalOutputAmount;
+
               // Update 24h volume stats
               await this.poolRepo.updateStats(
                 pool.id,
-                pool.volume24h + batch.totalInputAmount,
+                pool.volume24h + normalizedVolume,
                 pool.fees24h,
                 pool.tvlAda,
               );
@@ -322,7 +376,7 @@ export class SolverEngine {
                 reserveA: pool.reserveA,
                 reserveB: pool.reserveB,
                 tvlAda: pool.tvlAda,
-                volume: pool.volume24h + batch.totalInputAmount,
+                volume: pool.volume24h + normalizedVolume,
                 fees: pool.fees24h,
                 price: newPrice,
               });
@@ -337,7 +391,6 @@ export class SolverEngine {
                 lastTxHash: submitResult.txHash,
                 timestamp: Date.now(),
               });
-            }
           } catch (err) {
             this.logger.warn({ err }, 'Failed to update pool reserves after settlement');
           }

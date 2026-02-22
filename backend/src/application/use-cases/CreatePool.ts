@@ -98,7 +98,9 @@ export class CreatePool {
       volume24h: 0n,
       fees24h: 0n,
       txHash: txResult.txHash,
-      outputIndex: 0,
+      // R-13 fix: Use the actual output index from TX construction.
+      // Falls back to 0 if not provided; ChainSync will correct post-confirmation.
+      outputIndex: txResult.poolMeta?.poolOutputIndex ?? 0,
       // R-07 fix: store LP policy ID so portfolio can read LP balances on-chain
       lpPolicyId: txResult.poolMeta?.lpPolicyId ?? undefined,
       state: 'ACTIVE' as const,

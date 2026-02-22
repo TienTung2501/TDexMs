@@ -144,6 +144,46 @@ export const TOKENS: Record<string, Token> = {
 
 export const TOKEN_LIST = Object.values(TOKENS);
 
+// ─── Dynamic Token Merge (R-10 fix) ────────
+// Call `loadDynamicTokens()` on app init to merge on-chain tokens from the backend
+// with the static TOKENS registry above. Unknown tokens get a generic fallback icon.
+let _dynamicTokens: Token[] = [];
+
+export function getDynamicTokenList(): Token[] {
+  if (_dynamicTokens.length > 0) return _dynamicTokens;
+  return TOKEN_LIST;
+}
+
+export async function loadDynamicTokens(): Promise<void> {
+  try {
+    const { fetchTokenRegistry } = await import("./api");
+    const remote = await fetchTokenRegistry();
+    const merged = new Map<string, Token>();
+    // Static tokens first (higher quality metadata)
+    for (const t of TOKEN_LIST) {
+      const key = t.policyId ? `${t.policyId}.${t.assetName}` : "lovelace";
+      merged.set(key, t);
+    }
+    // Overlay dynamic tokens (only add new ones, don't overwrite existing)
+    for (const rt of remote) {
+      const key = rt.policyId ? `${rt.policyId}.${rt.assetName}` : "lovelace";
+      if (!merged.has(key)) {
+        merged.set(key, {
+          policyId: rt.policyId,
+          assetName: rt.assetName,
+          ticker: rt.ticker,
+          name: rt.ticker,
+          decimals: rt.decimals,
+          logo: "🪙",
+        });
+      }
+    }
+    _dynamicTokens = Array.from(merged.values());
+  } catch {
+    // Silently fall back to static tokens
+  }
+}
+
 // ─── Token Icon Helper ──────────────────────
 /** Return image URL or fallback emoji for a token */
 export function getTokenIcon(token: Token): { type: "image" | "emoji"; value: string } {

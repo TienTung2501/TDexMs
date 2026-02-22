@@ -65,13 +65,64 @@ export function createAnalyticsRouter(): Router {
           },
         });
 
+        // Derive price from the deepest liquidity pool containing this asset
+        let price = 0;
+        let volume24h = 0;
+        let ticker = '';
+        let bestTvl = 0n;
+
+        for (const p of pools) {
+          const rA = Number(p.reserveA);
+          const rB = Number(p.reserveB);
+          if (rA <= 0 || rB <= 0) continue;
+
+          const isA = p.assetAPolicyId === assetId;
+          // price in terms of the counter-asset
+          const unitPrice = isA ? rB / rA : rA / rB;
+          const tvl = BigInt(p.tvlAda?.toString() ?? '0');
+
+          if (tvl > bestTvl || bestTvl === 0n) {
+            bestTvl = tvl;
+            price = unitPrice;
+            ticker = isA
+              ? (p.assetAAssetName || `${p.assetAPolicyId.slice(0, 8)}..`)
+              : (p.assetBAssetName || `${p.assetBPolicyId.slice(0, 8)}..`);
+          }
+          volume24h += Number(p.volume24h ?? 0);
+        }
+
+        // Derive 24h price change from the most recent candle
+        let priceChange24h = 0;
+        if (pools.length > 0) {
+          const bestPool = pools.reduce((best, p) =>
+            BigInt(p.tvlAda?.toString() ?? '0') > BigInt(best.tvlAda?.toString() ?? '0') ? p : best
+          );
+          const now = new Date();
+          const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          const oldCandle = await prisma.candle.findFirst({
+            where: { poolId: bestPool.id, interval: '1h', openTime: { lte: yesterday } },
+            orderBy: { openTime: 'desc' },
+          }).catch(() => null);
+          if (oldCandle && Number(oldCandle.open) > 0 && price > 0) {
+            priceChange24h = ((price - Number(oldCandle.open)) / Number(oldCandle.open)) * 100;
+          }
+        }
+
+        // Estimate market cap from total supply across pools
+        const marketCap = price > 0
+          ? pools.reduce((sum, p) => {
+              const isA = p.assetAPolicyId === assetId;
+              return sum + Number(isA ? p.reserveA : p.reserveB) * 2; // 2× pool reserve ≈ rough circulating proxy
+            }, 0) * price
+          : 0;
+
         res.json({
           assetId,
-          ticker: '',
-          price: 0,
-          priceChange24h: 0,
-          volume24h: 0,
-          marketCap: 0,
+          ticker,
+          price,
+          priceChange24h,
+          volume24h,
+          marketCap,
           poolCount: pools.length,
           pools: pools.map((p) => ({
             poolId: p.id,

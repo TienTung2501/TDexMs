@@ -149,6 +149,11 @@ export interface DeploySettingsTxParams {
   feeCollectorAddress?: string;
 }
 
+export interface DeployFactoryTxParams {
+  /** Admin address that signs the TX */
+  adminAddress: string;
+}
+
 export interface BuildTxResult {
   unsignedTx: string;   // CBOR hex
   txHash: string;
@@ -159,6 +164,8 @@ export interface BuildTxResult {
     poolNftAssetName: string;
     lpPolicyId: string;
     initialLp: bigint;
+    /** Output index of the pool UTxO in the TX (for DB registration) */
+    poolOutputIndex?: number;
   };
 }
 
@@ -208,4 +215,7 @@ export interface ITxBuilder {
 
   /** Build a TX to deploy the initial settings UTxO — admin bootstrap */
   buildDeploySettingsTx(params: DeploySettingsTxParams): Promise<BuildTxResult>;
+
+  /** Build a TX to deploy the factory UTxO — admin bootstrap */
+  buildDeployFactoryTx(params: DeployFactoryTxParams): Promise<BuildTxResult>;
 }
