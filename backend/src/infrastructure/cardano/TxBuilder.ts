@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Transaction Builder Lucid Evolution implementation
  * Constructs unsigned Cardano transactions for all protocol operations.
  *
@@ -51,25 +51,12 @@ import type {
 import { getLogger } from '../../config/logger.js';
 import { ChainError } from '../../domain/errors/index.js';
 import { AssetId } from '../../domain/value-objects/Asset.js';
-import { calculateMaxAbsorbableAmount } from '../../solver/AmmMath.js';
+import { calculateMaxAbsorbableAmount, bigIntSqrt, calculateSwapOutput, calculateProtocolFee, FEE_DENOMINATOR as AMM_FEE_DENOMINATOR, PROTOCOL_FEE_SHARE } from '../../solver/AmmMath.js';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
-/** Integer square root using Newton's method — matches Aiken stdlib math.sqrt exactly */
-function bigIntSqrt(n: bigint): bigint {
-  if (n < 0n) throw new Error('Square root of negative number');
-  if (n === 0n) return 0n;
-  let x = n;
-  let y = (x + 1n) / 2n;
-  while (y < x) {
-    x = y;
-    y = (x + n / x) / 2n;
-  }
-  return x;
-}
-
-// â”€â”€â”€ Plutus Blueprint Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// bigIntSqrt imported from AmmMath  single source of truth for AMM math
 
 interface BlueprintValidator {
   title: string;
@@ -1426,22 +1413,25 @@ export class TxBuilder implements ITxBuilder {
 
         if (direction === 'AToB') {
           // Selling A for B: input is A, output is B
-          // Fee deduction: effective_input = input * (10000 - fee) / 10000
-          // CRITICAL: use ACTIVE reserves for AMM math (matches pool_validator.ak)
-          const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
-          outputAmount = (activeB * effectiveInput) / (activeA + effectiveInput);
+          // CRITICAL: Match on-chain formula exactly (multiply before divide to avoid precision loss)
+          //   input_with_fee = input * (fee_denominator - fee_numerator)
+          //   output = reserve_out * input_with_fee / (reserve_in * fee_denominator + input_with_fee)
+          const inputWithFee = actualInput * (10000n - feeNumerator);
+          outputAmount = (activeB * inputWithFee) / (activeA * 10000n + inputWithFee);
 
           // Partial fill check: if output would drain too much of active reserve, cap it
           if (outputAmount >= activeB && isPartialFill) {
             // Reserve can't fully satisfy — cap at 50% of active reserve, re-derive input
             const maxOutput = activeB / 2n;
-            const denominator = ((activeB - maxOutput) * (10000n - feeNumerator)) / 10000n;
-            actualInput = denominator > 0n ? (activeA * maxOutput) / denominator : 0n;
+            // Reverse formula: input = reserveIn * output * D / ((reserveOut - output) * (D - fee))
+            const revNum = activeA * maxOutput * 10000n;
+            const revDen = (activeB - maxOutput) * (10000n - feeNumerator);
+            actualInput = revDen > 0n ? (revNum / revDen) + 1n : 0n;
             if (actualInput <= 0n) {
               throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
             }
-            const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
-            outputAmount = (activeB * recalcEffective) / (activeA + recalcEffective);
+            const recalcInputWithFee = actualInput * (10000n - feeNumerator);
+            outputAmount = (activeB * recalcInputWithFee) / (activeA * 10000n + recalcInputWithFee);
           }
           
           // Protocol fee accrues on input side (A)
@@ -1456,20 +1446,21 @@ export class TxBuilder implements ITxBuilder {
           activeB -= outputAmount;
         } else {
           // Selling B for A: input is B, output is A
-          // CRITICAL: use ACTIVE reserves for AMM math
-          const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
-          outputAmount = (activeA * effectiveInput) / (activeB + effectiveInput);
+          // CRITICAL: Match on-chain formula exactly (multiply before divide)
+          const inputWithFee = actualInput * (10000n - feeNumerator);
+          outputAmount = (activeA * inputWithFee) / (activeB * 10000n + inputWithFee);
 
           // Partial fill check
           if (outputAmount >= activeA && isPartialFill) {
             const maxOutput = activeA / 2n;
-            const denominator = ((activeA - maxOutput) * (10000n - feeNumerator)) / 10000n;
-            actualInput = denominator > 0n ? (activeB * maxOutput) / denominator : 0n;
+            const revNum = activeB * maxOutput * 10000n;
+            const revDen = (activeA - maxOutput) * (10000n - feeNumerator);
+            actualInput = revDen > 0n ? (revNum / revDen) + 1n : 0n;
             if (actualInput <= 0n) {
               throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
             }
-            const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
-            outputAmount = (activeA * recalcEffective) / (activeB + recalcEffective);
+            const recalcInputWithFee = actualInput * (10000n - feeNumerator);
+            outputAmount = (activeA * recalcInputWithFee) / (activeB * 10000n + recalcInputWithFee);
           }
           
           const protocolFee = (actualInput * feeNumerator / 10000n) / 6n;
@@ -2586,11 +2577,11 @@ export class TxBuilder implements ITxBuilder {
       }
 
       // Calculate output via constant product with fee
-      // CRITICAL: use ACTIVE reserves for AMM math (matches pool_validator.ak)
+      // CRITICAL: Match on-chain formula exactly (multiply before divide to avoid precision loss)
       let outputDelivered: bigint;
       if (direction === 'AToB') {
-        const effectiveInput = (amountConsumed * (10000n - feeNumerator)) / 10000n;
-        outputDelivered = (activeB * effectiveInput) / (activeA + effectiveInput);
+        const inputWithFee = amountConsumed * (10000n - feeNumerator);
+        outputDelivered = (activeB * inputWithFee) / (activeA * 10000n + inputWithFee);
         const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
         protocolFeesA += protocolFee;
         physicalA += amountConsumed;
@@ -2598,8 +2589,8 @@ export class TxBuilder implements ITxBuilder {
         activeA += amountConsumed - protocolFee;
         activeB -= outputDelivered;
       } else {
-        const effectiveInput = (amountConsumed * (10000n - feeNumerator)) / 10000n;
-        outputDelivered = (activeA * effectiveInput) / (activeB + effectiveInput);
+        const inputWithFee = amountConsumed * (10000n - feeNumerator);
+        outputDelivered = (activeA * inputWithFee) / (activeB * 10000n + inputWithFee);
         const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
         protocolFeesB += protocolFee;
         physicalA -= outputDelivered;
@@ -2711,7 +2702,7 @@ export class TxBuilder implements ITxBuilder {
               targetPriceDen,
               amountPerInterval,
               minInterval,
-              BigInt(Date.now()), // updated last_fill_slot
+              BigInt(await this.getChainTimeMs()), // updated last_fill_slot — use chain time for consistency
               newRemainingBudget, // updated remaining_budget
               deadline,
             ]),

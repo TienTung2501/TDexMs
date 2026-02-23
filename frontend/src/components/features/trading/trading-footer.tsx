@@ -8,6 +8,7 @@ import { truncateAddress } from "@/lib/utils";
 import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
 import { useWallet } from "@/providers/wallet-provider";
 import { cancelOrder, cancelIntent } from "@/lib/api";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 
 type TabId = "open" | "history" | "trades";
 
@@ -18,6 +19,7 @@ interface TradingFooterProps {
 export function TradingFooter({ poolId }: TradingFooterProps) {
   const [tab, setTab] = useState<TabId>("open");
   const { isConnected, address } = useWallet();
+  const { execute: executeTx, busy: txBusy, TxToastContainer } = useTransaction();
 
   const { intents: userIntents, loading: intentsLoading, refetch: refetchIntents } = useIntents({
     address: isConnected ? address ?? undefined : undefined,
@@ -47,22 +49,30 @@ export function TradingFooter({ poolId }: TradingFooterProps) {
 
   const handleCancelIntent = async (intentId: string) => {
     if (!address) return;
-    try {
-      await cancelIntent(intentId, address);
-      refetchIntents();
-    } catch (err) {
-      console.error("Cancel intent failed:", err);
-    }
+    await executeTx(
+      () => cancelIntent(intentId, address),
+      {
+        buildingMsg: "Building cancel intent transaction...",
+        successMsg: "Intent cancelled!",
+        action: "cancel_intent",
+        extractId: (res) => ({ intentId: res.intentId }),
+        onSuccess: () => refetchIntents(),
+      },
+    );
   };
 
   const handleCancelOrder = async (orderId: string) => {
     if (!address) return;
-    try {
-      await cancelOrder(orderId, address);
-      refetchOrders();
-    } catch (err) {
-      console.error("Cancel order failed:", err);
-    }
+    await executeTx(
+      () => cancelOrder(orderId, address),
+      {
+        buildingMsg: "Building cancel order transaction...",
+        successMsg: "Order cancelled!",
+        action: "cancel_order",
+        extractId: (res) => ({ orderId: res.orderId }),
+        onSuccess: () => refetchOrders(),
+      },
+    );
   };
 
   const tabs: { id: TabId; label: string; count?: number }[] = [
@@ -72,6 +82,8 @@ export function TradingFooter({ poolId }: TradingFooterProps) {
   ];
 
   return (
+    <>
+    <TxToastContainer />
     <div className="rounded-xl border border-border/50 bg-card/50 overflow-hidden">
       {/* Tab bar */}
       <div className="flex border-b border-border/30">
@@ -123,6 +135,7 @@ export function TradingFooter({ poolId }: TradingFooterProps) {
         )}
       </div>
     </div>
+    </>
   );
 }
 

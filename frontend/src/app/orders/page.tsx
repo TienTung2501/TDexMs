@@ -21,6 +21,7 @@ import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect
 import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
 import { cancelOrder } from "@/lib/api";
 import { truncateAddress, cn } from "@/lib/utils";
+import { useTransaction } from "@/lib/hooks/use-transaction";
 
 type IntentStatus =
   | "CREATED" | "PENDING" | "ACTIVE" | "FILLING"
@@ -44,6 +45,7 @@ export default function OrdersPage() {
   const { isConnected, address } = useWallet();
   const [section, setSection] = useState<"intents" | "orders">("intents");
   const [tab, setTab] = useState("all");
+  const { execute: executeTx, busy: txBusy, TxToastContainer } = useTransaction();
 
   const { intents, total, loading } = useIntents({
     address: isConnected ? address ?? undefined : undefined,
@@ -86,12 +88,16 @@ export default function OrdersPage() {
 
   const handleCancelOrder = async (orderId: string) => {
     if (!address) return;
-    try {
-      await cancelOrder(orderId, address);
-      refetchOrders();
-    } catch (err) {
-      console.error("Cancel order failed:", err);
-    }
+    await executeTx(
+      () => cancelOrder(orderId, address),
+      {
+        buildingMsg: "Building cancel order transaction...",
+        successMsg: "Order cancelled!",
+        action: "cancel_order",
+        extractId: (res) => ({ orderId: res.orderId }),
+        onSuccess: () => refetchOrders(),
+      },
+    );
   };
 
   if (!isConnected) {
@@ -109,6 +115,7 @@ export default function OrdersPage() {
 
   return (
     <div className="shell py-8 space-y-6">
+      <TxToastContainer />
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Orders</h1>
         <div className="flex items-center gap-2">

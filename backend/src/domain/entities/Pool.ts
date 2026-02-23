@@ -1,8 +1,18 @@
 /**
  * Domain Entity: Pool
  * Represents a liquidity pool with AMM state.
+ *
+ * AMM calculation methods delegate to the centralized AmmMath module
+ * to ensure consistency with on-chain (Aiken) formulas.
  */
-import { FEE_DENOMINATOR, MINIMUM_LIQUIDITY, type PoolState } from '../../shared/index.js';
+import { type PoolState } from '../../shared/index.js';
+import {
+  calculateSwapOutput as ammSwapOutput,
+  calculateInitialLp as ammInitialLp,
+  calculateDepositLp as ammDepositLp,
+  calculateWithdrawal as ammWithdrawal,
+  FEE_DENOMINATOR,
+} from '../../solver/AmmMath.js';
 
 export interface PoolProps {
   id: string;
@@ -69,19 +79,13 @@ export class Pool {
   get createdAt(): Date { return this.props.createdAt; }
   get updatedAt(): Date { return this.props.updatedAt; }
 
-  // ─── Domain Logic: AMM Calculations ───────────────
+  // ─── Domain Logic: AMM Calculations (delegates to AmmMath) ───
 
-  /** Calculate swap output (constant product formula) */
+  /** Calculate swap output (constant product formula) — delegates to AmmMath */
   calculateSwapOutput(inputAmount: bigint, aToB: boolean): bigint {
     const reserveIn = aToB ? this.props.reserveA : this.props.reserveB;
     const reserveOut = aToB ? this.props.reserveB : this.props.reserveA;
-
-    const fee = this.props.feeNumerator;
-    const inputWithFee = inputAmount * BigInt(FEE_DENOMINATOR - fee);
-    const numerator = inputWithFee * reserveOut;
-    const denominator = reserveIn * BigInt(FEE_DENOMINATOR) + inputWithFee;
-
-    return numerator / denominator;
+    return ammSwapOutput(reserveIn, reserveOut, inputAmount, BigInt(this.props.feeNumerator));
   }
 
   /** Calculate price impact as percentage (0-100) */
@@ -110,26 +114,31 @@ export class Pool {
     return Number(this.props.reserveA) / Number(this.props.reserveB);
   }
 
-  /** Calculate LP tokens for initial deposit */
+  /** Calculate LP tokens for initial deposit — delegates to AmmMath */
   calculateInitialLp(amountA: bigint, amountB: bigint): bigint {
-    const product = amountA * amountB;
-    const sqrtProduct = this.bigIntSqrt(product);
-    return sqrtProduct - BigInt(MINIMUM_LIQUIDITY);
+    return ammInitialLp(amountA, amountB);
   }
 
-  /** Calculate LP tokens for subsequent deposit */
+  /** Calculate LP tokens for subsequent deposit — delegates to AmmMath */
   calculateDepositLp(amountA: bigint, amountB: bigint): bigint {
-    const lpFromA = (amountA * this.props.totalLpTokens) / this.props.reserveA;
-    const lpFromB = (amountB * this.props.totalLpTokens) / this.props.reserveB;
-    return lpFromA < lpFromB ? lpFromA : lpFromB;
+    return ammDepositLp(
+      this.props.totalLpTokens,
+      this.props.reserveA,
+      this.props.reserveB,
+      amountA,
+      amountB,
+    );
   }
 
-  /** Calculate withdrawal amounts for LP tokens burned */
+  /** Calculate withdrawal amounts for LP tokens burned — delegates to AmmMath */
   calculateWithdrawal(lpAmount: bigint): { amountA: bigint; amountB: bigint } {
-    return {
-      amountA: (lpAmount * this.props.reserveA) / this.props.totalLpTokens,
-      amountB: (lpAmount * this.props.reserveB) / this.props.totalLpTokens,
-    };
+    const result = ammWithdrawal(
+      this.props.totalLpTokens,
+      this.props.reserveA,
+      this.props.reserveB,
+      lpAmount,
+    );
+    return { amountA: result.withdrawA, amountB: result.withdrawB };
   }
 
   /** Calculate APY estimate based on 24h fees and TVL */
@@ -156,19 +165,6 @@ export class Pool {
     this.props.txHash = txHash;
     this.props.outputIndex = outputIndex;
     this.props.updatedAt = new Date();
-  }
-
-  /** BigInt square root using Newton's method */
-  private bigIntSqrt(n: bigint): bigint {
-    if (n < 0n) throw new Error('Square root of negative number');
-    if (n === 0n) return 0n;
-    let x = n;
-    let y = (x + 1n) / 2n;
-    while (y < x) {
-      x = y;
-      y = (x + n / x) / 2n;
-    }
-    return x;
   }
 
   /** Get raw props for persistence */

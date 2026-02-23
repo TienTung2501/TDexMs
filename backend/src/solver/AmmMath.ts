@@ -59,10 +59,14 @@ export function getActiveReserves(
 /**
  * Calculate swap output using constant product formula with fee deduction.
  *
- * effective_input = input * (FEE_DENOMINATOR - feeNumerator) / FEE_DENOMINATOR
- * output = (reserveOut * effective_input) / (reserveIn + effective_input)
+ * Matches Aiken math.calculate_swap_output EXACTLY:
+ *   input_with_fee = input_amount * (fee_denominator - fee_numerator)
+ *   numerator = reserve_out * input_with_fee
+ *   denominator = reserve_in * fee_denominator + input_with_fee
+ *   output = numerator / denominator
  *
- * This matches Aiken math.calculate_swap_output exactly.
+ * CRITICAL: We multiply before dividing to avoid intermediate precision loss.
+ * The old formula divided by FEE_DENOMINATOR early, losing up to 1 unit per swap.
  */
 export function calculateSwapOutput(
   reserveIn: bigint,
@@ -70,8 +74,10 @@ export function calculateSwapOutput(
   inputAmount: bigint,
   feeNumerator: bigint,
 ): bigint {
-  const effectiveInput = (inputAmount * (FEE_DENOMINATOR - feeNumerator)) / FEE_DENOMINATOR;
-  return (reserveOut * effectiveInput) / (reserveIn + effectiveInput);
+  const inputWithFee = inputAmount * (FEE_DENOMINATOR - feeNumerator);
+  const numerator = reserveOut * inputWithFee;
+  const denominator = reserveIn * FEE_DENOMINATOR + inputWithFee;
+  return numerator / denominator;
 }
 
 /**
@@ -90,8 +96,9 @@ export function calculateProtocolFee(
 /**
  * Reverse AMM: given a desired output, calculate the required input.
  *
- * input = (reserveIn * output * FEE_DENOMINATOR) /
- *         ((reserveOut - output) * (FEE_DENOMINATOR - feeNumerator))
+ * Derived from the on-chain formula:
+ *   output = reserveOut * input * (D - fee) / (reserveIn * D + input * (D - fee))
+ *   => input = (reserveIn * output * D) / ((reserveOut - output) * (D - fee))
  *
  * Returns 0n if output >= reserveOut (impossible swap).
  */
