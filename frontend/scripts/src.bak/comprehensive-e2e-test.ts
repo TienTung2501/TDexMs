@@ -160,6 +160,27 @@ let poolTxHash = '';
 const intentIds: string[] = [];
 const orderIds: string[] = [];
 
+// Auto-resolved script addresses (from API, with .env fallback)
+let ESCROW_ADDRESS = '';
+let POOL_ADDRESS = '';
+
+async function resolveScriptAddresses(): Promise<void> {
+  try {
+    const addrs = await apiFetch<any>('/system/addresses');
+    ESCROW_ADDRESS = addrs.escrowAddress || '';
+    POOL_ADDRESS = addrs.poolAddress || '';
+    console.log(`  Auto-resolved addresses from API:`);
+    console.log(`    Escrow: ${ESCROW_ADDRESS}`);
+    console.log(`    Pool:   ${POOL_ADDRESS}`);
+  } catch {
+    ESCROW_ADDRESS = process.env.ESCROW_SCRIPT_ADDRESS || '';
+    POOL_ADDRESS = process.env.POOL_SCRIPT_ADDRESS || '';
+    console.log(`  Using .env addresses (API unavailable):`);
+    console.log(`    Escrow: ${ESCROW_ADDRESS}`);
+    console.log(`    Pool:   ${POOL_ADDRESS}`);
+  }
+}
+
 // ═══════════════════════════════════════════
 // PHASE 1: SYSTEM RESET
 // ═══════════════════════════════════════════
@@ -194,11 +215,14 @@ async function phase1_systemReset() {
     record('DB Reset', 'WARN', err.message);
   }
 
-  // Step 2: Check for and reclaim contract UTxOs
+  // Step 2: Auto-resolve script addresses from API (or .env fallback)
+  await resolveScriptAddresses();
+
+  // Step 3: Check for and reclaim contract UTxOs
   try {
     adminWallet = await makeLucid(SEEDS.admin);
-    const escrowAddr = process.env.ESCROW_SCRIPT_ADDRESS || '';
-    const poolAddr = process.env.POOL_SCRIPT_ADDRESS || '';
+    const escrowAddr = ESCROW_ADDRESS;
+    const poolAddr = POOL_ADDRESS;
 
     for (const [label, addr] of [['Escrow', escrowAddr], ['Pool', poolAddr]] as const) {
       if (!addr) continue;
@@ -238,7 +262,7 @@ async function phase1_systemReset() {
     record('Chain cleanup', 'WARN', e.message);
   }
 
-  // Step 3: Verify clean state
+  // Step 4: Verify clean state
   try {
     const analytics = await apiFetch<any>('/analytics/overview');
     const clean = analytics.totalPools === 0 && analytics.totalIntents === 0;
@@ -324,6 +348,31 @@ async function phase2_initialization() {
     }
   } catch (e: any) {
     record('Deploy Settings', 'WARN', e.message.slice(0, 100));
+  }
+
+  // 2b2. Deploy Factory UTxO via backend (required for pool creation)
+  console.log('\n  --- Deploy Factory ---');
+  try {
+    const factoryRes = await apiFetch<any>('/admin/factory/build-deploy', {
+      method: 'POST',
+      body: JSON.stringify({
+        admin_address: adminWallet.address,
+      }),
+    });
+
+    if (factoryRes.unsignedTx) {
+      const signed = await adminWallet.lucid.fromTx(factoryRes.unsignedTx).sign.withWallet().complete();
+      const txHash = await signed.submit();
+      record('Deploy Factory TX', 'PASS', txHash.slice(0, 16));
+      await waitTx(adminWallet.lucid, txHash, 90_000);
+      record('Factory TX Confirmed', 'PASS');
+    } else {
+      record('Deploy Factory', 'PASS', 'No TX needed');
+    }
+  } catch (e: any) {
+    // 502 "already exists" is expected if factory was deployed separately
+    record('Deploy Factory', e.message.includes('already exists') ? 'PASS' : 'WARN',
+      e.message.includes('already exists') ? 'Factory already deployed' : e.message.slice(0, 100));
   }
 
   // 2c. Determine token asset IDs from admin wallet
@@ -632,6 +681,112 @@ async function phase3_intentSwapTests() {
     }
   } else {
     record('3.3 Create Intent (User3)', 'SKIP', 'No MNEMONIC0 or tUSDT available');
+  }
+
+  // --- TEST 3.3b: User5 creates REVERSE intent tBTC → ADA (B→A direction) ---
+  // This enables the solver bot to demonstrate bidirectional netting:
+  //   A→B intents (3.1, 3.2) + B→A intent (3.3b) can be settled together.
+  console.log('\n  --- 3.3b: User5 creates tBTC→ADA intent (REVERSE direction) ---');
+  let intent5Id = '';
+  if (SEEDS.user5 && tBTC_ASSET) {
+    try {
+      if (!user5Wallet) user5Wallet = await makeLucid(SEEDS.user5);
+
+      // First check if user5 has tBTC tokens
+      const u5Utxos = await user5Wallet.lucid.utxosAt(user5Wallet.address);
+      const tBTCUnit = tBTC_ASSET.replace('.', '');
+      const hasTBTC = u5Utxos.some(u => u.assets[tBTCUnit] && u.assets[tBTCUnit] > 0n);
+
+      if (hasTBTC) {
+        const res = await apiFetch<any>('/intents', {
+          method: 'POST',
+          body: JSON.stringify({
+            senderAddress: user5Wallet.address,
+            inputAsset: tBTC_ASSET,
+            inputAmount: '500000',   // Some tBTC units
+            outputAsset: 'lovelace',
+            minOutput: '1000000',    // Expect at least 1 ADA back
+            deadline: Date.now() + 24 * 60 * 60 * 1000,
+            partialFill: false,
+            changeAddress: user5Wallet.address,
+          }),
+        });
+        intent5Id = res.intentId || '';
+
+        if (res.unsignedTx) {
+          const signed = await user5Wallet.lucid.fromTx(res.unsignedTx).sign.withWallet().complete();
+          const txHash = await signed.submit();
+          record('3.3b Create Intent (User5, tBTC→ADA, REVERSE)', 'PASS', `intentId=${intent5Id}, tx=${txHash.slice(0, 16)}`);
+          intentIds.push(intent5Id);
+
+          await apiFetch('/tx/confirm', {
+            method: 'POST',
+            body: JSON.stringify({ txHash, intentId: intent5Id, action: 'create_intent' }),
+          }).catch(() => {});
+
+          await waitTx(user5Wallet.lucid, txHash, 90_000);
+          record('3.3b Intent TX Confirmed', 'PASS');
+        } else {
+          record('3.3b Create Intent', 'PASS', `intentId=${intent5Id}`);
+          intentIds.push(intent5Id);
+        }
+      } else {
+        record('3.3b Create Intent (User5, tBTC→ADA)', 'SKIP', 'User5 has no tBTC tokens');
+      }
+    } catch (e: any) {
+      record('3.3b Create Intent (User5, tBTC→ADA)', 'FAIL', e.message.slice(0, 150));
+    }
+  } else {
+    record('3.3b Create Intent (User5)', 'SKIP', 'No MNEMONIC2 or tBTC unavailable');
+  }
+
+  // --- TEST 3.3c: Admin creates REVERSE intent tBTC → ADA (second B→A for netting) ---
+  console.log('\n  --- 3.3c: Admin creates tBTC→ADA intent (second REVERSE) ---');
+  let intent6Id = '';
+  try {
+    // Check admin has tBTC
+    const adminUtxos = await adminWallet.lucid.utxosAt(adminWallet.address);
+    const tBTCUnit = tBTC_ASSET.replace('.', '');
+    const adminTBTC = adminUtxos.reduce((s, u) => s + (u.assets[tBTCUnit] || 0n), 0n);
+
+    if (adminTBTC > 1000000n) {
+      const res = await apiFetch<any>('/intents', {
+        method: 'POST',
+        body: JSON.stringify({
+          senderAddress: adminWallet.address,
+          inputAsset: tBTC_ASSET,
+          inputAmount: '300000',   // Some tBTC
+          outputAsset: 'lovelace',
+          minOutput: '1000000',    // At least 1 ADA
+          deadline: Date.now() + 24 * 60 * 60 * 1000,
+          partialFill: true,        // Allow partial fill
+          changeAddress: adminWallet.address,
+        }),
+      });
+      intent6Id = res.intentId || '';
+
+      if (res.unsignedTx) {
+        const signed = await adminWallet.lucid.fromTx(res.unsignedTx).sign.withWallet().complete();
+        const txHash = await signed.submit();
+        record('3.3c Create Intent (Admin, tBTC→ADA, REVERSE partial)', 'PASS', `intentId=${intent6Id}, tx=${txHash.slice(0, 16)}`);
+        intentIds.push(intent6Id);
+
+        await apiFetch('/tx/confirm', {
+          method: 'POST',
+          body: JSON.stringify({ txHash, intentId: intent6Id, action: 'create_intent' }),
+        }).catch(() => {});
+
+        await waitTx(adminWallet.lucid, txHash, 90_000);
+        record('3.3c Intent TX Confirmed', 'PASS');
+      } else {
+        record('3.3c Create Intent', 'PASS', `intentId=${intent6Id}`);
+        intentIds.push(intent6Id);
+      }
+    } else {
+      record('3.3c Create Intent (Admin, tBTC→ADA)', 'SKIP', `Admin tBTC balance too low: ${adminTBTC}`);
+    }
+  } catch (e: any) {
+    record('3.3c Create Intent (Admin, tBTC→ADA)', 'FAIL', e.message.slice(0, 150));
   }
 
   // --- TEST 3.4: User4 creates intent to CANCEL ---

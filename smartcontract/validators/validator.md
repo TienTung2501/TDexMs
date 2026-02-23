@@ -21,14 +21,16 @@ use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Address, VerificationKey}
 use cardano/assets.{PolicyId}
 use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
-use solvernet/constants.{min_fill_percent_den, min_fill_percent_num}
+use solvernet/constants.{
+  min_fill_percent_den, min_fill_percent_num, min_utxo_lovelace,
+}
 use solvernet/types.{
   AssetClass, Cancel, EscrowDatum, EscrowRedeemer, Fill, Reclaim,
 }
 use solvernet/utils.{asset_class_quantity, has_nft}
 use solvernet/validation.{
   check_after_deadline, check_before_deadline, check_burn_one,
-  check_payment_output, check_signer,
+  check_payment_output_secure, check_signer,
 }
 
 /// Escrow Validator
@@ -95,12 +97,13 @@ fn validate_cancel(
     check_signer(tx, owner_vkh),
     // 2. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 3. Remaining funds returned to owner
-    check_payment_output(
+    // 3. Remaining funds returned to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.input_asset,
       datum.remaining_input,
+      datum.escrow_token.asset_name,
     ),
   }
 }
@@ -169,12 +172,13 @@ fn validate_complete_fill(
   and {
     // 1. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 2. Output delivered to owner address
-    check_payment_output(
+    // 2. Output delivered to owner address (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.output_asset,
       output_delivered,
+      datum.escrow_token.asset_name,
     ),
   }
 }
@@ -207,12 +211,13 @@ fn validate_partial_fill(
     datum.fill_count < datum.max_partial_fills,
     // 2. Input consumed meets minimum threshold
     input_consumed >= min_fill_amount,
-    // 3. Output delivered to owner
-    check_payment_output(
+    // 3. Output delivered to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.output_asset,
       output_delivered,
+      datum.escrow_token.asset_name,
     ),
     // 4. Intent token continues to the new escrow UTxO (NOT burned)
     has_nft(continuing_output.value, datum.escrow_token),
@@ -229,6 +234,14 @@ fn validate_partial_fill(
     continuing_datum.remaining_input == new_remaining,
     // 6. Continuing UTxO has correct value (remaining input asset)
     asset_class_quantity(continuing_output.value, datum.input_asset) >= new_remaining,
+    // 7. Dust prevention: remaining must be enough to create a valid UTxO
+    //    For ADA (empty policy_id): must be >= min_utxo_lovelace
+    //    For native tokens: must be >= 1 (the ADA portion is handled by min-UTxO)
+    if datum.input_asset.policy_id == #"" {
+      new_remaining >= min_utxo_lovelace
+    } else {
+      new_remaining >= 1
+    },
   }
 }
 
@@ -252,12 +265,13 @@ fn validate_reclaim(
     check_after_deadline(tx.validity_range, datum.deadline),
     // 2. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 3. Full remaining input returned to owner
-    check_payment_output(
+    // 3. Full remaining input returned to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.input_asset,
       datum.remaining_input,
+      datum.escrow_token.asset_name,
     ),
   }
 }
@@ -507,6 +521,7 @@ fn check_lp_minted_any_policy(
 //// - Token is burned when the intent/order is filled, cancelled, or reclaimed.
 
 use aiken/collection/dict
+use aiken/collection/list
 use cardano/assets.{PolicyId}
 use cardano/transaction.{Transaction}
 use solvernet/types.{BurnIntentToken, IntentTokenRedeemer, MintIntentToken}
@@ -537,9 +552,9 @@ validator intent_token_policy {
 
       BurnIntentToken -> {
         // Anyone can burn (fill, cancel, reclaim will trigger this)
-        // Just verify exactly 1 token is burned
+        // Allow burning multiple tokens in a single TX for batch settlement
         let minted_tokens = assets.tokens(tx.mint, policy_id)
-        check_exactly_one_burn(minted_tokens)
+        check_burn_multiple(minted_tokens)
       }
     }
   }
@@ -560,11 +575,22 @@ fn check_exactly_one_mint(
   }
 }
 
-/// Verify exactly 1 token is burned.
-fn check_exactly_one_burn(minted_tokens: dict.Dict<ByteArray, Int>) -> Bool {
-  when dict.to_pairs(minted_tokens) is {
-    [Pair(_, qty)] -> qty == -1
-    _ -> False
+/// Verify that all token operations under this policy are burns (qty < 0).
+/// Allows burning multiple tokens in a single TX for batch settlement.
+/// At least one token must be burned.
+fn check_burn_multiple(minted_tokens: dict.Dict<ByteArray, Int>) -> Bool {
+  let pairs = dict.to_pairs(minted_tokens)
+  when pairs is {
+    // Must have at least one token being burned
+    [] -> False
+    _ ->
+      list.all(
+        pairs,
+        fn(pair) {
+          let Pair(_, qty) = pair
+          qty == -1
+        },
+      )
   }
 }
 //// SolverNet DEX — LP Token Minting Policy
@@ -694,11 +720,12 @@ use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
 use solvernet/math.{meets_limit_price}
 use solvernet/types.{
   AssetClass, CancelOrder, DCA, ExecuteOrder, LimitOrder, OrderDatum,
-  OrderParams, OrderRedeemer, StopLoss,
+  OrderParams, OrderRedeemer, ReclaimOrder, StopLoss,
 }
 use solvernet/utils.{asset_class_quantity, has_nft}
 use solvernet/validation.{
-  check_before_deadline, check_burn_one, check_payment_output, check_signer,
+  check_after_deadline, check_before_deadline, check_burn_one,
+  check_payment_output, check_payment_output_secure, check_signer,
 }
 
 /// Order Validator
@@ -726,6 +753,8 @@ validator order_validator(intent_token_policy_id: PolicyId) {
           amount_consumed,
           output_delivered,
         )
+      ReclaimOrder ->
+        validate_reclaim_order(tx, order_datum, intent_token_policy_id)
     }
   }
 
@@ -1001,6 +1030,38 @@ fn check_dca_continuation(
 }
 
 // ============================================================================
+// Reclaim Expired Order (Permissionless)
+// ============================================================================
+
+/// Anyone can reclaim an expired order — funds go back to owner.
+/// No owner signature required since the deadline has passed.
+///
+/// Requirements:
+/// 1. Transaction is AFTER the deadline
+/// 2. Remaining budget returned to owner (with anti-double-satisfaction datum)
+/// 3. Order token is burned
+fn validate_reclaim_order(
+  tx: Transaction,
+  datum: OrderDatum,
+  token_policy_id: PolicyId,
+) -> Bool {
+  and {
+    // 1. Transaction is entirely after deadline
+    check_after_deadline(tx.validity_range, datum.params.deadline),
+    // 2. Order token burned
+    check_burn_one(tx.mint, token_policy_id, datum.order_token.asset_name),
+    // 3. Remaining budget returned to owner (anti-double-satisfaction: datum = order_token_name)
+    check_payment_output_secure(
+      tx.outputs,
+      datum.owner,
+      datum.asset_in,
+      datum.params.remaining_budget,
+      datum.order_token.asset_name,
+    ),
+  }
+}
+
+// ============================================================================
 // Address Helper
 // ============================================================================
 
@@ -1010,6 +1071,111 @@ fn get_order_owner_vkh(owner: Address) -> Option<VerificationKeyHash> {
     VerificationKey(vkh) -> Some(vkh)
     _ -> None
   }
+}
+//// SolverNet DEX — Pool NFT Minting Policy
+////
+//// Ensures each liquidity pool has a unique, unforgeable identity token.
+//// Uses the "one-shot" pattern: consuming a specific UTxO guarantees uniqueness
+//// since each UTxO can only be spent once.
+////
+//// Security: The NFT is minted exactly once per pool creation and can only
+//// be burned by protocol admin for pool closure (future feature).
+
+use aiken/collection/dict
+use aiken/collection/list
+use aiken/crypto.{ScriptHash, VerificationKeyHash}
+use cardano/address.{Script}
+use cardano/assets.{PolicyId}
+use cardano/transaction.{Input, Transaction}
+use solvernet/types.{BurnPoolNFT, MintPoolNFT, PoolNFTRedeemer}
+use solvernet/utils.{derive_token_name}
+use solvernet/validation.{check_signer, check_utxo_spent}
+
+/// Pool NFT Minting Policy
+///
+/// Parameters:
+/// - `factory_validator_hash`: Hash of the factory validator (ensures pool
+///   creation goes through the factory)
+/// - `admin_vkh`: Protocol admin key (for future burn functionality)
+///
+/// Mint: Exactly 1 NFT with name = hash(consumed_utxo)
+/// Burn: Only by protocol admin (pool closure)
+validator pool_nft_policy(
+  factory_validator_hash: ScriptHash,
+  admin_vkh: VerificationKeyHash,
+) {
+  mint(redeemer: PoolNFTRedeemer, policy_id: PolicyId, tx: Transaction) {
+    when redeemer is {
+      MintPoolNFT { consumed_utxo } -> {
+        // Derive deterministic token name from the consumed UTxO
+        let expected_token_name = derive_token_name(consumed_utxo)
+
+        // Get the minted tokens for this policy
+        let minted_tokens = assets.tokens(tx.mint, policy_id)
+
+        and {
+          // 1. The consumed UTxO is actually spent in this transaction
+          check_utxo_spent(tx.inputs, consumed_utxo),
+          // 2. Exactly 1 token minted with the correct name
+          minted_tokens
+            |> dict.to_pairs()
+            |> check_exactly_one_nft(expected_token_name),
+          // 3. Factory validator is invoked in this TX
+          //    (factory UTxO must be spent, validated by its own script)
+          check_factory_invoked(tx.inputs, factory_validator_hash),
+        }
+      }
+
+      // 4. The minted NFT goes to the pool validator address
+      //    (This is implicitly enforced by the factory validator which
+      //     checks the pool output is at the correct address)
+      BurnPoolNFT -> {
+        // Only protocol admin can burn a pool NFT
+        // Get the burned tokens for this policy
+        let minted_tokens = assets.tokens(tx.mint, policy_id)
+
+        and {
+          // 1. Admin signed the transaction
+          check_signer(tx, admin_vkh),
+          // 2. Exactly 1 token burned (negative quantity)
+          minted_tokens
+            |> dict.to_pairs()
+            |> check_exactly_one_burn(),
+        }
+      }
+    }
+  }
+
+  else(_) {
+    fail
+  }
+}
+
+/// Verify exactly 1 token is minted with the expected name.
+fn check_exactly_one_nft(
+  pairs: Pairs<ByteArray, Int>,
+  expected_name: ByteArray,
+) -> Bool {
+  when pairs is {
+    [Pair(name, qty)] -> name == expected_name && qty == 1
+    _ -> False
+  }
+}
+
+/// Verify exactly 1 token is burned.
+fn check_exactly_one_burn(pairs: Pairs<ByteArray, Int>) -> Bool {
+  when pairs is {
+    [Pair(_, qty)] -> qty == -1
+    _ -> False
+  }
+}
+
+/// Verify that the factory validator is invoked (an input from the factory exists).
+fn check_factory_invoked(inputs: List<Input>, factory_hash: ScriptHash) -> Bool {
+  list.any(
+    inputs,
+    fn(inp) { inp.output.address.payment_credential == Script(factory_hash) },
+  )
 }
 //// SolverNet DEX — Pool NFT Minting Policy
 ////
@@ -1193,13 +1359,20 @@ validator pool_validator(admin_vkh: VerificationKeyHash) {
         expect Some(pool_input) =
           list.find(tx.inputs, fn(inp) { has_nft(inp.output.value, pool_nft) })
 
-        // Current reserves from the input pool UTxO
-        let reserve_a_in = get_reserve(pool_input.output.value, asset_a)
-        let reserve_b_in = get_reserve(pool_input.output.value, asset_b)
+        // Physical reserves from the input pool UTxO (includes protocol fees)
+        let physical_a_in = get_reserve(pool_input.output.value, asset_a)
+        let physical_b_in = get_reserve(pool_input.output.value, asset_b)
 
-        // New reserves from the output pool UTxO
-        let reserve_a_out = get_reserve(pool_output.value, asset_a)
-        let reserve_b_out = get_reserve(pool_output.value, asset_b)
+        // Physical reserves from the output pool UTxO
+        let physical_a_out = get_reserve(pool_output.value, asset_a)
+        let physical_b_out = get_reserve(pool_output.value, asset_b)
+
+        // Active reserves = physical - protocol_fees (what LPs actually own)
+        // Used for Swap / Deposit / Withdraw to avoid inflated K from accumulated fees
+        let reserve_a_in = physical_a_in - pool_datum.protocol_fees_a
+        let reserve_b_in = physical_b_in - pool_datum.protocol_fees_b
+        let reserve_a_out = physical_a_out - output_datum.protocol_fees_a
+        let reserve_b_out = physical_b_out - output_datum.protocol_fees_b
 
         when redeemer is {
           Swap { direction, min_output } ->
@@ -1244,10 +1417,10 @@ validator pool_validator(admin_vkh: VerificationKeyHash) {
               tx,
               pool_datum,
               output_datum,
-              reserve_a_in,
-              reserve_b_in,
-              reserve_a_out,
-              reserve_b_out,
+              physical_a_in,
+              physical_b_in,
+              physical_a_out,
+              physical_b_out,
               admin_vkh,
             )
 

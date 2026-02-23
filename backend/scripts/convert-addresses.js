@@ -1,13 +1,39 @@
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { bech32 } from 'bech32';
-import { walletFromSeed } from '@lucid-evolution/lucid';
+import {
+  walletFromSeed,
+  applyParamsToScript,
+  validatorToAddress,
+  validatorToScriptHash,
+  mintingPolicyToId,
+  applyDoubleCborEncoding,
+} from '@lucid-evolution/lucid';
 
 
-// ─── PHẦN 1: TẠO ĐỊA CHỈ TỪ SCRIPT HASH ────────────────────────────────────
+// ─── PHẦN 1: TẠO ĐỊA CHỈ TỪ PLUTUS.JSON (TỰ ĐỘNG) ─────────────────────────
+
+// Automatically read hashes from plutus.json — no more hardcoding!
+const PLUTUS_JSON_PATH = resolve(import.meta.dirname || '.', '../../smartcontract/plutus.json');
+
+let blueprint;
+try {
+  blueprint = JSON.parse(readFileSync(PLUTUS_JSON_PATH, 'utf-8'));
+  console.log(`✅ Loaded plutus.json from: ${PLUTUS_JSON_PATH}`);
+} catch (e) {
+  console.error(`❌ Could not read ${PLUTUS_JSON_PATH}: ${e.message}`);
+  process.exit(1);
+}
+
+function findValidator(bp, titlePrefix, suffix = '.spend') {
+  const v = bp.validators.find(v => v.title.startsWith(titlePrefix) && v.title.endsWith(suffix));
+  if (!v) throw new Error(`Validator not found: ${titlePrefix}*${suffix}`);
+  return v;
+}
 
 function scriptHashToAddress(scriptHash, network = 'testnet') {
   const hash = scriptHash.replace('0x', '');
   const hashBytes = Buffer.from(hash, 'hex');
-  // Testnet: 0x70, Mainnet: 0x71
   const headerByte = network === 'mainnet' ? 0x71 : 0x70;
   const addressBytes = Buffer.concat([Buffer.from([headerByte]), hashBytes]);
   const words = bech32.toWords(addressBytes);
@@ -15,30 +41,94 @@ function scriptHashToAddress(scriptHash, network = 'testnet') {
   return bech32.encode(prefix, words, 1000);
 }
 
-// Script hashes from plutus.json
-const ESCROW_SCRIPT_HASH = '795b08f17216887d0fdd83dec60790a79fba0998ac9d76eb2c7ed80a';
-const POOL_SCRIPT_HASH = '734799794c30fc4fe3431c3ccf811d15b6fed58d397d2cf1cde33a43';
+// Admin VKH is needed for parameterized validators (pool, factory, etc.)
+const ADMIN_SEED = "daring hybrid aerobic pair history dentist park race nothing twist leave autumn notice animal spring safe render matter exact wasp hole cotton drift evil";
+const adminWallet = walletFromSeed(ADMIN_SEED, { network: 'Preprod', addressType: 'Base', accountIndex: 0 });
+// Extract payment key hash from admin address
+import { getAddressDetails } from '@lucid-evolution/lucid';
+const adminDetails = getAddressDetails(adminWallet.address);
+const adminVkh = adminDetails.paymentCredential?.hash || '';
 
 console.log('');
-console.log('╔══════════════════════════════════════════════════════════╗');
-console.log('║         SolverNet — Address Conversion Utility          ║');
-console.log('╚══════════════════════════════════════════════════════════╝');
+console.log('╔══════════════════════════════════════════════════════════════╗');
+console.log('║    SolverNet — Address Conversion (auto from plutus.json)   ║');
+console.log('╚══════════════════════════════════════════════════════════════╝');
+console.log('');
+console.log(`  Admin VKH: ${adminVkh}`);
 console.log('');
 
-console.log('── ESCROW VALIDATOR ──');
-console.log('  Hash:    ', ESCROW_SCRIPT_HASH);
-console.log('  Testnet: ', scriptHashToAddress(ESCROW_SCRIPT_HASH, 'testnet'));
-console.log('  Mainnet: ', scriptHashToAddress(ESCROW_SCRIPT_HASH, 'mainnet'));
+// Step 1: escrow_validator (NO parameters)
+const escrowBp = findValidator(blueprint, 'escrow_validator.escrow_validator');
+const escrowScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(escrowBp.compiledCode) };
+const ESCROW_SCRIPT_HASH = escrowBp.hash;
+const escrowAddr = validatorToAddress('Preprod', escrowScript);
+
+// Step 2: pool_validator(admin_vkh)
+const poolBp = findValidator(blueprint, 'pool_validator.pool_validator');
+const poolApplied = applyParamsToScript(poolBp.compiledCode, [adminVkh]);
+const poolScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(poolApplied) };
+const poolHash = validatorToScriptHash(poolScript);
+const poolAddr = validatorToAddress('Preprod', poolScript);
+
+// Step 3: intent_token_policy (NO parameters)
+const intentBp = findValidator(blueprint, 'intent_token_policy.intent_token_policy', '.mint');
+const intentScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(intentBp.compiledCode) };
+const intentPolicyId = mintingPolicyToId(intentScript);
+
+// Step 4: factory_validator(pool_validator_hash)
+const factoryBp = findValidator(blueprint, 'factory_validator.factory_validator');
+const factoryApplied = applyParamsToScript(factoryBp.compiledCode, [poolHash]);
+const factoryScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(factoryApplied) };
+const factoryAddr = validatorToAddress('Preprod', factoryScript);
+const factoryHash = validatorToScriptHash(factoryScript);
+
+// Step 5: lp_token_policy(pool_hash, factory_hash)
+const lpBp = findValidator(blueprint, 'lp_token_policy.lp_token_policy', '.mint');
+const lpApplied = applyParamsToScript(lpBp.compiledCode, [poolHash, factoryHash]);
+const lpScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(lpApplied) };
+const lpPolicyId = mintingPolicyToId(lpScript);
+
+// Step 6: pool_nft_policy(factory_hash, admin_vkh)
+const nftBp = findValidator(blueprint, 'pool_nft_policy.pool_nft_policy', '.mint');
+const nftApplied = applyParamsToScript(nftBp.compiledCode, [factoryHash, adminVkh]);
+const nftScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(nftApplied) };
+const nftPolicyId = mintingPolicyToId(nftScript);
+
+// Step 7: order_validator(intent_policy_id)
+const orderBp = findValidator(blueprint, 'order_validator.order_validator');
+const orderApplied = applyParamsToScript(orderBp.compiledCode, [intentPolicyId]);
+const orderScript = { type: 'PlutusV3', script: applyDoubleCborEncoding(orderApplied) };
+const orderAddr = validatorToAddress('Preprod', orderScript);
+
+console.log('── ESCROW VALIDATOR (unparameterized) ──');
+console.log('  Blueprint hash:', ESCROW_SCRIPT_HASH);
+console.log('  Address:       ', escrowAddr);
 console.log('');
-console.log('── POOL VALIDATOR ──');
-console.log('  Hash:    ', POOL_SCRIPT_HASH);
-console.log('  Testnet: ', scriptHashToAddress(POOL_SCRIPT_HASH, 'testnet'));
-console.log('  Mainnet: ', scriptHashToAddress(POOL_SCRIPT_HASH, 'mainnet'));
+console.log('── POOL VALIDATOR (parameterized with admin_vkh) ──');
+console.log('  Blueprint hash:', poolBp.hash);
+console.log('  Applied hash:  ', poolHash);
+console.log('  Address:       ', poolAddr);
+console.log('');
+console.log('── FACTORY VALIDATOR ──');
+console.log('  Address:       ', factoryAddr);
+console.log('  Hash:          ', factoryHash);
+console.log('');
+console.log('── INTENT TOKEN POLICY ──');
+console.log('  Policy ID:     ', intentPolicyId);
+console.log('');
+console.log('── LP TOKEN POLICY ──');
+console.log('  Policy ID:     ', lpPolicyId);
+console.log('');
+console.log('── POOL NFT POLICY ──');
+console.log('  Policy ID:     ', nftPolicyId);
+console.log('');
+console.log('── ORDER VALIDATOR ──');
+console.log('  Address:       ', orderAddr);
 console.log('');
 
-console.log('── For .env ──');
-console.log(`  ESCROW_SCRIPT_ADDRESS=${scriptHashToAddress(ESCROW_SCRIPT_HASH, 'testnet')}`);
-console.log(`  POOL_SCRIPT_ADDRESS=${scriptHashToAddress(POOL_SCRIPT_HASH, 'testnet')}`);
+console.log('── For .env (copy-paste) ──');
+console.log(`  ESCROW_SCRIPT_ADDRESS=${escrowAddr}`);
+console.log(`  POOL_SCRIPT_ADDRESS=${poolAddr}`);
 console.log('');
 
 

@@ -81,7 +81,6 @@ pub const lp_token_prefix: ByteArray = "SNLP"
 
 /// Intent token name prefix.
 pub const intent_token_prefix: ByteArray = "SNINT"
-
 //// SolverNet DEX — AMM Math Library
 ////
 //// Pure mathematical functions for the constant product AMM.
@@ -633,6 +632,8 @@ pub type OrderRedeemer {
     /// Amount of output asset delivered
     output_delivered: Int,
   }
+  /// Reclaim expired order (permissionless — anyone can trigger after deadline)
+  ReclaimOrder
 }
 
 // ============================================================================
@@ -877,7 +878,7 @@ use aiken/interval
 use cardano/address.{Address}
 use cardano/assets.{PolicyId, Value}
 use cardano/transaction.{
-  Input, Output, OutputReference, Transaction, ValidityRange,
+  InlineDatum, Input, Output, OutputReference, Transaction, ValidityRange,
 }
 use solvernet/types.{AssetClass, POSIXTime}
 use solvernet/utils.{asset_class_quantity, has_nft}
@@ -1030,6 +1031,29 @@ pub fn check_payment_output(
       and {
         out.address == recipient,
         asset_class_quantity(out.value, asset) >= min_amount,
+      }
+    },
+  )
+}
+
+/// Anti-double-satisfaction version: each output must carry an InlineDatum
+/// containing the unique intent/order token asset_name, ensuring a 1-to-1
+/// mapping between escrow UTxOs and payment outputs.
+/// This prevents a solver from satisfying multiple escrows with a single output.
+pub fn check_payment_output_secure(
+  outputs: List<Output>,
+  recipient: Address,
+  asset: AssetClass,
+  min_amount: Int,
+  intent_id: ByteArray,
+) -> Bool {
+  list.any(
+    outputs,
+    fn(out) {
+      and {
+        out.address == recipient,
+        asset_class_quantity(out.value, asset) >= min_amount,
+        out.datum == InlineDatum(intent_id),
       }
     },
   )
