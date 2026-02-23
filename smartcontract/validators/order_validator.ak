@@ -16,11 +16,12 @@ use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
 use solvernet/math.{meets_limit_price}
 use solvernet/types.{
   AssetClass, CancelOrder, DCA, ExecuteOrder, LimitOrder, OrderDatum,
-  OrderParams, OrderRedeemer, StopLoss,
+  OrderParams, OrderRedeemer, ReclaimOrder, StopLoss,
 }
 use solvernet/utils.{asset_class_quantity, has_nft}
 use solvernet/validation.{
-  check_before_deadline, check_burn_one, check_payment_output, check_signer,
+  check_after_deadline, check_before_deadline, check_burn_one,
+  check_payment_output, check_payment_output_secure, check_signer,
 }
 
 /// Order Validator
@@ -48,6 +49,8 @@ validator order_validator(intent_token_policy_id: PolicyId) {
           amount_consumed,
           output_delivered,
         )
+      ReclaimOrder ->
+        validate_reclaim_order(tx, order_datum, intent_token_policy_id)
     }
   }
 
@@ -319,6 +322,38 @@ fn check_dca_continuation(
     cont_datum.params.remaining_budget == new_remaining,
     // Continuing output has correct value
     asset_class_quantity(cont_output.value, datum.asset_in) >= new_remaining,
+  }
+}
+
+// ============================================================================
+// Reclaim Expired Order (Permissionless)
+// ============================================================================
+
+/// Anyone can reclaim an expired order — funds go back to owner.
+/// No owner signature required since the deadline has passed.
+///
+/// Requirements:
+/// 1. Transaction is AFTER the deadline
+/// 2. Remaining budget returned to owner (with anti-double-satisfaction datum)
+/// 3. Order token is burned
+fn validate_reclaim_order(
+  tx: Transaction,
+  datum: OrderDatum,
+  token_policy_id: PolicyId,
+) -> Bool {
+  and {
+    // 1. Transaction is entirely after deadline
+    check_after_deadline(tx.validity_range, datum.params.deadline),
+    // 2. Order token burned
+    check_burn_one(tx.mint, token_policy_id, datum.order_token.asset_name),
+    // 3. Remaining budget returned to owner (anti-double-satisfaction: datum = order_token_name)
+    check_payment_output_secure(
+      tx.outputs,
+      datum.owner,
+      datum.asset_in,
+      datum.params.remaining_budget,
+      datum.order_token.asset_name,
+    ),
   }
 }
 

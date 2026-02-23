@@ -21,14 +21,16 @@ use aiken/crypto.{VerificationKeyHash}
 use cardano/address.{Address, VerificationKey}
 use cardano/assets.{PolicyId}
 use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
-use solvernet/constants.{min_fill_percent_den, min_fill_percent_num}
+use solvernet/constants.{
+  min_fill_percent_den, min_fill_percent_num, min_utxo_lovelace,
+}
 use solvernet/types.{
   AssetClass, Cancel, EscrowDatum, EscrowRedeemer, Fill, Reclaim,
 }
 use solvernet/utils.{asset_class_quantity, has_nft}
 use solvernet/validation.{
   check_after_deadline, check_before_deadline, check_burn_one,
-  check_payment_output, check_signer,
+  check_payment_output_secure, check_signer,
 }
 
 /// Escrow Validator
@@ -95,12 +97,13 @@ fn validate_cancel(
     check_signer(tx, owner_vkh),
     // 2. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 3. Remaining funds returned to owner
-    check_payment_output(
+    // 3. Remaining funds returned to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.input_asset,
       datum.remaining_input,
+      datum.escrow_token.asset_name,
     ),
   }
 }
@@ -169,12 +172,13 @@ fn validate_complete_fill(
   and {
     // 1. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 2. Output delivered to owner address
-    check_payment_output(
+    // 2. Output delivered to owner address (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.output_asset,
       output_delivered,
+      datum.escrow_token.asset_name,
     ),
   }
 }
@@ -207,12 +211,13 @@ fn validate_partial_fill(
     datum.fill_count < datum.max_partial_fills,
     // 2. Input consumed meets minimum threshold
     input_consumed >= min_fill_amount,
-    // 3. Output delivered to owner
-    check_payment_output(
+    // 3. Output delivered to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.output_asset,
       output_delivered,
+      datum.escrow_token.asset_name,
     ),
     // 4. Intent token continues to the new escrow UTxO (NOT burned)
     has_nft(continuing_output.value, datum.escrow_token),
@@ -229,6 +234,14 @@ fn validate_partial_fill(
     continuing_datum.remaining_input == new_remaining,
     // 6. Continuing UTxO has correct value (remaining input asset)
     asset_class_quantity(continuing_output.value, datum.input_asset) >= new_remaining,
+    // 7. Dust prevention: remaining must be enough to create a valid UTxO
+    //    For ADA (empty policy_id): must be >= min_utxo_lovelace
+    //    For native tokens: must be >= 1 (the ADA portion is handled by min-UTxO)
+    if datum.input_asset.policy_id == #"" {
+      new_remaining >= min_utxo_lovelace
+    } else {
+      new_remaining >= 1
+    },
   }
 }
 
@@ -252,12 +265,13 @@ fn validate_reclaim(
     check_after_deadline(tx.validity_range, datum.deadline),
     // 2. Intent token is burned
     check_burn_one(tx.mint, intent_policy_id, datum.escrow_token.asset_name),
-    // 3. Full remaining input returned to owner
-    check_payment_output(
+    // 3. Full remaining input returned to owner (anti-double-satisfaction: datum = intent_id)
+    check_payment_output_secure(
       tx.outputs,
       datum.owner,
       datum.input_asset,
       datum.remaining_input,
+      datum.escrow_token.asset_name,
     ),
   }
 }

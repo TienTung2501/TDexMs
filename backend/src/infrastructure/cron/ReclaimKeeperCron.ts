@@ -251,13 +251,16 @@ export class ReclaimKeeperCron {
     for (const order of reclaimable) {
       try {
         const props = order.toProps();
-        this.logger.info({ orderId: order.id }, 'Building order cancel TX for reclaim');
+        this.logger.info({ orderId: order.id }, 'Building order reclaim TX (ReclaimOrder redeemer)');
 
-        const { unsignedTx } = await this.txBuilder.buildCancelOrderTx({
-          orderId: order.id,
-          senderAddress: keeperAddress,
-          escrowTxHash: props.escrowTxHash!,
-          escrowOutputIndex: props.escrowOutputIndex!,
+        // Resolve owner address from order creator
+        const ownerAddress = props.creator;
+
+        const { unsignedTx } = await this.txBuilder.buildReclaimOrderTx({
+          keeperAddress: keeperAddress,
+          orderTxHash: props.escrowTxHash!,
+          orderOutputIndex: props.escrowOutputIndex!,
+          ownerAddress: ownerAddress,
         });
 
         const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
@@ -279,7 +282,7 @@ export class ReclaimKeeperCron {
         }
 
         // Only update DB after confirmed on-chain
-        await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+        await this.orderRepo.updateStatus(order.id, 'EXPIRED');
 
         this.logger.info(
           { orderId: order.id, txHash: submittedHash },

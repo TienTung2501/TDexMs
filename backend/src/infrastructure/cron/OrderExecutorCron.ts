@@ -1,23 +1,21 @@
 /**
- * Order Executor Cron — DCA (Dollar-Cost Averaging) Interval Bot
+ * Order Executor Cron — Executes ALL order types (DCA, Limit, StopLoss)
  *
- * Periodically scans for DCA orders whose next execution interval has elapsed,
- * builds and submits the execution TX via the keeper wallet, then awaits
- * on-chain confirmation before updating the database.
+ * Periodically scans for executable orders:
+ * - DCA: interval-based execution (amountPerInterval per interval)
+ * - Limit: executes when pool price meets or exceeds target price
+ * - StopLoss: executes when pool price drops to or below stop price
  *
  * CRITICAL RULE: DB state is ONLY updated after on-chain TX confirmation.
  *
  * Flow per tick:
- * 1. Query DB for DCA orders with status ACTIVE or PARTIALLY_FILLED
- * 2. Filter: type = 'DCA' AND nextIntervalTime <= now (isDcaIntervalRipe)
- * 3. For each ripe order, resolve the matching pool UTxO reference
+ * 1. Query DB for orders with status ACTIVE or PARTIALLY_FILLED (all types)
+ * 2. Filter: DCA must be interval-ripe, Limit/StopLoss must meet price condition
+ * 3. For each qualifying order, resolve the matching pool UTxO reference
  * 4. Build ExecuteOrderTx via TxBuilder
  * 5. Sign with keeper wallet and submit
  * 6. Await on-chain confirmation (lucid.awaitTx)
  * 7. ONLY THEN: call order.recordExecution() and persist to DB
- *    - Decrements remainingBudget by amountPerInterval
- *    - Increments executedIntervals
- *    - Marks FILLED when remainingBudget reaches 0
  */
 import {
   Lucid,
@@ -29,6 +27,7 @@ import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
 import type { Order } from '../../domain/entities/Order.js';
+import type { Pool } from '../../domain/entities/Pool.js';
 
 export class OrderExecutorCron {
   private readonly logger;
@@ -129,29 +128,77 @@ export class OrderExecutorCron {
   private async tick(): Promise<void> {
     const now = Date.now();
 
-    // Collect DCA orders that are ACTIVE or PARTIALLY_FILLED
+    // Query ALL order types (DCA, Limit, StopLoss) that are ACTIVE or PARTIALLY_FILLED
     const [activePage, partialPage] = await Promise.all([
-      this.orderRepo.findMany({ status: 'ACTIVE',           type: 'DCA', limit: this.batchLimit }),
-      this.orderRepo.findMany({ status: 'PARTIALLY_FILLED', type: 'DCA', limit: this.batchLimit }),
+      this.orderRepo.findMany({ status: 'ACTIVE',           limit: this.batchLimit * 3 }),
+      this.orderRepo.findMany({ status: 'PARTIALLY_FILLED', limit: this.batchLimit * 3 }),
     ]);
 
-    const candidates = [...activePage.items, ...partialPage.items]
+    const allOrders = [...activePage.items, ...partialPage.items]
       // Deduplicate (an order could theoretically appear in both pages during a race)
       .filter((o, idx, arr) => arr.findIndex((x) => x.id === o.id) === idx)
-      // Only orders where the execution interval has elapsed
-      .filter((o) => o.isDcaIntervalRipe(now))
-      // Limit total to batchLimit so we don't overload the keeper wallet
+      // Skip expired orders (ReclaimKeeper handles those)
+      .filter((o) => !o.isExpired(now));
+
+    // Separate by type so we can apply type-specific readiness checks
+    const dcaCandidates = allOrders
+      .filter((o) => o.type === 'DCA' && o.isDcaIntervalRipe(now));
+
+    // Limit and StopLoss need pool price checking — resolve pools first
+    const limitStopCandidates = allOrders.filter(
+      (o) => o.type === 'LIMIT' || o.type === 'STOP_LOSS',
+    );
+
+    // Check pool prices for Limit/StopLoss orders
+    const priceReadyOrders: Order[] = [];
+    for (const order of limitStopCandidates) {
+      try {
+        const pool = await this.resolvePool(order);
+        if (!pool) continue;
+
+        // Calculate current market price for the order's swap direction
+        const props = order.toProps();
+        const isInputA = this.isOrderInputA(props, pool);
+        // Market price = output / input (how many output tokens per 1 input token)
+        // Using pool reserves as a proxy: reserveOut / reserveIn
+        const reserveIn = isInputA ? pool.reserveA : pool.reserveB;
+        const reserveOut = isInputA ? pool.reserveB : pool.reserveA;
+
+        if (reserveIn === 0n) continue;
+
+        if (order.type === 'LIMIT' && order.meetsLimitPrice(reserveOut, reserveIn)) {
+          priceReadyOrders.push(order);
+        } else if (order.type === 'STOP_LOSS' && order.triggersStopLoss(reserveOut, reserveIn)) {
+          priceReadyOrders.push(order);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.debug(
+          { orderId: order.id, error: msg },
+          'Failed to check price for order — skipping',
+        );
+      }
+    }
+
+    const candidates = [...dcaCandidates, ...priceReadyOrders]
       .slice(0, this.batchLimit);
 
     if (candidates.length === 0) {
-      this.logger.debug('No ripe DCA orders found');
+      this.logger.debug('No executable orders found');
       return;
     }
 
-    this.logger.info({ count: candidates.length }, 'Processing ripe DCA orders');
+    this.logger.info(
+      {
+        count: candidates.length,
+        dca: dcaCandidates.length,
+        limitStop: priceReadyOrders.length,
+      },
+      'Processing executable orders',
+    );
 
     if (!this.solverSeedPhrase) {
-      this.logger.warn('SOLVER_SEED_PHRASE not set — skipping DCA execution');
+      this.logger.warn('SOLVER_SEED_PHRASE not set — skipping order execution');
       return;
     }
 
@@ -161,15 +208,44 @@ export class OrderExecutorCron {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.warn(
-          { orderId: order.id, error: msg },
-          'DCA order execution failed — will retry next tick',
+          { orderId: order.id, type: order.type, error: msg },
+          'Order execution failed — will retry next tick',
         );
       }
     }
   }
 
+  /** Determine if order's input asset matches pool's asset_a */
+  private isOrderInputA(
+    props: ReturnType<Order['toProps']>,
+    pool: Pool,
+  ): boolean {
+    const poolProps = pool.toProps();
+    return props.inputPolicyId === poolProps.assetAPolicyId &&
+      props.inputAssetName === poolProps.assetAAssetName;
+  }
+
   /**
-   * Execute a single DCA interval:
+   * Resolve the best pool for an order's asset pair.
+   * Tries direct pair first, then reverse pair.
+   */
+  private async resolvePool(order: Order) {
+    const props = order.toProps();
+    const inputAssetId  = props.inputPolicyId
+      ? `${props.inputPolicyId}.${props.inputAssetName}`
+      : 'lovelace';
+    const outputAssetId = props.outputPolicyId
+      ? `${props.outputPolicyId}.${props.outputAssetName}`
+      : 'lovelace';
+
+    return (
+      await this.poolRepo.findByPair(inputAssetId, outputAssetId) ??
+      await this.poolRepo.findByPair(outputAssetId, inputAssetId)
+    );
+  }
+
+  /**
+   * Execute a single order:
    * 1. Resolve pool UTxO
    * 2. Build TX
    * 3. Submit
@@ -182,28 +258,24 @@ export class OrderExecutorCron {
     if (!props.escrowTxHash || props.escrowOutputIndex === undefined) {
       this.logger.warn(
         { orderId: order.id },
-        'DCA order has no on-chain escrow UTxO — skipping',
+        'Order has no on-chain escrow UTxO — skipping',
       );
       return;
     }
 
     // Resolve the best pool for this asset pair
-    const inputAssetId  = props.inputPolicyId
-      ? `${props.inputPolicyId}.${props.inputAssetName}`
-      : 'lovelace';
-    const outputAssetId = props.outputPolicyId
-      ? `${props.outputPolicyId}.${props.outputAssetName}`
-      : 'lovelace';
-
-    // Try direct pair, then reverse
-    const pool =
-      await this.poolRepo.findByPair(inputAssetId, outputAssetId) ??
-      await this.poolRepo.findByPair(outputAssetId, inputAssetId);
+    const pool = await this.resolvePool(order);
 
     if (!pool) {
+      const inputAssetId  = props.inputPolicyId
+        ? `${props.inputPolicyId}.${props.inputAssetName}`
+        : 'lovelace';
+      const outputAssetId = props.outputPolicyId
+        ? `${props.outputPolicyId}.${props.outputAssetName}`
+        : 'lovelace';
       this.logger.warn(
-        { orderId: order.id, inputAssetId, outputAssetId },
-        'No active pool found for DCA order asset pair — skipping',
+        { orderId: order.id, type: order.type, inputAssetId, outputAssetId },
+        'No active pool found for order asset pair — skipping',
       );
       return;
     }
@@ -213,11 +285,12 @@ export class OrderExecutorCron {
     this.logger.info(
       {
         orderId: order.id,
+        type: order.type,
         poolId: pool.id,
         interval: (props.executedIntervals ?? 0) + 1,
         remainingBudget: props.remainingBudget?.toString(),
       },
-      'Building DCA execution TX',
+      'Building order execution TX',
     );
 
     // Build the execute-order TX
@@ -238,23 +311,23 @@ export class OrderExecutorCron {
     const submittedHash = await signed.submit();
 
     this.logger.info(
-      { orderId: order.id, txHash: submittedHash },
-      'DCA execution TX submitted — awaiting on-chain confirmation',
+      { orderId: order.id, type: order.type, txHash: submittedHash },
+      'Order execution TX submitted — awaiting on-chain confirmation',
     );
 
     // CRITICAL RULE: Await on-chain confirmation before updating DB
     const confirmed = await lucid.awaitTx(submittedHash, 120_000);
     if (!confirmed) {
       this.logger.warn(
-        { orderId: order.id, txHash: submittedHash },
-        'DCA execution TX not confirmed within 120s — DB not updated; will retry next tick',
+      { orderId: order.id, type: order.type, txHash: submittedHash },
+      'Order execution TX not confirmed within 120s — DB not updated; will retry next tick'
       );
       return;
     }
 
     this.logger.info(
-      { orderId: order.id, txHash: submittedHash },
-      'DCA execution TX confirmed — updating DB',
+      { orderId: order.id, type: order.type, txHash: submittedHash },
+      'Order execution TX confirmed — updating DB',
     );
 
     // Post-confirmation DB update via domain entity
@@ -269,7 +342,7 @@ export class OrderExecutorCron {
         executedIntervals: updatedProps.executedIntervals,
         remainingBudget: updatedProps.remainingBudget?.toString(),
       },
-      'DCA order DB updated after confirmed execution',
+      'Order DB updated after confirmed execution',
     );
   }
 }

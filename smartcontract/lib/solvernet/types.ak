@@ -222,6 +222,8 @@ pub type OrderRedeemer {
     /// Amount of output asset delivered
     output_delivered: Int,
   }
+  /// Reclaim expired order (permissionless — anyone can trigger after deadline)
+  ReclaimOrder
 }
 
 // ============================================================================

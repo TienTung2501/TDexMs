@@ -139,6 +139,17 @@ export interface ExecuteOrderTxParams {
   poolUtxoRef: { txHash: string; outputIndex: number };
 }
 
+export interface ReclaimOrderTxParams {
+  /** Keeper address that signs and pays fees — permissionless after deadline */
+  keeperAddress: string;
+  /** Order UTxO txHash */
+  orderTxHash: string;
+  /** Order UTxO output index */
+  orderOutputIndex: number;
+  /** Owner address — remaining budget returned here */
+  ownerAddress: string;
+}
+
 export interface DeploySettingsTxParams {
   /** Admin address that signs the TX */
   adminAddress: string;
@@ -201,6 +212,9 @@ export interface ITxBuilder {
 
   /** Build a reclaim TX for expired escrow — permissionless, keeper pays fees */
   buildReclaimTx(params: ReclaimTxParams): Promise<BuildTxResult>;
+
+  /** Build a reclaim TX for expired ORDER — permissionless, uses ReclaimOrder redeemer */
+  buildReclaimOrderTx(params: ReclaimOrderTxParams): Promise<BuildTxResult>;
 
   /** Build a TX to collect accumulated protocol fees from pool(s) — admin only */
   buildCollectFeesTx(params: CollectFeesTxParams): Promise<BuildTxResult>;

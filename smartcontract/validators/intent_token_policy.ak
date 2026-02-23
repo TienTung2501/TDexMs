@@ -12,6 +12,7 @@
 //// - Token is burned when the intent/order is filled, cancelled, or reclaimed.
 
 use aiken/collection/dict
+use aiken/collection/list
 use cardano/assets.{PolicyId}
 use cardano/transaction.{Transaction}
 use solvernet/types.{BurnIntentToken, IntentTokenRedeemer, MintIntentToken}
@@ -42,9 +43,9 @@ validator intent_token_policy {
 
       BurnIntentToken -> {
         // Anyone can burn (fill, cancel, reclaim will trigger this)
-        // Just verify exactly 1 token is burned
+        // Allow burning multiple tokens in a single TX for batch settlement
         let minted_tokens = assets.tokens(tx.mint, policy_id)
-        check_exactly_one_burn(minted_tokens)
+        check_burn_multiple(minted_tokens)
       }
     }
   }
@@ -65,10 +66,21 @@ fn check_exactly_one_mint(
   }
 }
 
-/// Verify exactly 1 token is burned.
-fn check_exactly_one_burn(minted_tokens: dict.Dict<ByteArray, Int>) -> Bool {
-  when dict.to_pairs(minted_tokens) is {
-    [Pair(_, qty)] -> qty == -1
-    _ -> False
+/// Verify that all token operations under this policy are burns (qty < 0).
+/// Allows burning multiple tokens in a single TX for batch settlement.
+/// At least one token must be burned.
+fn check_burn_multiple(minted_tokens: dict.Dict<ByteArray, Int>) -> Bool {
+  let pairs = dict.to_pairs(minted_tokens)
+  when pairs is {
+    // Must have at least one token being burned
+    [] -> False
+    _ ->
+      list.all(
+        pairs,
+        fn(pair) {
+          let Pair(_, qty) = pair
+          qty == -1
+        },
+      )
   }
 }

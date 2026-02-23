@@ -75,13 +75,20 @@ validator pool_validator(admin_vkh: VerificationKeyHash) {
         expect Some(pool_input) =
           list.find(tx.inputs, fn(inp) { has_nft(inp.output.value, pool_nft) })
 
-        // Current reserves from the input pool UTxO
-        let reserve_a_in = get_reserve(pool_input.output.value, asset_a)
-        let reserve_b_in = get_reserve(pool_input.output.value, asset_b)
+        // Physical reserves from the input pool UTxO (includes protocol fees)
+        let physical_a_in = get_reserve(pool_input.output.value, asset_a)
+        let physical_b_in = get_reserve(pool_input.output.value, asset_b)
 
-        // New reserves from the output pool UTxO
-        let reserve_a_out = get_reserve(pool_output.value, asset_a)
-        let reserve_b_out = get_reserve(pool_output.value, asset_b)
+        // Physical reserves from the output pool UTxO
+        let physical_a_out = get_reserve(pool_output.value, asset_a)
+        let physical_b_out = get_reserve(pool_output.value, asset_b)
+
+        // Active reserves = physical - protocol_fees (what LPs actually own)
+        // Used for Swap / Deposit / Withdraw to avoid inflated K from accumulated fees
+        let reserve_a_in = physical_a_in - pool_datum.protocol_fees_a
+        let reserve_b_in = physical_b_in - pool_datum.protocol_fees_b
+        let reserve_a_out = physical_a_out - output_datum.protocol_fees_a
+        let reserve_b_out = physical_b_out - output_datum.protocol_fees_b
 
         when redeemer is {
           Swap { direction, min_output } ->
@@ -126,10 +133,10 @@ validator pool_validator(admin_vkh: VerificationKeyHash) {
               tx,
               pool_datum,
               output_datum,
-              reserve_a_in,
-              reserve_b_in,
-              reserve_a_out,
-              reserve_b_out,
+              physical_a_in,
+              physical_b_in,
+              physical_a_out,
+              physical_b_out,
               admin_vkh,
             )
 

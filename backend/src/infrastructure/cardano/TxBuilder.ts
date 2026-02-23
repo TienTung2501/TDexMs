@@ -39,6 +39,7 @@ import type {
   OrderTxParams,
   CancelOrderTxParams,
   ReclaimTxParams,
+  ReclaimOrderTxParams,
   CollectFeesTxParams,
   UpdateSettingsTxParams,
   UpdateFactoryAdminTxParams,
@@ -50,6 +51,7 @@ import type {
 import { getLogger } from '../../config/logger.js';
 import { ChainError } from '../../domain/errors/index.js';
 import { AssetId } from '../../domain/value-objects/Asset.js';
+import { calculateMaxAbsorbableAmount } from '../../solver/AmmMath.js';
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -764,12 +766,37 @@ export class TxBuilder implements ITxBuilder {
         unit.startsWith(intentPolicyId),
       )!;
 
+      // Parse escrow datum to extract intent_id and remaining input for explicit payment output
+      const escrowDatumParsed = Data.from(escrowUtxo.datum!) as Constr<Data>;
+      const escrowFields = escrowDatumParsed.fields;
+      const escrowTokenAsset = escrowFields[0] as Constr<Data>;
+      const intentId = escrowTokenAsset.fields[1] as string;
+      const inputAsset = escrowFields[2] as Constr<Data>;
+      const remainingInput = escrowFields[9] as bigint;
+
+      // Build explicit owner payment (validator requires check_payment_output_secure)
+      const inputPolicyId = inputAsset.fields[0] as string;
+      const inputAssetName = inputAsset.fields[1] as string;
+      const inputUnit = inputPolicyId === '' ? 'lovelace' : toUnit(inputPolicyId, inputAssetName);
+      const ownerPayment: Assets = {};
+      if (inputUnit === 'lovelace') {
+        ownerPayment.lovelace = remainingInput;
+      } else {
+        ownerPayment.lovelace = MIN_SCRIPT_LOVELACE;
+        ownerPayment[inputUnit] = remainingInput;
+      }
+
       const tx = lucid
         .newTx()
         .collectFrom([escrowUtxo], EscrowRedeemer.Cancel())
         .attach.SpendingValidator(escrowScript)
         .mintAssets({ [intentTokenUnit]: -1n }, IntentTokenRedeemer.Burn())
         .attach.MintingPolicy(intentPolicyScript)
+        .pay.ToAddressWithData(
+          params.senderAddress,
+          { kind: 'inline', value: Data.to(intentId) },
+          ownerPayment,
+        )
         .addSigner(params.senderAddress);
 
       const completed = await tx.complete({
@@ -1012,24 +1039,29 @@ export class TxBuilder implements ITxBuilder {
       const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
       const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-      // Get current on-chain reserves (what the validator sees)
-      const reserveAIn = unitA === 'lovelace'
+      // Get current on-chain physical reserves
+      const physicalAIn = unitA === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitA] || 0n);
-      const reserveBIn = unitB === 'lovelace'
+      const physicalBIn = unitB === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitB] || 0n);
 
+      // Active reserves = physical - protocol_fees (for LP math — matches pool_validator.ak)
+      const activeAIn = physicalAIn - protocolFeesA;
+      const activeBIn = physicalBIn - protocolFeesB;
+
       // Compute LP tokens from on-chain state (must match pool validator's calculation)
+      // CRITICAL: uses ACTIVE reserves, not physical reserves
       let lpToMint: bigint;
       if (totalLpOld === 0n) {
         // Initial deposit: sqrt(depositA * depositB) - 1000
         const sqrtAB = bigIntSqrt(params.amountA * params.amountB);
         lpToMint = sqrtAB - 1000n;
       } else {
-        // Subsequent deposit: min(totalLp * depositA / reserveA, totalLp * depositB / reserveB)
-        const lpFromA = (totalLpOld * params.amountA) / reserveAIn;
-        const lpFromB = (totalLpOld * params.amountB) / reserveBIn;
+        // Subsequent deposit: min(totalLp * depositA / activeReserveA, totalLp * depositB / activeReserveB)
+        const lpFromA = (totalLpOld * params.amountA) / activeAIn;
+        const lpFromB = (totalLpOld * params.amountB) / activeBIn;
         lpToMint = lpFromA < lpFromB ? lpFromA : lpFromB;
       }
       if (lpToMint <= 0n) {
@@ -1049,20 +1081,19 @@ export class TxBuilder implements ITxBuilder {
         newPoolAssets[unitB] = (newPoolAssets[unitB] || 0n) + params.amountB;
       }
 
-      // Compute new reserves for root_k
-      const newReserveA = (unitA === 'lovelace'
+      // Compute new ACTIVE reserves for root_k
+      // new_active_reserve = new_physical_reserve - protocol_fees (fees unchanged during deposit)
+      const newPhysicalA = (unitA === 'lovelace'
         ? newPoolAssets.lovelace
         : newPoolAssets[unitA]) || 0n;
-      const newReserveB = (unitB === 'lovelace'
+      const newPhysicalB = (unitB === 'lovelace'
         ? newPoolAssets.lovelace
         : newPoolAssets[unitB]) || 0n;
-      // For lovelace pools, reserve_a excludes the min-utxo and pool NFT overhead
-      // The get_reserve function in Aiken just checks quantity_of(value, policy, name)
-      // For ADA it's quantity_of(value, #"", #"") which is the raw lovelace count.
-      // So we use raw values directly.
+      const newActiveA = newPhysicalA - protocolFeesA;
+      const newActiveB = newPhysicalB - protocolFeesB;
 
-      // Compute new root K = floor(sqrt(reserveA_out * reserveB_out))
-      const newRootK = bigIntSqrt(newReserveA * newReserveB);
+      // Compute new root K from ACTIVE reserves = floor(sqrt(activeA_out * activeB_out))
+      const newRootK = bigIntSqrt(newActiveA * newActiveB);
 
       // Build updated pool datum
       const updatedPoolDatum = Data.to(
@@ -1160,13 +1191,17 @@ export class TxBuilder implements ITxBuilder {
       const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
       const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-      // Get current on-chain reserves
-      const reserveAIn = unitA === 'lovelace'
+      // Get current on-chain physical reserves
+      const physicalAIn = unitA === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitA] || 0n);
-      const reserveBIn = unitB === 'lovelace'
+      const physicalBIn = unitB === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitB] || 0n);
+
+      // Active reserves for LP withdrawal math (matches pool_validator.ak)
+      const activeAIn = physicalAIn - protocolFeesA;
+      const activeBIn = physicalBIn - protocolFeesB;
 
       const lpBurned = params.lpTokenAmount;
       if (lpBurned <= 0n) {
@@ -1176,13 +1211,13 @@ export class TxBuilder implements ITxBuilder {
         throw new ChainError('Cannot burn more LP tokens than total supply');
       }
 
-      // Calculate proportional withdrawal (must match Aiken calculate_withdrawal)
-      // amount_a = reserve_a * lp_burned / total_lp (floor division)
-      // amount_b = reserve_b * lp_burned / total_lp (floor division)
-      const withdrawA = (reserveAIn * lpBurned) / totalLpOld;
-      const withdrawB = (reserveBIn * lpBurned) / totalLpOld;
+      // Calculate proportional withdrawal using ACTIVE reserves (must match Aiken)
+      // amount_a = active_reserve_a * lp_burned / total_lp (floor division)
+      // amount_b = active_reserve_b * lp_burned / total_lp (floor division)
+      const withdrawA = (activeAIn * lpBurned) / totalLpOld;
+      const withdrawB = (activeBIn * lpBurned) / totalLpOld;
 
-      // Build new pool output value: existing - withdrawn
+      // Build new pool output value: existing physical - withdrawn
       const newPoolAssets: Assets = { ...poolUtxo.assets };
       if (unitA === 'lovelace') {
         newPoolAssets.lovelace = (newPoolAssets.lovelace || 0n) - withdrawA;
@@ -1195,12 +1230,12 @@ export class TxBuilder implements ITxBuilder {
         newPoolAssets[unitB] = (newPoolAssets[unitB] || 0n) - withdrawB;
       }
 
-      // New reserves after withdrawal
-      const newReserveA = reserveAIn - withdrawA;
-      const newReserveB = reserveBIn - withdrawB;
+      // New ACTIVE reserves after withdrawal (for root_k)
+      const newActiveA = activeAIn - withdrawA;
+      const newActiveB = activeBIn - withdrawB;
 
-      // Compute new root K
-      const newRootK = bigIntSqrt(newReserveA * newReserveB);
+      // Compute new root K from ACTIVE reserves
+      const newRootK = bigIntSqrt(newActiveA * newActiveB);
 
       // Build updated pool datum
       const updatedPoolDatum = Data.to(
@@ -1330,13 +1365,18 @@ export class TxBuilder implements ITxBuilder {
       const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
       const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-      // Current on-chain pool reserves
-      let reserveA = unitA === 'lovelace'
+      // Physical reserves (what the UTxO actually holds — includes protocol fees)
+      let physicalA = unitA === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitA] || 0n);
-      let reserveB = unitB === 'lovelace'
+      let physicalB = unitB === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitB] || 0n);
+
+      // Active reserves = physical - protocol_fees (for AMM math)
+      // CRITICAL: must match pool_validator.ak active reserve calculation
+      let activeA = physicalA - protocolFeesA;
+      let activeB = physicalB - protocolFeesB;
 
       // Select solver wallet
       const solverUtxos = await lucid.utxosAt(params.solverAddress);
@@ -1346,7 +1386,7 @@ export class TxBuilder implements ITxBuilder {
 
       // Process each escrow UTxO
       const burnAssets: Assets = {};
-      const ownerPayments: Array<{ address: string; assets: Assets }> = [];
+      const ownerPayments: Array<{ address: string; assets: Assets; intentId: string }> = [];
 
       for (const eu of escrowUtxos) {
         // Parse escrow datum
@@ -1355,6 +1395,8 @@ export class TxBuilder implements ITxBuilder {
         //                          fill_count, remaining_input])
         const escrowDatum = Data.from(eu.datum!) as Constr<Data>;
         const edf = escrowDatum.fields;
+        const escrowToken = edf[0] as Constr<Data>; // AssetClass(policy_id, asset_name)
+        const intentId = escrowToken.fields[1] as string; // escrow token asset name = intent_id
         const owner = edf[1] as Constr<Data>; // Plutus Address
         const inputAssetClass = edf[2] as Constr<Data>;
         const inputAmount = edf[3] as bigint;
@@ -1385,52 +1427,60 @@ export class TxBuilder implements ITxBuilder {
         if (direction === 'AToB') {
           // Selling A for B: input is A, output is B
           // Fee deduction: effective_input = input * (10000 - fee) / 10000
+          // CRITICAL: use ACTIVE reserves for AMM math (matches pool_validator.ak)
           const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
-          outputAmount = (reserveB * effectiveInput) / (reserveA + effectiveInput);
+          outputAmount = (activeB * effectiveInput) / (activeA + effectiveInput);
 
-          // Partial fill check: if output would drain too much of reserve, cap it
-          if (outputAmount >= reserveB && isPartialFill) {
-            // Reserve can't fully satisfy — cap at 50% of reserve, re-derive input
-            const maxOutput = reserveB / 2n;
-            // reverse AMM: input = (reserveA * maxOutput) / ((reserveB - maxOutput) * (10000 - fee) / 10000)
-            const denominator = ((reserveB - maxOutput) * (10000n - feeNumerator)) / 10000n;
-            actualInput = denominator > 0n ? (reserveA * maxOutput) / denominator : 0n;
+          // Partial fill check: if output would drain too much of active reserve, cap it
+          if (outputAmount >= activeB && isPartialFill) {
+            // Reserve can't fully satisfy — cap at 50% of active reserve, re-derive input
+            const maxOutput = activeB / 2n;
+            const denominator = ((activeB - maxOutput) * (10000n - feeNumerator)) / 10000n;
+            actualInput = denominator > 0n ? (activeA * maxOutput) / denominator : 0n;
             if (actualInput <= 0n) {
               throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
             }
             const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
-            outputAmount = (reserveB * recalcEffective) / (reserveA + recalcEffective);
+            outputAmount = (activeB * recalcEffective) / (activeA + recalcEffective);
           }
           
           // Protocol fee accrues on input side (A)
           const protocolFee = (actualInput * feeNumerator / 10000n) / 6n; // protocol_fee_share = 6
           protocolFeesA += protocolFee;
           
-          // Update reserves
-          reserveA += actualInput;
-          reserveB -= outputAmount;
+          // Update physical reserves (for pool output UTxO)
+          physicalA += actualInput;
+          physicalB -= outputAmount;
+          // Update active reserves (for subsequent swap calculations in batch)
+          activeA += actualInput - protocolFee;
+          activeB -= outputAmount;
         } else {
           // Selling B for A: input is B, output is A
+          // CRITICAL: use ACTIVE reserves for AMM math
           const effectiveInput = (actualInput * (10000n - feeNumerator)) / 10000n;
-          outputAmount = (reserveA * effectiveInput) / (reserveB + effectiveInput);
+          outputAmount = (activeA * effectiveInput) / (activeB + effectiveInput);
 
           // Partial fill check
-          if (outputAmount >= reserveA && isPartialFill) {
-            const maxOutput = reserveA / 2n;
-            const denominator = ((reserveA - maxOutput) * (10000n - feeNumerator)) / 10000n;
-            actualInput = denominator > 0n ? (reserveB * maxOutput) / denominator : 0n;
+          if (outputAmount >= activeA && isPartialFill) {
+            const maxOutput = activeA / 2n;
+            const denominator = ((activeA - maxOutput) * (10000n - feeNumerator)) / 10000n;
+            actualInput = denominator > 0n ? (activeB * maxOutput) / denominator : 0n;
             if (actualInput <= 0n) {
               throw new ChainError(`Pool has insufficient liquidity for escrow ${eu.txHash}`);
             }
             const recalcEffective = (actualInput * (10000n - feeNumerator)) / 10000n;
-            outputAmount = (reserveA * recalcEffective) / (reserveB + recalcEffective);
+            outputAmount = (activeA * recalcEffective) / (activeB + recalcEffective);
           }
           
           const protocolFee = (actualInput * feeNumerator / 10000n) / 6n;
           protocolFeesB += protocolFee;
           
-          reserveB += actualInput;
-          reserveA -= outputAmount;
+          // Update physical reserves
+          physicalB += actualInput;
+          physicalA -= outputAmount;
+          // Update active reserves
+          activeB += actualInput - protocolFee;
+          activeA -= outputAmount;
         }
 
         const isCompleteFill = actualInput >= remainingInput;
@@ -1512,6 +1562,7 @@ export class TxBuilder implements ITxBuilder {
         ownerPayments.push({
           address: ownerBech32,
           assets: ownerAssets,
+          intentId: intentId,
         });
       }
 
@@ -1541,7 +1592,8 @@ export class TxBuilder implements ITxBuilder {
         .attach.SpendingValidator(r.poolScript);
 
       // Build updated pool datum
-      const newRootK = bigIntSqrt(reserveA * reserveB);
+      // rootK uses ACTIVE reserves (matches pool_validator.ak)
+      const newRootK = bigIntSqrt(activeA * activeB);
       const updatedPoolDatum = Data.to(
         new Constr(0, [
           pdf[0],          // pool_nft (unchanged)
@@ -1555,17 +1607,17 @@ export class TxBuilder implements ITxBuilder {
         ]),
       );
 
-      // Build new pool output assets
+      // Build new pool output assets — use PHYSICAL reserves (what the UTxO holds)
       const newPoolAssets: Assets = { ...poolUtxo.assets };
       if (unitA === 'lovelace') {
-        newPoolAssets.lovelace = reserveA;
+        newPoolAssets.lovelace = physicalA;
       } else {
-        newPoolAssets[unitA] = reserveA;
+        newPoolAssets[unitA] = physicalA;
       }
       if (unitB === 'lovelace') {
-        newPoolAssets.lovelace = reserveB;
+        newPoolAssets.lovelace = physicalB;
       } else {
-        newPoolAssets[unitB] = reserveB;
+        newPoolAssets[unitB] = physicalB;
       }
 
       // Re-output pool with updated datum and reserves
@@ -1575,11 +1627,15 @@ export class TxBuilder implements ITxBuilder {
         newPoolAssets,
       );
 
-      // Pay outputs to escrow owners
-      // The escrow validator's check_payment_output verifies that an output exists
-      // with: address == datum.owner AND asset_quantity >= output_delivered
+      // Pay outputs to escrow owners with InlineDatum(intent_id) for anti-double-satisfaction
+      // The escrow validator's check_payment_output_secure verifies:
+      // address == datum.owner AND asset_quantity >= output_delivered AND datum == InlineDatum(intent_id)
       for (const payment of ownerPayments) {
-        tx = tx.pay.ToAddress(payment.address, payment.assets);
+        tx = tx.pay.ToAddressWithData(
+          payment.address,
+          { kind: 'inline', value: Data.to(payment.intentId) },
+          payment.assets,
+        );
       }
 
       // Use actual chain time for validTo — critical when local clock is skewed.
@@ -1608,7 +1664,7 @@ export class TxBuilder implements ITxBuilder {
       this.logger.info({
         escrowCount: escrowUtxos.length,
         poolUtxoRef: `${poolUtxo.txHash}#${poolUtxo.outputIndex}`,
-        poolReserves: { reserveA: reserveA.toString(), reserveB: reserveB.toString() },
+        poolReserves: { physicalA: physicalA.toString(), physicalB: physicalB.toString(), activeA: activeA.toString(), activeB: activeB.toString() },
         protocolFees: { a: protocolFeesA.toString(), b: protocolFeesB.toString() },
         newRootK: newRootK.toString(),
         burnAssets: Object.fromEntries(Object.entries(burnAssets).map(([k, v]) => [k, v.toString()])),
@@ -1856,15 +1912,15 @@ export class TxBuilder implements ITxBuilder {
         throw new ChainError('Escrow UTxO has no intent token cannot reclaim');
       }
 
-      // Parse the inline datum to extract owner + remaining input info
-      // We need the datum to compute the owner payment output.
-      // The escrow datum is inline, so we can read from the UTxO.
-      // For now, we build the TX and let the validator+Lucid resolve it via datum.
-      //
+      // Parse the inline datum to extract intent_id for anti-double-satisfaction
+      const escrowDatumParsed = Data.from(escrowUtxo.datum!) as Constr<Data>;
+      const escrowTokenAsset = escrowDatumParsed.fields[0] as Constr<Data>;
+      const intentId = escrowTokenAsset.fields[1] as string; // escrow_token.asset_name
+
       // The validator requires:
-      //  1. check_after_deadline set validFrom to now (after deadline)
-      //  2. check_burn_one burn the intent token
-      //  3. check_payment_output remaining input to owner
+      //  1. check_after_deadline — set validFrom to chain time (after deadline)
+      //  2. check_burn_one — burn the intent token
+      //  3. check_payment_output_secure — remaining input to owner with InlineDatum(intent_id)
       //
       // We pay ALL non-ADA assets from the escrow to the owner.
       // The keeper gets the ADA change minus min-ADA that goes to owner.
@@ -1886,14 +1942,21 @@ export class TxBuilder implements ITxBuilder {
         ownerPayment.lovelace = MIN_SCRIPT_LOVELACE;
       }
 
+      // Use chain time instead of Date.now() to avoid local clock skew
+      const chainTimeMs = await this.getChainTimeMs();
+
       const tx = lucid
         .newTx()
         .collectFrom([escrowUtxo], EscrowRedeemer.Reclaim())
         .attach.SpendingValidator(escrowScript)
         .mintAssets({ [intentTokenUnit]: -1n }, IntentTokenRedeemer.Burn())
         .attach.MintingPolicy(intentPolicyScript)
-        .pay.ToAddress(params.ownerAddress, ownerPayment)
-        .validFrom(Date.now()); // Reclaim is only valid AFTER deadline
+        .pay.ToAddressWithData(
+          params.ownerAddress,
+          { kind: 'inline', value: Data.to(intentId) },
+          ownerPayment,
+        )
+        .validFrom(chainTimeMs); // Reclaim is only valid AFTER deadline
 
       const completed = await tx.complete({
         changeAddress: params.keeperAddress,
@@ -1911,6 +1974,102 @@ export class TxBuilder implements ITxBuilder {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.error({ error: msg }, 'Failed to build reclaim TX');
       throw new ChainError(`Failed to build reclaim TX: ${msg}`);
+    }
+  }
+
+  // 9b. RECLAIM ORDER — permissionless reclaim of expired order (uses ReclaimOrder redeemer)
+
+  async buildReclaimOrderTx(params: ReclaimOrderTxParams): Promise<BuildTxResult> {
+    this.logger.info(
+      { orderTxHash: params.orderTxHash, ownerAddress: params.ownerAddress },
+      'Building reclaim order TX for expired order',
+    );
+
+    try {
+      const lucid = await this.getLucid();
+      const r = this.getResolved();
+
+      // Keeper pays fees
+      const keeperUtxos = await lucid.utxosAt(params.keeperAddress);
+      if (keeperUtxos.length === 0) {
+        throw new ChainError('No UTxOs at keeper address — keeper wallet may be empty');
+      }
+      lucid.selectWallet.fromAddress(params.keeperAddress, keeperUtxos);
+
+      // Find order UTxO
+      const orderUtxos = await lucid.utxosByOutRef([
+        { txHash: params.orderTxHash, outputIndex: params.orderOutputIndex },
+      ]);
+      if (orderUtxos.length === 0) {
+        throw new ChainError('Order UTxO not found on-chain. May already be reclaimed or executed.');
+      }
+      const orderUtxo = orderUtxos[0];
+
+      // Parse order datum to extract remaining_budget and asset_in
+      // OrderDatum = Constr(0, [order_type, owner, asset_in, asset_out, params, order_token])
+      const orderDatum = Data.from(orderUtxo.datum!) as Constr<Data>;
+      const odf = orderDatum.fields;
+      const assetIn = odf[2] as Constr<Data>;
+      const orderParamsConstr = odf[4] as Constr<Data>;
+      const orderToken = odf[5] as Constr<Data>;
+      const remainingBudget = orderParamsConstr.fields[5] as bigint;
+      const orderIntentId = orderToken.fields[1] as string;
+
+      // Identify order auth token to burn
+      const orderTokenUnit = Object.keys(orderUtxo.assets).find((unit) =>
+        unit.startsWith(r.intentPolicyId),
+      );
+      if (!orderTokenUnit) {
+        throw new ChainError('Order UTxO has no order token — cannot reclaim');
+      }
+
+      // Build owner payment: return remaining_budget in asset_in
+      const inPolicyId = assetIn.fields[0] as string;
+      const inAssetName = assetIn.fields[1] as string;
+      const inUnit = inPolicyId === '' ? 'lovelace' : toUnit(inPolicyId, inAssetName);
+      const ownerPayment: Assets = {};
+      if (inUnit === 'lovelace') {
+        ownerPayment.lovelace = remainingBudget;
+      } else {
+        ownerPayment.lovelace = MIN_SCRIPT_LOVELACE;
+        ownerPayment[inUnit] = remainingBudget;
+      }
+
+      // Use chain time for validFrom (must be after deadline)
+      const chainTimeMs = await this.getChainTimeMs();
+
+      // ReclaimOrder redeemer = Constr(2, [])
+      const reclaimRedeemer = Data.to(new Constr(2, []));
+
+      const tx = lucid
+        .newTx()
+        .collectFrom([orderUtxo], reclaimRedeemer)
+        .attach.SpendingValidator(r.orderScript)
+        .mintAssets({ [orderTokenUnit]: -1n }, IntentTokenRedeemer.Burn())
+        .attach.MintingPolicy(r.intentPolicyScript)
+        .pay.ToAddressWithData(
+          params.ownerAddress,
+          { kind: 'inline', value: Data.to(orderIntentId) },
+          ownerPayment,
+        )
+        .validFrom(chainTimeMs);
+
+      const completed = await tx.complete({
+        changeAddress: params.keeperAddress,
+      });
+
+      this.logger.info({ txHash: completed.toHash() }, 'Reclaim order TX built');
+
+      return {
+        unsignedTx: completed.toCBOR(),
+        txHash: completed.toHash(),
+        estimatedFee: 0n,
+      };
+    } catch (error) {
+      if (error instanceof ChainError) throw error;
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.error({ error: msg }, 'Failed to build reclaim order TX');
+      throw new ChainError(`Failed to build reclaim order TX: ${msg}`);
     }
   }
 
@@ -2345,6 +2504,7 @@ export class TxBuilder implements ITxBuilder {
       const assetOut = odf[3] as Constr<Data>; // AssetClass
       const orderParamsConstr = odf[4] as Constr<Data>; // OrderParams
       const orderToken = odf[5] as Constr<Data>; // AssetClass
+      const orderIntentId = orderToken.fields[1] as string; // order_token.asset_name = intent_id
 
       // Extract OrderParams fields
       const targetPriceNum = orderParamsConstr.fields[0] as bigint;
@@ -2358,19 +2518,7 @@ export class TxBuilder implements ITxBuilder {
       // Determine order type: 0=Limit, 1=DCA, 2=StopLoss
       const orderTypeIdx = orderTypeConstr.index;
 
-      // Calculate amount to consume
-      let amountConsumed: bigint;
-      if (orderTypeIdx === 1) {
-        // DCA: consume exactly amountPerInterval (or remaining if less)
-        amountConsumed = remainingBudget < amountPerInterval
-          ? remainingBudget
-          : amountPerInterval;
-      } else {
-        // Limit / StopLoss: consume all remaining budget
-        amountConsumed = remainingBudget;
-      }
-
-      // Fetch pool UTxO
+      // Fetch pool UTxO (needed before amount calculation for Limit orders)
       const poolRefUtxos = await lucid.utxosByOutRef([
         { txHash: params.poolUtxoRef.txHash, outputIndex: params.poolUtxoRef.outputIndex },
       ]);
@@ -2396,12 +2544,17 @@ export class TxBuilder implements ITxBuilder {
       const unitA = assetAPolicyId === '' ? 'lovelace' : toUnit(assetAPolicyId, assetAAssetName);
       const unitB = assetBPolicyId === '' ? 'lovelace' : toUnit(assetBPolicyId, assetBAssetName);
 
-      let reserveA = unitA === 'lovelace'
+      // Physical reserves (for pool output UTxO)
+      let physicalA = unitA === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitA] || 0n);
-      let reserveB = unitB === 'lovelace'
+      let physicalB = unitB === 'lovelace'
         ? (poolUtxo.assets.lovelace || 0n)
         : (poolUtxo.assets[unitB] || 0n);
+
+      // Active reserves = physical - protocol_fees (for AMM math)
+      let activeA = physicalA - protocolFeesA;
+      let activeB = physicalB - protocolFeesB;
 
       // Determine swap direction based on order's asset_in vs pool's asset_a
       const inPolicyId = assetIn.fields[0] as string;
@@ -2409,22 +2562,50 @@ export class TxBuilder implements ITxBuilder {
       const isInputA = inPolicyId === assetAPolicyId && inAssetName === assetAAssetName;
       const direction: 'AToB' | 'BToA' = isInputA ? 'AToB' : 'BToA';
 
+      // Calculate amount to consume (now with pool context for Limit orders)
+      let amountConsumed: bigint;
+      if (orderTypeIdx === 1) {
+        // DCA: consume exactly amountPerInterval (or remaining if less)
+        amountConsumed = remainingBudget < amountPerInterval
+          ? remainingBudget
+          : amountPerInterval;
+      } else if (orderTypeIdx === 0) {
+        // Limit: find max absorbable amount that still meets target price
+        const reserveIn = direction === 'AToB' ? activeA : activeB;
+        const reserveOut = direction === 'AToB' ? activeB : activeA;
+        amountConsumed = calculateMaxAbsorbableAmount(
+          reserveIn, reserveOut, remainingBudget, feeNumerator,
+          targetPriceNum, targetPriceDen,
+        );
+        if (amountConsumed <= 0n) {
+          throw new ChainError('Current pool price does not meet limit order target price');
+        }
+      } else {
+        // StopLoss: consume all remaining budget
+        amountConsumed = remainingBudget;
+      }
+
       // Calculate output via constant product with fee
+      // CRITICAL: use ACTIVE reserves for AMM math (matches pool_validator.ak)
       let outputDelivered: bigint;
       if (direction === 'AToB') {
         const effectiveInput = (amountConsumed * (10000n - feeNumerator)) / 10000n;
-        outputDelivered = (reserveB * effectiveInput) / (reserveA + effectiveInput);
+        outputDelivered = (activeB * effectiveInput) / (activeA + effectiveInput);
         const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
         protocolFeesA += protocolFee;
-        reserveA += amountConsumed;
-        reserveB -= outputDelivered;
+        physicalA += amountConsumed;
+        physicalB -= outputDelivered;
+        activeA += amountConsumed - protocolFee;
+        activeB -= outputDelivered;
       } else {
         const effectiveInput = (amountConsumed * (10000n - feeNumerator)) / 10000n;
-        outputDelivered = (reserveA * effectiveInput) / (reserveB + effectiveInput);
+        outputDelivered = (activeA * effectiveInput) / (activeB + effectiveInput);
         const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
         protocolFeesB += protocolFee;
-        reserveA -= outputDelivered;
-        reserveB += amountConsumed;
+        physicalA -= outputDelivered;
+        physicalB += amountConsumed;
+        activeA -= outputDelivered;
+        activeB += amountConsumed - protocolFee;
       }
 
       // For Limit orders, verify price meets target
@@ -2440,8 +2621,8 @@ export class TxBuilder implements ITxBuilder {
       const isCompleteFill = amountConsumed === remainingBudget;
       const newRemainingBudget = remainingBudget - amountConsumed;
 
-      // Build pool datum update
-      const newRootK = bigIntSqrt(reserveA * reserveB);
+      // Build pool datum update — rootK uses ACTIVE reserves
+      const newRootK = bigIntSqrt(activeA * activeB);
       const updatedPoolDatum = Data.to(
         new Constr(0, [
           pdf[0], pdf[1], pdf[2], pdf[3],
@@ -2449,17 +2630,17 @@ export class TxBuilder implements ITxBuilder {
         ]),
       );
 
-      // Build new pool assets
+      // Build new pool assets — use PHYSICAL reserves
       const newPoolAssets: Assets = { ...poolUtxo.assets };
       if (unitA === 'lovelace') {
-        newPoolAssets.lovelace = reserveA;
+        newPoolAssets.lovelace = physicalA;
       } else {
-        newPoolAssets[unitA] = reserveA;
+        newPoolAssets[unitA] = physicalA;
       }
       if (unitB === 'lovelace') {
-        newPoolAssets.lovelace = reserveB;
+        newPoolAssets.lovelace = physicalB;
       } else {
-        newPoolAssets[unitB] = reserveB;
+        newPoolAssets[unitB] = physicalB;
       }
 
       // Build TX
@@ -2498,8 +2679,13 @@ export class TxBuilder implements ITxBuilder {
         ownerPayment[outUnit] = outputDelivered;
       }
 
-      // Pay to owner address (validator checks datum.owner matches output address)
-      tx = tx.pay.ToAddress(ownerBech32, ownerPayment);
+      // Pay to owner with InlineDatum(intent_id) for anti-double-satisfaction
+      // (order validator's check_payment_output_secure verifies datum)
+      tx = tx.pay.ToAddressWithData(
+        ownerBech32,
+        { kind: 'inline', value: Data.to(orderIntentId) },
+        ownerPayment,
+      );
 
       if (isCompleteFill) {
         // Burn order auth token
