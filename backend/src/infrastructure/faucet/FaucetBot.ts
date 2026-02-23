@@ -8,9 +8,9 @@
  * Faucet API: GET https://faucet.{network}.world.dev.cardano.org/send-money/{address}?apiKey={key}
  *
  * Configuration (environment variables):
- *   FAUCET_TARGET_ADDRESS  — Bech32 address to receive test ADA (falls back to SOLVER_ADDRESS)
- *   FAUCET_API_KEY         — API key for the faucet (optional; faucet rejects if required and missing)
- *   CARDANO_NETWORK        — "preprod" | "preview" | "mainnet"  (mainnet skips faucet)
+ * FAUCET_TARGET_ADDRESS  — Bech32 address to receive test ADA (falls back to SOLVER_ADDRESS)
+ * FAUCET_API_KEY         — API key for the faucet (optional; faucet rejects if required and missing)
+ * CARDANO_NETWORK        — "preprod" | "preview" | "mainnet"  (mainnet skips faucet)
  */
 import { getLogger } from '../../config/logger.js';
 
@@ -124,9 +124,11 @@ export class FaucetBot {
         signal: AbortSignal.timeout(30_000), // 30s timeout
       });
 
-      const body = await res.json().catch(() => ({}));
+      // Ép kiểu (Type Assertion) để TypeScript không báo lỗi khi gọi body.error
+      const body = (await res.json().catch(() => ({}))) as { error?: any };
 
-      if (res.ok) {
+      // Kiểm tra xem HTTP có OK không VÀ body có chứa object error không
+      if (res.ok && !body?.error) {
         this.lastRequestAt = new Date();
         this.totalRequested += 1;
         this.logger.info(
@@ -136,11 +138,27 @@ export class FaucetBot {
       } else {
         // Faucet returns 429 when rate-limited (within 24h window)
         const isRateLimited = res.status === 429;
+        
+        // Trích xuất mã lỗi cụ thể nếu có để in ra log
+        const errorTag = body?.error?.tag || 'Unknown Error';
+
+        // If the faucet requires an API key but none is configured,
+        // disable the bot to avoid repeated failed requests.
+        if (errorTag === 'FaucetWebErrorInvalidApiKey' && !this.config.apiKey) {
+          this.logger.warn(
+            'FaucetBot disabled — preprod faucet now requires an API key. ' +
+            'Set FAUCET_API_KEY in .env. Get one at: ' +
+            'https://docs.cardano.org/cardano-testnets/tools/faucet/',
+          );
+          this.stop();
+          return;
+        }
+
         this.logger.warn(
           { status: res.status, body, isRateLimited },
           isRateLimited
             ? '⏳ Faucet rate-limited — will retry in 24h'
-            : '⚠️  Faucet request failed',
+            : `⚠️ Faucet request failed: ${errorTag}`,
         );
       }
     } catch (err) {

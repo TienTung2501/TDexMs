@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start Backend",
+			"type": "shell",
+			"command": "cd d:\\Code\\decentralize\\backend && pnpm exec tsx src/index.ts",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

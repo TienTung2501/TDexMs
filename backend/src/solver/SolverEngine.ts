@@ -127,16 +127,20 @@ export class SolverEngine {
     // This prevents the TX builder from trying to burn escrow tokens for
     // UTxOs that were already settled/cancelled but still linger on-chain.
     const intents: typeof chainIntents = [];
+    let staleCount = 0;
     for (const intent of chainIntents) {
       const dbIntent = await this.intentRepo.findByUtxoRef(
         intent.utxoRef.txHash,
         intent.utxoRef.outputIndex,
       );
       if (!dbIntent) {
-        this.logger.warn(
+        // Log at debug level — stale UTxOs are expected after DB resets or
+        // when test transactions were submitted before the DB was populated.
+        this.logger.debug(
           { txHash: intent.utxoRef.txHash, outputIndex: intent.utxoRef.outputIndex },
           'Skipping stale on-chain escrow UTxO — no matching DB intent',
         );
+        staleCount++;
         continue;
       }
       if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING') {
@@ -147,6 +151,14 @@ export class SolverEngine {
         continue;
       }
       intents.push(intent);
+    }
+
+    // Log a single summary if any stale UTxOs were found (reduces log noise)
+    if (staleCount > 0) {
+      this.logger.debug(
+        { staleCount, totalChainUtxos: chainIntents.length },
+        'Filtered stale on-chain escrow UTxOs with no DB record',
+      );
     }
 
     if (intents.length === 0) {

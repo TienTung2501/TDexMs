@@ -17,6 +17,41 @@
 import { Redis } from '@upstash/redis';
 import { getLogger } from '../../config/logger.js';
 
+// ── BigInt-safe JSON serialization ──────────────────────────────────────────
+// Upstash Redis SDK uses JSON.stringify internally, which throws on BigInt values.
+// We pre-serialize to a string using a custom replacer before passing to Redis,
+// and parse it back with a reviver on the way out.
+
+const BIGINT_TAG = '__bigint__';
+
+function bigintReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === 'bigint') {
+    return { [BIGINT_TAG]: value.toString() };
+  }
+  return value;
+}
+
+function bigintReviver(_key: string, value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    BIGINT_TAG in (value as Record<string, unknown>)
+  ) {
+    return BigInt((value as Record<string, string>)[BIGINT_TAG]);
+  }
+  return value;
+}
+
+/** Serialize a value to JSON string, safely handling BigInt. */
+function safeSerialize(value: unknown): string {
+  return JSON.stringify(value, bigintReplacer);
+}
+
+/** Parse a JSON string back, restoring BigInt where tagged. */
+function safeDeserialize<T>(raw: string): T {
+  return JSON.parse(raw, bigintReviver) as T;
+}
+
 /** Cache key prefixes to organize namespaces */
 export const CacheKeys = {
   /** Blockfrost chain tip: `bf:tip` */
@@ -89,8 +124,12 @@ export class CacheService {
    */
   async get<T>(key: string): Promise<T | null> {
     try {
-      const value = await this.redis.get<T>(key);
-      return value;
+      // Retrieve the raw string we stored (Upstash returns it as-is when stored as string)
+      const raw = await this.redis.get<string>(key);
+      if (raw === null || raw === undefined) return null;
+      // If Upstash already parsed it as an object (non-string cache hit), return directly
+      if (typeof raw !== 'string') return raw as unknown as T;
+      return safeDeserialize<T>(raw);
     } catch (err) {
       this.logger.debug({ err, key }, 'Cache get failed (graceful)');
       return null;
@@ -103,7 +142,9 @@ export class CacheService {
    */
   async set(key: string, value: unknown, ttlSeconds: number): Promise<void> {
     try {
-      await this.redis.set(key, value, { ex: ttlSeconds });
+      // Pre-serialize to handle BigInt (JSON.stringify in Upstash SDK cannot)
+      const serialized = safeSerialize(value);
+      await this.redis.set(key, serialized, { ex: ttlSeconds });
     } catch (err) {
       this.logger.debug({ err, key }, 'Cache set failed (graceful)');
     }
