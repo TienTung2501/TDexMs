@@ -116,14 +116,48 @@ export class SolverEngine {
   /** Single solver iteration */
   private async runIteration(): Promise<void> {
     // Phase 1: Collect active intents from chain
-    const intents = await this.collector.getActiveIntents();
+    const chainIntents = await this.collector.getActiveIntents();
 
-    if (intents.length === 0) {
+    if (chainIntents.length === 0) {
       this.logger.debug('No active intents found');
       return;
     }
 
-    this.logger.info({ intentCount: intents.length }, 'Processing intents');
+    // Phase 1b: Filter out stale UTxOs that have no corresponding DB record.
+    // This prevents the TX builder from trying to burn escrow tokens for
+    // UTxOs that were already settled/cancelled but still linger on-chain.
+    const intents: typeof chainIntents = [];
+    for (const intent of chainIntents) {
+      const dbIntent = await this.intentRepo.findByUtxoRef(
+        intent.utxoRef.txHash,
+        intent.utxoRef.outputIndex,
+      );
+      if (!dbIntent) {
+        this.logger.warn(
+          { txHash: intent.utxoRef.txHash, outputIndex: intent.utxoRef.outputIndex },
+          'Skipping stale on-chain escrow UTxO — no matching DB intent',
+        );
+        continue;
+      }
+      if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING') {
+        this.logger.debug(
+          { intentId: dbIntent.id, status: dbIntent.status },
+          'Skipping non-ACTIVE DB intent',
+        );
+        continue;
+      }
+      intents.push(intent);
+    }
+
+    if (intents.length === 0) {
+      this.logger.debug('No DB-verified active intents after filtering');
+      return;
+    }
+
+    this.logger.info(
+      { chainCount: chainIntents.length, dbVerifiedCount: intents.length },
+      'Processing intents (filtered stale UTxOs)',
+    );
 
     // Phase 2: Find optimal routes for each intent
     const routes = await this.optimizer.findRoutes(intents);
@@ -142,7 +176,10 @@ export class SolverEngine {
     // Phase 3: Group into batches
     const batches = this.batchBuilder.groupByPool(routableIntents, routes);
 
-    // Phase 4: Process each batch
+    // Phase 4: Process each batch — settle ONE intent at a time because the
+    // on-chain minting policy (check_exactly_one_burn) only allows burning
+    // 1 escrow token per TX.  We split multi-intent batches into single-intent
+    // sub-batches that share pool/direction metadata.
     for (const batch of batches) {
       // Check profitability
       const surplus = this.batchBuilder.calculateSurplus(batch);
@@ -154,19 +191,33 @@ export class SolverEngine {
         continue;
       }
 
-      // Mark intents as processing
-      const refs = batch.intents.map((i) => i.utxoRef);
-      this.collector.markProcessing(refs);
+      // Process intents one-by-one within this pool batch
+      for (const singleIntent of batch.intents) {
+        const singleBatch: typeof batch = {
+          ...batch,
+          intents: [singleIntent],
+          totalInputAmount: singleIntent.inputAmount,
+          // approximate single-intent output using proportional share
+          totalOutputAmount: batch.totalInputAmount > 0n
+            ? (singleIntent.inputAmount * batch.totalOutputAmount) / batch.totalInputAmount
+            : 0n,
+        };
 
-      try {
-        await this.settleBatch(batch);
-      } catch (err) {
-        this.logger.error(
-          { err, poolId: batch.poolId, intentCount: batch.intents.length },
-          'Failed to settle batch',
-        );
-      } finally {
-        this.collector.clearProcessing(refs);
+        const refs = [singleIntent.utxoRef];
+        this.collector.markProcessing(refs);
+
+        try {
+          await this.settleBatch(singleBatch);
+          // Wait for pool UTxO to propagate after each successful settlement
+          await sleep(2000);
+        } catch (err) {
+          this.logger.error(
+            { err, poolId: batch.poolId, utxoRef: `${singleIntent.utxoRef.txHash}#${singleIntent.utxoRef.outputIndex}` },
+            'Failed to settle single intent',
+          );
+        } finally {
+          this.collector.clearProcessing(refs);
+        }
       }
     }
   }

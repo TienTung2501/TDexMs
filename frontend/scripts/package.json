@@ -36,7 +36,9 @@
     "admin-settings": "npx tsx src/admin-update-settings.ts",
     "admin-burn-pool": "npx tsx src/admin-burn-pool.ts",
     "admin-transfer-factory": "npx tsx src/admin-transfer-factory.ts",
-    "test-all": "npx tsx src/run-all-tests.ts"
+    "test-all": "npx tsx src/run-all-tests.ts",
+    "test-e2e": "npx tsx src/comprehensive-e2e-test.ts",
+    "system-reset": "npx tsx src/system-reset.ts"
   },
   "dependencies": {
     "@lucid-evolution/lucid": "^0.4",
