@@ -91,7 +91,7 @@ const SWAP_TUSD       = 250_000_000n;   // 250 tUSD per intent
 const DCA_BUDGET      = 100_000_000n;   // 100 tUSD total
 const DCA_PER_INT     =  10_000_000n;   // 10 tUSD per DCA interval
 const DCA_INTERVAL    =         60;     // 60 slots (~60 s on preprod)
-const SLIPPAGE_BPS    = 100n;           // 1 % slippage tolerance
+const SLIPPAGE_BPS    = 500n;           // 5 % slippage tolerance (accounts for multiple intents affecting same pool)
 
 // ─── Utility helpers ───────────────────────────────────────────────
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -429,9 +429,52 @@ type PoolRow = {
   outputIndex?: number;
   assetA?: { policyId: string; assetName: string };
   assetB?: { policyId: string; assetName: string };
+  reserveA?: string;
+  reserveB?: string;
+  feeNumerator?: number;
+  feeDenominator?: number;
   lpTokenPolicyId?: string;
   lpTokenName?: string;
 };
+
+/**
+ * Calculate expected AMM output using constant-product formula with fee deduction.
+ * Matches AmmMath.calculateSwapOutput exactly:
+ *   inputWithFee = input * (feeDenom - feeNum)
+ *   output       = (reserveOut * inputWithFee) / (reserveIn * feeDenom + inputWithFee)
+ */
+function ammExpectedOutput(
+  inputAmount: bigint,
+  reserveIn: bigint,
+  reserveOut: bigint,
+  feeNum = 30n,
+  feeDenom = 10000n,
+): bigint {
+  const inputWithFee = inputAmount * (feeDenom - feeNum);
+  const numerator    = reserveOut * inputWithFee;
+  const denominator  = reserveIn * feeDenom + inputWithFee;
+  return numerator / denominator;
+}
+
+/**
+ * Compute minOutput = expected AMM output minus slippage tolerance.
+ * Falls back to input-based slippage if reserves are not provided.
+ */
+function computeMinOutput(
+  inputAmount: bigint,
+  reserveIn?: bigint,
+  reserveOut?: bigint,
+  feeNum = 30n,
+  feeDenom = 10000n,
+  slippageBps = SLIPPAGE_BPS,
+): bigint {
+  if (reserveIn && reserveOut && reserveIn > 0n) {
+    const expectedOut = ammExpectedOutput(inputAmount, reserveIn, reserveOut, feeNum, feeDenom);
+    return (expectedOut * (10000n - slippageBps)) / 10000n;
+  }
+  // Fallback: apply slippage to input (only valid for ~1:1 priced pairs)
+  return (inputAmount * (10000n - slippageBps)) / 10000n;
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // Phase 1 — Deploy Settings
@@ -586,8 +629,9 @@ async function createIntent(
   minOutAmt: bigint,
   deadlineMs: number,
   label: string,
+  partialFill = true,
 ): Promise<IntentRef> {
-  log(label, `${inputAsset.slice(0, 14)}…→${outputAsset.slice(0, 14)}… amt=${inputAmt}`);
+  log(label, `${inputAsset.slice(0, 14)}…→${outputAsset.slice(0, 14)}… amt=${inputAmt} minOut=${minOutAmt} partial=${partialFill}`);
 
   const res = await apiPost<{ intentId: string; unsignedTx: string }>('/intents', {
     senderAddress: user.address,
@@ -597,7 +641,7 @@ async function createIntent(
     inputAmount:   inputAmt.toString(),
     minOutput:     minOutAmt.toString(),
     deadline:      deadlineMs,
-    partialFill:   false,
+    partialFill,
   });
 
   // Sign, submit, await confirmation, and call /tx/confirm to activate the intent
@@ -613,17 +657,36 @@ async function phase6SwapIntents(
   userA: Wallet,
   userB: Wallet,
   userC: Wallet,
+  pool1: PoolMeta,
 ): Promise<IntentRef[]> {
   hr('Phase 6 — Swap Intents [TC-S04, TC-SE01, TC-SE02] → SolverEngine fills');
 
   const deadline = Date.now() + 6 * 3600 * 1000; // 6 h
 
+  // Fetch current pool reserves to compute accurate minOutput
+  const poolInfo = await apiGet<PoolRow>(`/pools/${pool1.poolId}`);
+  const reserveA = BigInt(poolInfo.reserveA ?? '0');
+  const reserveB = BigInt(poolInfo.reserveB ?? '0');
+  const feeNum   = BigInt(poolInfo.feeNumerator ?? 30);
+  const feeDenom = BigInt(poolInfo.feeDenominator ?? 10000);
+
+  log('intents', `Pool reserves: A=${reserveA} B=${reserveB} fee=${feeNum}/${feeDenom}`);
   log('intents', 'Creating 3 intents (one per user) — each awaits on-chain confirmation + /tx/confirm');
 
+  // i1: User A swaps tBTC (assetA) → tUSD (assetB)  →  reserveIn=A, reserveOut=B
+  const minOut1 = computeMinOutput(SWAP_TBTC,      reserveA, reserveB, feeNum, feeDenom);
+  // i2: User B swaps tUSD (assetB) → tBTC (assetA)  →  reserveIn=B, reserveOut=A
+  const minOut2 = computeMinOutput(SWAP_TUSD,      reserveB, reserveA, feeNum, feeDenom);
+  // i3: User C swaps tBTC (assetA) → tUSD (assetB)  →  reserveIn=A, reserveOut=B
+  const minOut3 = computeMinOutput(SWAP_TBTC * 2n, reserveA, reserveB, feeNum, feeDenom);
+
+  log('intents', `Computed minOutputs: i1=${minOut1}, i2=${minOut2}, i3=${minOut3}`);
+
   // One intent per user only: each signSubmitConfirm awaits confirmation
-  const i1 = await createIntent(userA, asTbtc(), asTusd(),  SWAP_TBTC,       minOut(SWAP_TBTC),       deadline, 'i1-A-AtoB');
-  const i2 = await createIntent(userB, asTusd(), asTbtc(),  SWAP_TUSD,       minOut(SWAP_TUSD),       deadline, 'i2-B-BtoA');
-  const i3 = await createIntent(userC, asTbtc(), asTusd(),  SWAP_TBTC * 2n,  minOut(SWAP_TBTC * 2n), deadline, 'i3-C-AtoB-2x');
+  // i2 uses partialFill=true (250 tUSD is large relative to reserves)
+  const i1 = await createIntent(userA, asTbtc(), asTusd(),  SWAP_TBTC,       minOut1, deadline, 'i1-A-AtoB',    true);
+  const i2 = await createIntent(userB, asTusd(), asTbtc(),  SWAP_TUSD,       minOut2, deadline, 'i2-B-BtoA',    true);
+  const i3 = await createIntent(userC, asTbtc(), asTusd(),  SWAP_TBTC * 2n,  minOut3, deadline, 'i3-C-AtoB-2x', true);
 
   log('intents', `✅ 3 intents on-chain and ACTIVE. SolverEngine (15 s cycle) will batch-fill them.`);
   log('intents', `   Monitor: GET ${API}/intents?address=${userA.address.slice(0, 20)}...`);
@@ -642,15 +705,15 @@ async function observeIntentFills(intents: IntentRef[]): Promise<void> {
 
   for (const { intentId } of intents) {
     const short = intentId.slice(0, 10);
-    const result = await pollUntil<{ intent?: { status: string } }>(
+    const result = await pollUntil<{ status?: string }>(
       `intent-${short}`,
       () => apiGet(`/intents/${intentId}`),
-      v => v.intent?.status === 'FILLED',
+      v => v.status === 'FILLED' || v.status === 'PARTIALLY_FILLED',
       12_000,
       150_000,
     );
-    const status = result?.intent?.status ?? 'TIMEOUT';
-    const icon   = status === 'FILLED' ? '✅' : '⚠️';
+    const status = result?.status ?? 'TIMEOUT';
+    const icon   = status === 'FILLED' || status === 'PARTIALLY_FILLED' ? '✅' : '⚠️';
     log('watch', `${icon} ${short}… → ${status}`);
   }
 }
@@ -712,14 +775,14 @@ async function phase8ExpiredIntent(user: Wallet): Promise<void> {
   log('expire-intent', '✅ Deadline passed. ReclaimKeeperCron handles reclaim on next tick (~60 s)');
   log('expire-intent', '   Watch backend logs for: "Reclaim TX submitted"');
 
-  const result = await pollUntil<{ intent?: { status: string } }>(
+  const result = await pollUntil<{ status?: string }>(
     'expire-watch',
     () => apiGet(`/intents/${intentId}`),
-    v => v.intent?.status === 'RECLAIMED' || v.intent?.status === 'EXPIRED',
+    v => v.status === 'RECLAIMED' || v.status === 'EXPIRED',
     15_000,
     180_000,
   );
-  const status = result?.intent?.status ?? 'TIMEOUT';
+  const status = result?.status ?? 'TIMEOUT';
   log('expire-intent', (status === 'RECLAIMED' || status === 'EXPIRED')
     ? `✅ Intent is now ${status}`
     : '⚠️  Bot may need another tick — check backend logs');
@@ -841,14 +904,14 @@ async function observeOrderExecution(orders: OrderRef[]): Promise<void> {
 
   for (const { orderId } of orders) {
     const short = orderId.slice(0, 8);
-    const result = await pollUntil<{ order?: { status: string } }>(
+    const result = await pollUntil<{ status?: string }>(
       `order-${short}`,
       () => apiGet(`/orders/${orderId}`),
-      v => ['FILLED', 'PARTIALLY_FILLED'].includes(v.order?.status ?? ''),
+      v => ['FILLED', 'PARTIALLY_FILLED'].includes(v.status ?? ''),
       15_000,
       150_000,
     );
-    const status = result?.order?.status ?? 'TIMEOUT';
+    const status = result?.status ?? 'TIMEOUT';
     const icon   = (status === 'FILLED' || status === 'PARTIALLY_FILLED') ? '✅' : '⚠️';
     log('watch', `${icon} order ${short}… → ${status}`);
   }
@@ -916,14 +979,14 @@ async function phase13ExpiredOrder(user: Wallet): Promise<void> {
 
   log('expire-order', '✅ Deadline passed. ReclaimKeeperCron will reclaim on next tick (~60 s)');
 
-  const result = await pollUntil<{ order?: { status: string } }>(
+  const result = await pollUntil<{ status?: string }>(
     'expire-order-watch',
     () => apiGet(`/orders/${orderId}`),
-    v => v.order?.status === 'RECLAIMED' || v.order?.status === 'EXPIRED',
+    v => v.status === 'RECLAIMED' || v.status === 'EXPIRED',
     15_000,
     180_000,
   );
-  const status = result?.order?.status ?? 'TIMEOUT';
+  const status = result?.status ?? 'TIMEOUT';
   log('expire-order', (status === 'RECLAIMED' || status === 'EXPIRED')
     ? `✅ Order is now ${status}`
     : '⚠️  Not yet RECLAIMED — check backend logs');
@@ -1159,7 +1222,7 @@ async function main() {
 
   let intentRefs: IntentRef[] = [];
   await runPhase('Phase 6 — Swap Intents', async () => {
-    intentRefs = await phase6SwapIntents(userA, userB, userC);
+    intentRefs = await phase6SwapIntents(userA, userB, userC, pool1!);
   });
 
   // ════ CANCEL INTENT (user action) ════════════════════════════════

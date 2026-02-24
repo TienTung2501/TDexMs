@@ -1,6 +1,9 @@
 /**
  * Route Optimizer
  * Finds optimal execution routes for intents across liquidity pools.
+ * Supports full fill AND partial fill — if a full fill cannot meet minOutput,
+ * the optimizer tries a partial fill capped at 50% of pool output reserve
+ * (matching the on-chain TxBuilder logic).
  */
 import { FEE_DENOMINATOR } from '../shared/index.js';
 import { getLogger } from '../config/logger.js';
@@ -23,6 +26,10 @@ export interface SwapRoute {
   totalOutput: bigint;
   totalFee: bigint;
   priceImpact: number;
+  /** Whether this route represents a partial fill (not the full remaining input) */
+  isPartialFill: boolean;
+  /** Actual input amount being consumed (may be < remainingInput for partial fills) */
+  actualInput: bigint;
 }
 
 /** Format pool asset as "policyId.assetName" (empty string for ADA) */
@@ -32,6 +39,10 @@ function formatAsset(policyId: string, assetName: string): string {
 }
 
 const ADA_ASSET = '';
+
+/** On-chain minimum partial fill: 10% of remaining input */
+const MIN_PARTIAL_FILL_PERCENT = 10n;
+const MIN_PARTIAL_FILL_DENOM = 100n;
 
 export class RouteOptimizer {
   private readonly logger;
@@ -51,76 +62,202 @@ export class RouteOptimizer {
     this.poolCache = result;
     this.cacheTimestamp = Date.now();
     this.logger.debug({ poolCount: result.length }, 'Pool cache refreshed');
-    // Diagnostic: log pool reserves for debugging
-    for (const p of result) {
-      this.logger.info({
-        poolId: p.id,
-        reserveA: p.reserveA.toString(),
-        reserveB: p.reserveB.toString(),
-        protocolFeeAccA: p.protocolFeeAccA.toString(),
-        protocolFeeAccB: p.protocolFeeAccB.toString(),
-        feeNumerator: p.feeNumerator,
-      }, 'Pool reserves in cache');
-    }
   }
 
-  /** Find the best route for an intent */
+  /** Find the best route for an intent (supports partial fill fallback) */
   async findBestRoute(intent: EscrowIntent): Promise<SwapRoute | null> {
     await this.refreshPools();
 
+    // CRITICAL: Use remainingInput (not inputAmount) — this is the actual
+    // amount left in the escrow UTxO (accounts for prior partial fills).
+    const effectiveInput = intent.remainingInput > 0n
+      ? intent.remainingInput
+      : intent.inputAmount;
+
+    // ─── Strategy 1: Try full fill with remaining input ───
+    const fullRoute = this.tryFullFill(intent, effectiveInput);
+    if (fullRoute) return fullRoute;
+
+    // ─── Strategy 2: Partial fill fallback ───
+    // Only attempt if the intent supports partial fills
+    const canPartialFill = intent.maxPartialFills > 0n
+      && intent.fillCount < intent.maxPartialFills;
+
+    if (canPartialFill) {
+      const partialRoute = this.tryPartialFill(intent, effectiveInput);
+      if (partialRoute) return partialRoute;
+    }
+
+    this.logger.warn(
+      {
+        input: intent.inputAsset,
+        output: intent.outputAsset,
+        remainingInput: effectiveInput.toString(),
+        canPartialFill,
+      },
+      'No route found (full or partial)',
+    );
+    return null;
+  }
+
+  /** Try a full fill: compute route for the entire remainingInput */
+  private tryFullFill(intent: EscrowIntent, effectiveInput: bigint): SwapRoute | null {
     const candidates: SwapRoute[] = [];
 
-    // Strategy 1: Direct swap
+    // Direct swap
     const directRoute = this.findDirectRoute(
       intent.inputAsset,
       intent.outputAsset,
-      intent.inputAmount,
+      effectiveInput,
+      false,
     );
     if (directRoute) candidates.push(directRoute);
 
-    // Strategy 2: Multi-hop via ADA (if neither asset is ADA)
+    // Multi-hop via ADA
     if (intent.inputAsset !== ADA_ASSET && intent.outputAsset !== ADA_ASSET) {
       const multiHopRoute = this.findMultiHopRoute(
         intent.inputAsset,
         intent.outputAsset,
-        intent.inputAmount,
+        effectiveInput,
+        false,
       );
       if (multiHopRoute) candidates.push(multiHopRoute);
     }
 
-    if (candidates.length === 0) {
-      this.logger.warn(
-        { input: intent.inputAsset, output: intent.outputAsset },
-        'No route found',
-      );
-      return null;
-    }
+    if (candidates.length === 0) return null;
 
     // Select best route (highest output)
-    candidates.sort((a, b) => {
-      if (b.totalOutput > a.totalOutput) return 1;
-      if (b.totalOutput < a.totalOutput) return -1;
-      return 0;
-    });
-
+    candidates.sort((a, b) => (b.totalOutput > a.totalOutput ? 1 : b.totalOutput < a.totalOutput ? -1 : 0));
     const best = candidates[0]!;
 
-    // Check if best route meets minimum output
-    if (best.totalOutput < intent.minOutput) {
-      this.logger.warn(
+    // Pro-rata min output: minOutput * effectiveInput / inputAmount
+    // This handles the case where effectiveInput < inputAmount (prior partial fills)
+    const proRataMinOutput = intent.inputAmount > 0n
+      ? (intent.minOutput * effectiveInput) / intent.inputAmount
+      : intent.minOutput;
+
+    if (best.totalOutput < proRataMinOutput) {
+      this.logger.debug(
         {
-          inputAsset: intent.inputAsset,
-          outputAsset: intent.outputAsset,
-          inputAmount: intent.inputAmount.toString(),
-          intentMinOutput: intent.minOutput.toString(),
+          inputAmount: effectiveInput.toString(),
           bestOutput: best.totalOutput.toString(),
+          proRataMinOutput: proRataMinOutput.toString(),
         },
-        'Best route does not meet min output',
+        'Full fill route does not meet pro-rata min output — trying partial fill',
       );
       return null;
     }
 
     return best;
+  }
+
+  /**
+   * Try a partial fill: find the maximum amount the pool can absorb
+   * while still meeting the on-chain partial fill constraints:
+   * - Capped at 50% of output reserve (matches TxBuilder logic)
+   * - At least 10% of remaining input (on-chain min_fill_percent)
+   * - Pro-rata minOutput must be met
+   */
+  private tryPartialFill(intent: EscrowIntent, effectiveInput: bigint): SwapRoute | null {
+    // Find the pool for direct route
+    const pool = this.findDirectPool(intent.inputAsset, intent.outputAsset);
+    if (!pool) return null;
+
+    const isAtoB = this.matchesAssetA(pool, intent.inputAsset);
+
+    // Active reserves (matching Pool.calculateSwapOutput)
+    const activeA = pool.reserveA - pool.protocolFeeAccA;
+    const activeB = pool.reserveB - pool.protocolFeeAccB;
+    const reserveOut = isAtoB ? activeB : activeA;
+    const reserveIn = isAtoB ? activeA : activeB;
+
+    if (reserveOut <= 0n || reserveIn <= 0n) return null;
+
+    // Cap output at 50% of output reserve (same logic as TxBuilder)
+    const maxOutput = reserveOut / 2n;
+
+    // Reverse-derive the input needed for maxOutput:
+    // output = reserveOut * inputWithFee / (reserveIn * FEE_DENOM + inputWithFee)
+    // → inputWithFee = reserveIn * FEE_DENOM * output / (reserveOut - output)
+    // → input = inputWithFee / (FEE_DENOM - feeNumerator)
+    const feeDenom = BigInt(FEE_DENOMINATOR);
+    const feeNum = BigInt(pool.feeNumerator);
+    const numerator = reserveIn * feeDenom * maxOutput;
+    const denominator = (reserveOut - maxOutput) * (feeDenom - feeNum);
+    if (denominator <= 0n) return null;
+
+    let partialInput = (numerator / denominator) + 1n;
+
+    // Cap partialInput at effectiveInput (can't consume more than what's in escrow)
+    if (partialInput > effectiveInput) {
+      partialInput = effectiveInput;
+    }
+
+    // Check on-chain minimum: at least 10% of remaining input
+    const minPartialInput = (effectiveInput * MIN_PARTIAL_FILL_PERCENT) / MIN_PARTIAL_FILL_DENOM;
+    if (partialInput < minPartialInput) {
+      this.logger.debug(
+        {
+          partialInput: partialInput.toString(),
+          minPartialInput: minPartialInput.toString(),
+        },
+        'Partial fill input below 10% threshold — skipping',
+      );
+      return null;
+    }
+
+    // Calculate actual output for partialInput
+    const outputAmount = pool.calculateSwapOutput(partialInput, isAtoB);
+    if (outputAmount <= 0n) return null;
+
+    // Pro-rata minOutput for partial: minOutput * partialInput / inputAmount
+    const proRataMinOutput = intent.inputAmount > 0n
+      ? (intent.minOutput * partialInput) / intent.inputAmount
+      : 0n;
+
+    if (outputAmount < proRataMinOutput) {
+      this.logger.debug(
+        {
+          partialInput: partialInput.toString(),
+          outputAmount: outputAmount.toString(),
+          proRataMinOutput: proRataMinOutput.toString(),
+        },
+        'Partial fill output below pro-rata min — skipping',
+      );
+      return null;
+    }
+
+    const fee = (partialInput * BigInt(pool.feeNumerator)) / BigInt(FEE_DENOMINATOR);
+
+    this.logger.info(
+      {
+        partialInput: partialInput.toString(),
+        outputAmount: outputAmount.toString(),
+        proRataMinOutput: proRataMinOutput.toString(),
+        originalInput: effectiveInput.toString(),
+        fillPercent: Number(partialInput * 100n / effectiveInput),
+      },
+      'Partial fill route found',
+    );
+
+    return {
+      type: 'direct',
+      hops: [
+        {
+          poolId: pool.id,
+          inputAsset: intent.inputAsset,
+          outputAsset: intent.outputAsset,
+          inputAmount: partialInput,
+          outputAmount,
+          fee,
+        },
+      ],
+      totalOutput: outputAmount,
+      totalFee: fee,
+      priceImpact: pool.calculatePriceImpact(partialInput, isAtoB),
+      isPartialFill: true,
+      actualInput: partialInput,
+    };
   }
 
   /** Find routes for a batch of intents */
@@ -146,6 +283,7 @@ export class RouteOptimizer {
     inputAsset: string,
     outputAsset: string,
     inputAmount: bigint,
+    isPartialFill: boolean,
   ): SwapRoute | null {
     const pool = this.findDirectPool(inputAsset, outputAsset);
     if (!pool) return null;
@@ -170,6 +308,8 @@ export class RouteOptimizer {
       totalOutput: outputAmount,
       totalFee: fee,
       priceImpact: pool.calculatePriceImpact(inputAmount, isAtoB),
+      isPartialFill,
+      actualInput: inputAmount,
     };
   }
 
@@ -177,6 +317,7 @@ export class RouteOptimizer {
     inputAsset: string,
     outputAsset: string,
     inputAmount: bigint,
+    isPartialFill: boolean,
   ): SwapRoute | null {
     // Hop 1: inputAsset → ADA
     const pool1 = this.findDirectPool(inputAsset, ADA_ASSET);
@@ -220,6 +361,8 @@ export class RouteOptimizer {
       priceImpact:
         pool1.calculatePriceImpact(inputAmount, isAtoB1) +
         pool2.calculatePriceImpact(midAmount, isAtoB2),
+      isPartialFill,
+      actualInput: inputAmount,
     };
   }
 

@@ -16,6 +16,8 @@ export interface EscrowIntent {
   outputAsset: string;
   minOutput: bigint;
   deadline: bigint;
+  maxPartialFills: bigint;
+  fillCount: bigint;
   remainingInput: bigint;
 }
 
@@ -159,6 +161,8 @@ export class IntentCollector {
       const outputAsset = decodeAssetClass(constr.fields[4] as Constr<Data>);
       const minOutput = constr.fields[5] as bigint;
       const deadline = constr.fields[6] as bigint;
+      const maxPartialFills = constr.fields[7] as bigint;
+      const fillCount = constr.fields[8] as bigint;
       const remainingInput = constr.fields[9] as bigint;
 
       return {
@@ -169,6 +173,8 @@ export class IntentCollector {
         outputAsset,
         minOutput,
         deadline,
+        maxPartialFills,
+        fillCount,
         remainingInput,
       };
     } catch (err) {

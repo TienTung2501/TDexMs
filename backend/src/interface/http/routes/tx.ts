@@ -88,17 +88,32 @@ export function createTxRouter(
         }
 
         // If an intentId was provided, update its status
+        // GUARD: Only promote to ACTIVE from CREATED/PENDING states.
+        // Do NOT overwrite FILLED, PARTIALLY_FILLED, FILLING, etc.
         if (intentId) {
           const isCancel = action === 'cancel' || action === 'cancel_intent';
-          const newStatus = isCancel ? 'CANCELLED' : 'ACTIVE';
-          await intentRepo.updateStatus(intentId, newStatus);
+          if (isCancel) {
+            await intentRepo.updateStatus(intentId, 'CANCELLED');
+          } else {
+            const current = await intentRepo.findById(intentId);
+            if (current && ['CREATED', 'PENDING'].includes(current.status)) {
+              await intentRepo.updateStatus(intentId, 'ACTIVE');
+            }
+          }
         }
 
         // If an orderId was provided, update its status
+        // GUARD: Only promote to ACTIVE from CREATED/PENDING states.
         if (orderId && orderRepo) {
           const isCancel = action === 'cancel' || action === 'cancel_order';
-          const newStatus = isCancel ? 'CANCELLED' : 'ACTIVE';
-          await orderRepo.updateStatus(orderId, newStatus);
+          if (isCancel) {
+            await orderRepo.updateStatus(orderId, 'CANCELLED');
+          } else {
+            const current = await orderRepo.findById(orderId);
+            if (current && ['CREATED', 'PENDING'].includes(current.status)) {
+              await orderRepo.updateStatus(orderId, 'ACTIVE');
+            }
+          }
         }
 
         // If a poolId was provided with burn action, mark pool INACTIVE

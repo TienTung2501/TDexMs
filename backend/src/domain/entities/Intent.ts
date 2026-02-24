@@ -95,11 +95,22 @@ export class Intent {
     this.props.updatedAt = new Date();
   }
 
-  /** Mark as partially filled */
-  markPartiallyFilled(filledAmount: bigint, fillCount: number): void {
-    this.props.status = 'FILLING';
+  /** Mark as partially filled — updates status, remaining input, and escrow UTxO ref */
+  markPartiallyFilled(
+    filledAmount: bigint,
+    fillCount: number,
+    newEscrowTxHash?: string,
+    newEscrowOutputIndex?: number,
+  ): void {
+    this.props.status = 'PARTIALLY_FILLED' as IntentStatus;
     this.props.remainingInput = this.props.remainingInput - filledAmount;
     this.props.fillCount = fillCount;
+    if (newEscrowTxHash !== undefined) {
+      this.props.escrowTxHash = newEscrowTxHash;
+    }
+    if (newEscrowOutputIndex !== undefined) {
+      this.props.escrowOutputIndex = newEscrowOutputIndex;
+    }
     this.props.updatedAt = new Date();
   }
 
@@ -117,6 +128,14 @@ export class Intent {
   /** Mark as cancelling (TX built but not yet confirmed on-chain) — R-08 fix */
   markCancelling(): void {
     this.props.status = 'CANCELLING' as IntentStatus;
+    this.props.updatedAt = new Date();
+  }
+
+  /** Mark as pending settlement — TX submitted but not confirmed within timeout.
+   *  Keeps FILLING status to prevent re-submission while storing txHash for traceability. */
+  markPendingSettlement(settlementTxHash: string): void {
+    this.props.status = 'FILLING';
+    this.props.settlementTxHash = settlementTxHash;
     this.props.updatedAt = new Date();
   }
 

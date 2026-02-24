@@ -135,17 +135,14 @@ export class ChainSync {
           data,
         });
 
-        // Always log reserves so we can diagnose routing issues
-        this.logger.info(
+        // Log reserves at debug level (reduced from info to avoid log noise)
+        this.logger.debug(
           {
             poolId: pool.id, txHash: poolUtxo.txHash,
-            unitA, unitB,
             physicalA: physicalA.toString(),
             physicalB: physicalB.toString(),
             protocolFeesA: protocolFeesA.toString(),
             protocolFeesB: protocolFeesB.toString(),
-            totalLpTokens: totalLpTokens.toString(),
-            hasDatum: !!poolUtxo.datum,
             changed,
           },
           'Pool reserves synced',

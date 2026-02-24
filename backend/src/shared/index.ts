@@ -15,6 +15,7 @@ export type IntentStatus =
   | 'PENDING'
   | 'ACTIVE'
   | 'FILLING'
+  | 'PARTIALLY_FILLED'
   | 'FILLED'
   | 'CANCELLING'
   | 'CANCELLED'

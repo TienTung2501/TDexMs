@@ -1177,111 +1177,6 @@ fn check_factory_invoked(inputs: List<Input>, factory_hash: ScriptHash) -> Bool 
     fn(inp) { inp.output.address.payment_credential == Script(factory_hash) },
   )
 }
-//// SolverNet DEX — Pool NFT Minting Policy
-////
-//// Ensures each liquidity pool has a unique, unforgeable identity token.
-//// Uses the "one-shot" pattern: consuming a specific UTxO guarantees uniqueness
-//// since each UTxO can only be spent once.
-////
-//// Security: The NFT is minted exactly once per pool creation and can only
-//// be burned by protocol admin for pool closure (future feature).
-
-use aiken/collection/dict
-use aiken/collection/list
-use aiken/crypto.{ScriptHash, VerificationKeyHash}
-use cardano/address.{Script}
-use cardano/assets.{PolicyId}
-use cardano/transaction.{Input, Transaction}
-use solvernet/types.{BurnPoolNFT, MintPoolNFT, PoolNFTRedeemer}
-use solvernet/utils.{derive_token_name}
-use solvernet/validation.{check_signer, check_utxo_spent}
-
-/// Pool NFT Minting Policy
-///
-/// Parameters:
-/// - `factory_validator_hash`: Hash of the factory validator (ensures pool
-///   creation goes through the factory)
-/// - `admin_vkh`: Protocol admin key (for future burn functionality)
-///
-/// Mint: Exactly 1 NFT with name = hash(consumed_utxo)
-/// Burn: Only by protocol admin (pool closure)
-validator pool_nft_policy(
-  factory_validator_hash: ScriptHash,
-  admin_vkh: VerificationKeyHash,
-) {
-  mint(redeemer: PoolNFTRedeemer, policy_id: PolicyId, tx: Transaction) {
-    when redeemer is {
-      MintPoolNFT { consumed_utxo } -> {
-        // Derive deterministic token name from the consumed UTxO
-        let expected_token_name = derive_token_name(consumed_utxo)
-
-        // Get the minted tokens for this policy
-        let minted_tokens = assets.tokens(tx.mint, policy_id)
-
-        and {
-          // 1. The consumed UTxO is actually spent in this transaction
-          check_utxo_spent(tx.inputs, consumed_utxo),
-          // 2. Exactly 1 token minted with the correct name
-          minted_tokens
-            |> dict.to_pairs()
-            |> check_exactly_one_nft(expected_token_name),
-          // 3. Factory validator is invoked in this TX
-          //    (factory UTxO must be spent, validated by its own script)
-          check_factory_invoked(tx.inputs, factory_validator_hash),
-        }
-      }
-
-      // 4. The minted NFT goes to the pool validator address
-      //    (This is implicitly enforced by the factory validator which
-      //     checks the pool output is at the correct address)
-      BurnPoolNFT -> {
-        // Only protocol admin can burn a pool NFT
-        // Get the burned tokens for this policy
-        let minted_tokens = assets.tokens(tx.mint, policy_id)
-
-        and {
-          // 1. Admin signed the transaction
-          check_signer(tx, admin_vkh),
-          // 2. Exactly 1 token burned (negative quantity)
-          minted_tokens
-            |> dict.to_pairs()
-            |> check_exactly_one_burn(),
-        }
-      }
-    }
-  }
-
-  else(_) {
-    fail
-  }
-}
-
-/// Verify exactly 1 token is minted with the expected name.
-fn check_exactly_one_nft(
-  pairs: Pairs<ByteArray, Int>,
-  expected_name: ByteArray,
-) -> Bool {
-  when pairs is {
-    [Pair(name, qty)] -> name == expected_name && qty == 1
-    _ -> False
-  }
-}
-
-/// Verify exactly 1 token is burned.
-fn check_exactly_one_burn(pairs: Pairs<ByteArray, Int>) -> Bool {
-  when pairs is {
-    [Pair(_, qty)] -> qty == -1
-    _ -> False
-  }
-}
-
-/// Verify that the factory validator is invoked (an input from the factory exists).
-fn check_factory_invoked(inputs: List<Input>, factory_hash: ScriptHash) -> Bool {
-  list.any(
-    inputs,
-    fn(inp) { inp.output.address.payment_credential == Script(factory_hash) },
-  )
-}
 //// SolverNet DEX — Pool Validator
 ////
 //// Core AMM logic implementing the constant product (x*y=k) invariant.
@@ -1739,6 +1634,107 @@ fn validate_close_pool(
     // 2. Pool NFT is burned
     nft_burned,
   }
+}
+//// SolverNet DEX — Settings Validator (Governance)
+////
+//// Global protocol configuration. Acts as a read-only reference for
+//// other validators and can only be updated by the protocol admin.
+////
+//// The settings UTxO holds protocol-wide parameters like fee rates,
+//// minimum liquidity requirements, and the fee collector address.
+//// Its NFT (thread token) ensures continuity across updates.
+
+use aiken/collection/list
+use aiken/crypto.{ScriptHash}
+use cardano/address.{Script}
+use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
+use solvernet/constants.{max_protocol_fee_bps, min_settings_pool_liquidity}
+use solvernet/types.{
+  AssetClass, SettingsDatum, SettingsRedeemer, UpdateProtocolSettings,
+}
+use solvernet/utils.{find_output_with_nft, has_nft}
+
+/// Settings Validator
+///
+/// Parameters:
+/// - `settings_nft`: The NFT that identifies the unique settings UTxO
+///
+/// The settings UTxO is a singleton — there is exactly one on-chain,
+/// identified by the settings NFT. Other validators reference it
+/// via reference inputs.
+validator settings_validator(settings_nft: AssetClass) {
+  spend(
+    datum: Option<SettingsDatum>,
+    redeemer: SettingsRedeemer,
+    _own_ref: OutputReference,
+    tx: Transaction,
+  ) {
+    expect Some(settings_datum) = datum
+    let UpdateProtocolSettings = redeemer
+
+    // Settings NFT must continue
+    expect
+      list.any(tx.inputs, fn(inp) { has_nft(inp.output.value, settings_nft) })
+    expect list.any(tx.outputs, fn(out) { has_nft(out.value, settings_nft) })
+
+    // Find the continuing settings output
+    expect Some(settings_output) =
+      find_output_with_nft(tx.outputs, settings_nft)
+
+    // Parse the new datum
+    expect InlineDatum(raw_new_datum) = settings_output.datum
+    expect new_datum: SettingsDatum = raw_new_datum
+
+    // Validate the update
+    validate_settings_update(tx, settings_datum, new_datum)
+  }
+
+  else(_) {
+    fail
+  }
+}
+
+/// Validate a settings update.
+///
+/// Rules:
+/// 1. Current admin must sign the transaction
+/// 2. Version must be incremented
+/// 3. Protocol fee must be within bounds
+/// 4. Minimum pool liquidity must meet floor
+fn validate_settings_update(
+  tx: Transaction,
+  old_datum: SettingsDatum,
+  new_datum: SettingsDatum,
+) -> Bool {
+  and {
+    // 1. Current admin must authorize the update
+    //    (admin is a ScriptHash — we check if the script is invoked)
+    check_admin_authorized(tx, old_datum.admin),
+    // 2. Version must be strictly incremented
+    new_datum.version == old_datum.version + 1,
+    // 3. Protocol fee within bounds (0 to max_protocol_fee_bps)
+    new_datum.protocol_fee_bps >= 0,
+    new_datum.protocol_fee_bps <= max_protocol_fee_bps,
+    // 4. Minimum pool liquidity meets floor
+    new_datum.min_pool_liquidity >= min_settings_pool_liquidity,
+    // 5. Minimum intent size must be positive
+    new_datum.min_intent_size > 0,
+  }
+}
+
+/// Check that the admin (multi-sig script) authorized the transaction.
+/// For a script-based admin, the admin script must be invoked.
+/// We check this by looking for the admin script in the transaction's
+/// extra signatories or by verifying a withdrawal from the admin script.
+fn check_admin_authorized(tx: Transaction, admin: ScriptHash) -> Bool {
+  // Check if admin script is in withdrawals (common pattern for script auth)
+  list.any(
+    tx.withdrawals,
+    fn(pair) {
+      let Pair(credential, _amount) = pair
+      credential == Script(admin)
+    },
+  )
 }
 //// SolverNet DEX — Settings Validator (Governance)
 ////

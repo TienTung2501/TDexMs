@@ -143,10 +143,20 @@ export class SolverEngine {
         staleCount++;
         continue;
       }
-      if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING') {
+      if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING' && dbIntent.status !== 'PARTIALLY_FILLED') {
         this.logger.debug(
           { intentId: dbIntent.id, status: dbIntent.status },
-          'Skipping non-ACTIVE DB intent',
+          'Skipping non-ACTIVE/PARTIALLY_FILLED DB intent',
+        );
+        continue;
+      }
+      // Recovery check: if intent is FILLING with a pending settlementTxHash,
+      // a previous iteration submitted a TX but timed out waiting for confirmation.
+      // Don't re-settle — the TX may still confirm and consume the escrow UTxO.
+      if (dbIntent.status === 'FILLING' && dbIntent.settlementTxHash) {
+        this.logger.info(
+          { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash },
+          'Skipping FILLING intent with pending settlement TX — awaiting on-chain confirmation',
         );
         continue;
       }
@@ -214,21 +224,37 @@ export class SolverEngine {
 
       // Process intents one-by-one within this pool batch
       for (const singleIntent of batch.intents) {
+        const intentKey = `${singleIntent.utxoRef.txHash}#${singleIntent.utxoRef.outputIndex}`;
+        const route = routes.get(intentKey);
+        // Use route's actual input/output (may be partial fill)
+        const actualInput = route?.actualInput ?? singleIntent.inputAmount;
+        const actualOutput = route?.totalOutput ?? 0n;
+        const isPartialFill = route?.isPartialFill ?? false;
+
         const singleBatch: typeof batch = {
           ...batch,
           intents: [singleIntent],
-          totalInputAmount: singleIntent.inputAmount,
-          // approximate single-intent output using proportional share
-          totalOutputAmount: batch.totalInputAmount > 0n
-            ? (singleIntent.inputAmount * batch.totalOutputAmount) / batch.totalInputAmount
-            : 0n,
+          totalInputAmount: actualInput,
+          totalOutputAmount: actualOutput,
         };
+
+        if (isPartialFill) {
+          this.logger.info(
+            {
+              utxoRef: intentKey,
+              actualInput: actualInput.toString(),
+              actualOutput: actualOutput.toString(),
+              remainingInput: singleIntent.remainingInput.toString(),
+            },
+            'Processing partial fill for intent',
+          );
+        }
 
         const refs = [singleIntent.utxoRef];
         this.collector.markProcessing(refs);
 
         try {
-          await this.settleBatch(singleBatch);
+          await this.settleBatch(singleBatch, isPartialFill);
           // Wait for pool UTxO to propagate after each successful settlement
           await sleep(2000);
         } catch (err) {
@@ -253,7 +279,10 @@ export class SolverEngine {
   }
 
   /** Settle a batch with retry on contention */
-  private async settleBatch(batch: import('./BatchBuilder.js').BatchGroup): Promise<void> {
+  private async settleBatch(
+    batch: import('./BatchBuilder.js').BatchGroup,
+    isPartialFill = false,
+  ): Promise<void> {
     if (!this.txBuilder || !this.chainProvider) {
       this.logger.warn('TxBuilder or ChainProvider not configured — skipping settlement');
       return;
@@ -319,14 +348,18 @@ export class SolverEngine {
         );
 
         // CRITICAL RULE: Await on-chain confirmation before any DB updates
-        const confirmed = await this.chainProvider.awaitTx(submittedTxHash, 120_000);
+        const confirmed = await this.chainProvider.awaitTx(submittedTxHash, 180_000);
         if (!confirmed) {
-          // TX accepted into mempool but not confirmed within 120s.
-          // Revert intents from FILLING â†’ ACTIVE so the next solver iteration
-          // can re-evaluate them (they may still confirm on-chain later).
+          // TX accepted into mempool but not confirmed within 180s.
+          // IMPORTANT: Do NOT revert to ACTIVE. The TX may still confirm on-chain
+          // which would consume the escrow UTxO. Reverting to ACTIVE could cause
+          // the solver to try settling an already-consumed UTxO.
+          // Instead, keep as FILLING and store the submitted txHash for traceability.
+          // On the next solver iteration, if the escrow UTxO is no longer on-chain,
+          // the intent simply won't appear in the collector results.
           this.logger.warn(
             { txHash: submittedTxHash },
-            'Settlement TX not confirmed within 120s reverting FILLING → ACTIVE',
+            'Settlement TX not confirmed within 180s - keeping FILLING status (TX may still confirm)',
           );
           for (const intent of batch.intents) {
             const intentId = await this.resolveIntentId(
@@ -334,7 +367,12 @@ export class SolverEngine {
               intent.utxoRef.outputIndex,
             );
             if (intentId) {
-              await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+              // Store txHash for traceability but keep FILLING status
+              const dbIntent = await this.intentRepo.findById(intentId);
+              if (dbIntent) {
+                dbIntent.markPendingSettlement(submittedTxHash);
+                await this.intentRepo.save(dbIntent);
+              }
             }
           }
           return;
@@ -354,7 +392,10 @@ export class SolverEngine {
           ? (pool.assetAPolicyId ? `${pool.assetAPolicyId}.${pool.assetAAssetName}` : 'lovelace')
           : null;
 
-        // 1. Update intent statuses to FILLED and write Swap records (R-03 fix)
+        // 1. Update intent statuses and write Swap records (R-03 fix)
+        // For partial fills: status → PARTIALLY_FILLED (escrow UTxO continues on-chain)
+        // For full fills: status → FILLED (escrow UTxO consumed, token burned)
+        const newStatus = isPartialFill ? 'PARTIALLY_FILLED' : 'FILLED';
         const prisma = getPrisma();
         for (const intent of batch.intents) {
           const intentId = await this.resolveIntentId(
@@ -363,11 +404,37 @@ export class SolverEngine {
           );
 
           if (intentId) {
-            await this.intentRepo.updateStatus(intentId, 'FILLED');
+            if (isPartialFill) {
+              // Partial fill: update status, remaining input, fill count, and new escrow UTxO ref
+              // The settlement TX creates a new escrow UTxO — we need to find its output index.
+              // Convention: the first output to the escrow address is the continued escrow.
+              // For now, update the essential fields via the Intent entity.
+              const dbIntent = await this.intentRepo.findById(intentId);
+              if (dbIntent) {
+                dbIntent.markPartiallyFilled(
+                  batch.totalInputAmount,
+                  (dbIntent.toProps().fillCount ?? 0) + 1,
+                  submittedTxHash,
+                  // Output index of the new escrow UTxO — settlement TX typically puts it at index 0 or 1.
+                  // The exact index will be corrected on next IntentCollector scan.
+                  undefined,
+                );
+                await this.intentRepo.save(dbIntent);
+              }
+            } else {
+              // Full fill: mark as FILLED
+              const dbIntent = await this.intentRepo.findById(intentId);
+              if (dbIntent) {
+                dbIntent.markFilled(submittedTxHash, batch.totalOutputAmount, this.config.solverAddress);
+                await this.intentRepo.save(dbIntent);
+              } else {
+                await this.intentRepo.updateStatus(intentId, 'FILLED');
+              }
+            }
 
             this.wsServer.broadcastIntent({
               intentId,
-              status: 'FILLED',
+              status: newStatus,
               settlementTxHash: submittedTxHash,
               timestamp: Date.now(),
             });
@@ -375,30 +442,20 @@ export class SolverEngine {
             // R-03: Write Swap record for each settled intent
             try {
               const direction = (poolAssetA && intent.inputAsset === poolAssetA) ? 'AToB' : 'BToA';
-              // Compute approximate output: pro-rata share of batch totals
-              const outputEstimate = batch.totalInputAmount > 0n
-                ? (intent.inputAmount * batch.totalOutputAmount) / batch.totalInputAmount
-                : 0n;
-              // Fee estimate from the pool fee numerator (e.g. 30 = 0.3%)
+              // Use batch totals (already reflect actual partial/full amounts)
+              const outputEstimate = batch.totalOutputAmount;
               const feeNum = pool ? BigInt(pool.feeNumerator) : 30n;
-              const feeEstimate = (intent.inputAmount * feeNum) / 10000n;
-              // Price impact estimate (simple â€“ difference from ideal ratio)
-              const priceImpact = batch.totalInputAmount > 0n
-                ? Math.abs(
-                    Number(intent.inputAmount) / Number(batch.totalInputAmount) -
-                    1 / batch.intents.length,
-                  )
-                : 0;
+              const feeEstimate = (batch.totalInputAmount * feeNum) / 10000n;
 
               await prisma.swap.create({
                 data: {
                   poolId: batch.poolId,
                   txHash: submittedTxHash,
                   direction,
-                  inputAmount: intent.inputAmount.toString(),
+                  inputAmount: batch.totalInputAmount.toString(),
                   outputAmount: outputEstimate.toString(),
                   fee: feeEstimate.toString(),
-                  priceImpact,
+                  priceImpact: 0,
                   senderAddress: intent.owner,
                   intentId,
                 },

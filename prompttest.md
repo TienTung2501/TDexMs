@@ -9,3 +9,38 @@ Các scripts cần test:
 2 cái này đầu tiên tách riêng sau đó cho chung 1 script.
 
 3. Viết script khởi tạo hệ thống:
+
+ Test Run Complete — Phase Summary
+════════════════════════════════════════════════════════════════════════
+  ✅  Phase 0 — Distribute Test Tokens
+  ✅  Phase 1 — Deploy Settings
+  ✅  Phase 2 — Deploy Factory
+  ✅  Phase 3 — Create tBTC/tUSD Pool
+  ❌  Phase 4 — Create tUSD/tSOL Pool  → POST /pools/create → 502: {"status":"error","code":"CHAIN_ERROR","message":"Failed to build create p
+  ❌  Phase 5a — User A deposit tBTC/tUSD  → POST /pools/pool_22de76ede018/deposit → 502: {"status":"error","code":"CHAIN_ERROR","message":"Faile
+  ⏭   Phase 5b — User B deposit tUSD/tSOL
+  ✅  Phase 6 — Swap Intents
+  ❌  Phase 7 — Cancel Intent  → DELETE /intents/int_afe7e38cc9e5 → 502: {"status":"error","code":"CHAIN_ERROR","message":"Failed to
+  ✅  Phase 8 — Expired Intent
+  ✅  Phase 9  — DCA Order
+  ✅  Phase 10 — Limit Order
+  ✅  Phase 11 — Stop-Loss Order
+  ❌  Phase 12 — Cancel Order  → DELETE /orders/ord_7627f0a49b36 → 502: {"status":"error","code":"CHAIN_ERROR","message":"Order UTxO
+  ✅  Phase 13 — Expired Order
+  ✅  Phase 6b — Observe Intent Fills
+  ✅  Phase 9-11b — Observe Order Execution
+  ✅  Phase 14 — Withdraw Liquidity
+  ✅  Phase 15 — Update Settings
+
+  Total: 14 passed, 4 failed, 1 skipped
+
+  Verify results:
+    http://localhost:3001/v1/pools
+    http://localhost:3001/v1/intents
+    http://localhost:3001/v1/orders
+    https://preprod.cardanoscan.io/
+
+    Sao tạo 2 pool đến pool thứ 2 lại lỗi? hãy xem xem lỗi sai đến từ đâu?
+
+
+    Có cách nào để xử lý 4 lỗi trên không? TÔi không thế sửa hợp đồng được, bạn hãy xem xem là do logic hợp đồng sai, hay build giao dịch bị sai. Nếu build giao dịch sai thì hãy sửa lại backend.

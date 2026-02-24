@@ -69,7 +69,8 @@ export class BatchBuilder {
       const group = groups.get(primaryPoolId)!;
       group.intents.push(intent);
       group.routes.set(key, route);
-      group.totalInputAmount += intent.inputAmount;
+      // Use route's actualInput (accounts for partial fills) instead of intent.inputAmount
+      group.totalInputAmount += route.actualInput;
       group.totalOutputAmount += route.totalOutput;
     }
 
@@ -94,7 +95,7 @@ export class BatchBuilder {
             const r = group.routes.get(k);
             if (r) {
               batchRoutes.set(k, r);
-              inputSum += intent.inputAmount;
+              inputSum += r.actualInput;
               outputSum += r.totalOutput;
             }
           }
