@@ -51,6 +51,17 @@ export class RouteOptimizer {
     this.poolCache = result;
     this.cacheTimestamp = Date.now();
     this.logger.debug({ poolCount: result.length }, 'Pool cache refreshed');
+    // Diagnostic: log pool reserves for debugging
+    for (const p of result) {
+      this.logger.info({
+        poolId: p.id,
+        reserveA: p.reserveA.toString(),
+        reserveB: p.reserveB.toString(),
+        protocolFeeAccA: p.protocolFeeAccA.toString(),
+        protocolFeeAccB: p.protocolFeeAccB.toString(),
+        feeNumerator: p.feeNumerator,
+      }, 'Pool reserves in cache');
+    }
   }
 
   /** Find the best route for an intent */
@@ -98,6 +109,9 @@ export class RouteOptimizer {
     if (best.totalOutput < intent.minOutput) {
       this.logger.warn(
         {
+          inputAsset: intent.inputAsset,
+          outputAsset: intent.outputAsset,
+          inputAmount: intent.inputAmount.toString(),
           intentMinOutput: intent.minOutput.toString(),
           bestOutput: best.totalOutput.toString(),
         },

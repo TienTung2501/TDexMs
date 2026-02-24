@@ -3,6 +3,11 @@
  *
  * Giải phóng toàn bộ UTxO bị kẹt trong các hợp đồng thông minh SolverNet.
  *
+ * Chế độ hoạt động: FIRE-AND-FORGET
+ *  - Submit giao dịch → in txHash → tiếp tục ngay (không đợi xác nhận on-chain)
+ *  - Nếu 2 UTxO cùng owner, script ngắng 2s giữa các TX để mềmpool nhận kịp
+ *  - Nếu có TX nào thất bại (fee UTxO collision), chạy lại script lạ ần nữa
+ *
  * Chiến lược:
  *  - Escrow UTxOs  → Reclaim (nếu đã hết deadline) → hoặc Cancel (ký bằng ví của owner)
  *  - Pool UTxOs    → ClosePool (admin ký + đốt Pool NFT)
@@ -70,6 +75,11 @@ const MIN_ADA = 2_000_000n; // 2 ADA min UTxO
 
 // ─── Sleep helper ──────────────────────────────────────────────────
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Fire-and-forget delay: gives Blockfrost + mempool a moment to register the TX
+// so the next TX from the SAME wallet doesn't collide on fee UTxOs.
+// 2 s is enough for inter-wallet TXs; 0 would risk double-spend on fee UTxOs.
+const SUBMIT_DELAY_MS = 2_000;
 
 // ─── Blueprint helpers ─────────────────────────────────────────────
 
@@ -364,11 +374,8 @@ async function sweepEscrowUtxos(
         const txHash = await signed.submit();
 
         log(`   ✅ Reclaim TX submitted: ${txHash}`);
-        log(`   ⏳ Waiting for confirmation...`);
-        await lucid.awaitTx(txHash, 120_000);
-        log(`   ✅ Confirmed!`);
         success++;
-        // await sleep(3000); // wait between TXs
+        await sleep(SUBMIT_DELAY_MS); // brief pause — lets mempool accept before next TX
         continue;
       } catch (e) {
         log(`   ⚠️  Reclaim failed: ${e instanceof Error ? e.message : e}`);
@@ -411,11 +418,8 @@ async function sweepEscrowUtxos(
       const txHash = await signed.submit();
 
       log(`   ✅ Cancel TX submitted: ${txHash}`);
-      log(`   ⏳ Waiting for confirmation...`);
-      await lucid.awaitTx(txHash, 120_000);
-      log(`   ✅ Confirmed!`);
       success++;
-    //   await sleep(3000);
+      await sleep(SUBMIT_DELAY_MS);
     } catch (e) {
       log(`   ❌ Cancel failed: ${e instanceof Error ? e.message : e}`);
       skipped++;
@@ -492,11 +496,8 @@ async function sweepPoolUtxos(
       const txHash = await signed.submit();
 
       log(`   ✅ ClosePool TX submitted: ${txHash}`);
-      log(`   ⏳ Waiting for confirmation...`);
-      await lucid.awaitTx(txHash, 120_000);
-      log(`   ✅ Confirmed!`);
       success++;
-    //   await sleep(3000);
+      await sleep(SUBMIT_DELAY_MS);
     } catch (e) {
       log(`   ❌ ClosePool failed: ${e instanceof Error ? e.message : e}`);
       skipped++;
@@ -505,6 +506,88 @@ async function sweepPoolUtxos(
 
   hr();
   log(`Pool sweep complete: ${success} swept, ${skipped} skipped out of ${utxos.length}`);
+}
+
+// ═══════════════════════════════════════════
+// Factory scan (cannot sweep — no close redeemer)
+// ═══════════════════════════════════════════
+
+async function sweepFactoryUtxos(
+  lucid: LucidEvolution,
+  scripts: ReturnType<typeof resolveScripts>,
+) {
+  hr();
+  log('🔍 Scanning factory address:', scripts.factoryAddr);
+  const utxos = await lucid.utxosAt(scripts.factoryAddr);
+  log(`   Found ${utxos.length} UTxO(s) at factory address`);
+
+  if (utxos.length === 0) {
+    log('   ✅ Factory address is empty — factory not yet deployed');
+    return;
+  }
+
+  log('');
+  log('   ⚠️  NOTE: factory_validator has NO close/destroy redeemer.');
+  log('   All spend redeemers (CreatePool, UpdateSettings) require the factory NFT');
+  log('   to continue to a new output — ADA here CANNOT be reclaimed independently.');
+  log('   To "clear" factory: redeploy the protocol with a fresh factory NFT.');
+  log('');
+
+  for (const utxo of utxos) {
+    log('   Factory UTxO:', utxo.txHash, '#', utxo.outputIndex);
+    const lovelace = utxo.assets.lovelace ?? 0n;
+    log(`   ADA locked: ${(Number(lovelace) / 1_000_000).toFixed(6)} ₳`);
+
+    const tokens = Object.entries(utxo.assets).filter(([k]) => k !== 'lovelace');
+    if (tokens.length > 0) {
+      log('   Tokens:');
+      for (const [unit, qty] of tokens) {
+        log(`     ${unit.slice(0, 56)}  × ${qty}`);
+      }
+    }
+
+    if (!utxo.datum) {
+      log('   ⚠️  No inline datum — factory may not be properly initialised');
+      continue;
+    }
+
+    try {
+      // FactoryDatum = Constr(0, [factory_nft, pool_count, admin, settings_utxo])
+      // Current build deploys a simplified datum: Constr(0, [[]])
+      // We try full parse first, fall back to reporting raw CBOR.
+      const d = Data.from(utxo.datum) as Constr<Data>;
+
+      if (d.fields.length >= 4) {
+        // Full 4-field FactoryDatum
+        const factoryNft   = d.fields[0] as Constr<Data>;
+        const poolCount    = d.fields[1] as bigint;
+        const admin        = d.fields[2] as string;
+        const settingsUtxo = d.fields[3] as Constr<Data>;
+
+        const nftPolicy = factoryNft.fields[0] as string;
+        const nftName   = factoryNft.fields[1] as string;
+        const settingsTxHash   = settingsUtxo.fields[0] as Constr<Data>;
+        const settingsOutIndex = settingsUtxo.fields[1] as bigint;
+
+        log('   Factory datum (full):');
+        log(`     factory_nft policy: ${nftPolicy}`);
+        log(`     factory_nft name:   ${nftName}`);
+        log(`     pool_count:         ${poolCount}`);
+        log(`     admin (VKH):        ${admin}`);
+        log(`     settings_utxo:      index=${settingsOutIndex}`);
+      } else {
+        // Simplified datum (dev mode — 1-field empty list)
+        log('   Factory datum (dev/simplified — no NFT thread):');
+        log(`     raw: ${utxo.datum.slice(0, 80)}${utxo.datum.length > 80 ? '...' : ''}`);
+        log('   ⚠️  This factory datum is incomplete (buildDeployFactoryTx bug).');
+        log('       Pool creation will work in no-factory mode but NFT continuity');
+        log('       checks in factory_validator WILL REJECT pool creation with this UTxO.');
+      }
+    } catch (e) {
+      log('   ⚠️  Cannot parse datum:', e instanceof Error ? e.message : e);
+      log(`   Raw datum: ${utxo.datum?.slice(0, 80)}...`);
+    }
+  }
 }
 
 // ═══════════════════════════════════════════
@@ -622,10 +705,8 @@ async function sweepOrderUtxos(
       const txHash = await signed.submit();
 
       log(`   ✅ CancelOrder TX submitted: ${txHash}`);
-      await lucid.awaitTx(txHash, 120_000);
-      log(`   ✅ Confirmed!`);
       success++;
-    //   await sleep(3000);
+      await sleep(SUBMIT_DELAY_MS);
     } catch (e) {
       log(`   ❌ CancelOrder failed: ${e instanceof Error ? e.message : e}`);
       skipped++;
@@ -762,12 +843,14 @@ async function main() {
   // ── Sweep ─────────────────────────────────────────────────────────
   await sweepEscrowUtxos(lucid, wallets, scripts, adminWallet);
   await sweepPoolUtxos(lucid, scripts, adminWallet);
+  await sweepFactoryUtxos(lucid, scripts);
   await sweepOrderUtxos(lucid, wallets, scripts, adminWallet);
   await sweepSettingsUtxos(lucid, scripts);
 
   hr();
-  log('🎉 Sweep complete! All contracts have been processed.');
-  log('   You can now reset the database and re-deploy.');
+  log('🎉 Sweep complete! All TXs have been submitted (fire-and-forget).');
+  log('   TXs may still be pending on-chain. Re-run to catch any failed TXs.');
+  log('   Check: https://preprod.cardanoscan.io/');
   console.log('═'.repeat(70));
 }
 

@@ -144,7 +144,8 @@ export class ReclaimKeeperCron {
 
   /**
    * Find expired intents with escrow UTxOs and build+submit reclaim TXs.
-   * Processes one-at-a-time to avoid contention issues.
+   * Issue #2 fix: Fan-out reclaims in parallel with Promise.allSettled.
+   * Each reclaim uses a different escrow UTxO, so there's no contention risk.
    */
   private async reclaimExpiredIntents(): Promise<void> {
     // Find intents marked EXPIRED that still have an escrow UTxO reference
@@ -166,13 +167,17 @@ export class ReclaimKeeperCron {
 
     const { address: keeperAddress } = await this.getKeeperLucid();
 
-    for (const intent of reclaimable) {
-      try {
-        await this.reclaimSingle(intent, keeperAddress);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+    // Parallel reclaim — each escrow UTxO is independent
+    const results = await Promise.allSettled(
+      reclaimable.map((intent) => this.reclaimSingle(intent, keeperAddress)),
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i]!;
+      if (result.status === 'rejected') {
+        const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
         this.logger.warn(
-          { intentId: intent.id, error: msg },
+          { intentId: reclaimable[i]!.id, error: msg },
           'Failed to reclaim intent — will retry next tick',
         );
       }
@@ -186,12 +191,28 @@ export class ReclaimKeeperCron {
     this.logger.info({ intentId: intent.id }, 'Building intent reclaim TX');
 
     // Build the unsigned reclaim TX
-    const { unsignedTx } = await this.txBuilder.buildReclaimTx({
-      escrowTxHash: intent.escrowTxHash!,
-      escrowOutputIndex: intent.escrowOutputIndex!,
-      keeperAddress,
-      ownerAddress: intent.creator,
-    });
+    let unsignedTx: string;
+    try {
+      const result = await this.txBuilder.buildReclaimTx({
+        escrowTxHash: intent.escrowTxHash!,
+        escrowOutputIndex: intent.escrowOutputIndex!,
+        keeperAddress,
+        ownerAddress: intent.creator,
+      });
+      unsignedTx = result.unsignedTx;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // If UTxO is already spent (filled/cancelled elsewhere), clean up DB
+      if (msg.includes('not found on-chain') || msg.includes('already be reclaimed')) {
+        this.logger.info(
+          { intentId: intent.id },
+          'Intent escrow UTxO already spent on-chain — marking RECLAIMED in DB',
+        );
+        await this.intentRepo.updateStatus(intent.id, 'RECLAIMED');
+        return;
+      }
+      throw err;
+    }
 
     // Sign and submit
     const { lucid } = await this.getKeeperLucid();
@@ -224,6 +245,7 @@ export class ReclaimKeeperCron {
 
   /**
    * B7 fix: Find expired orders with escrow UTxOs and build+submit cancel TXs.
+   * Issue #2 fix: Parallel reclaims with Promise.allSettled.
    * CRITICAL RULE: DB is only updated after on-chain confirmation.
    */
   private async reclaimExpiredOrders(): Promise<void> {
@@ -248,53 +270,81 @@ export class ReclaimKeeperCron {
 
     const { address: keeperAddress, lucid } = await this.getKeeperLucid();
 
-    for (const order of reclaimable) {
-      try {
-        const props = order.toProps();
-        this.logger.info({ orderId: order.id }, 'Building order reclaim TX (ReclaimOrder redeemer)');
+    // Parallel reclaim — each order UTxO is independent
+    const results = await Promise.allSettled(
+      reclaimable.map((order) => this.reclaimSingleOrder(order, keeperAddress, lucid)),
+    );
 
-        // Resolve owner address from order creator
-        const ownerAddress = props.creator;
-
-        const { unsignedTx } = await this.txBuilder.buildReclaimOrderTx({
-          keeperAddress: keeperAddress,
-          orderTxHash: props.escrowTxHash!,
-          orderOutputIndex: props.escrowOutputIndex!,
-          ownerAddress: ownerAddress,
-        });
-
-        const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
-        const submittedHash = await signed.submit();
-
-        this.logger.info(
-          { orderId: order.id, txHash: submittedHash },
-          'Order reclaim TX submitted — awaiting on-chain confirmation',
-        );
-
-        // CRITICAL RULE: Await on-chain confirmation before updating DB
-        const confirmed = await lucid.awaitTx(submittedHash, 120_000);
-        if (!confirmed) {
-          this.logger.warn(
-            { orderId: order.id, txHash: submittedHash },
-            'Order reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
-          );
-          continue;
-        }
-
-        // Only update DB after confirmed on-chain
-        await this.orderRepo.updateStatus(order.id, 'EXPIRED');
-
-        this.logger.info(
-          { orderId: order.id, txHash: submittedHash },
-          'Expired order reclaim confirmed and DB updated',
-        );
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i]!;
+      if (result.status === 'rejected') {
+        const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
         this.logger.warn(
-          { orderId: order.id, error: msg },
+          { orderId: reclaimable[i]!.id, error: msg },
           'Failed to reclaim order — will retry next tick',
         );
       }
     }
+  }
+
+  /** Reclaim a single expired order on-chain */
+  private async reclaimSingleOrder(
+    order: import('../../domain/entities/Order.js').Order,
+    keeperAddress: string,
+    lucid: LucidEvolution,
+  ): Promise<void> {
+    const props = order.toProps();
+    this.logger.info({ orderId: order.id }, 'Building order reclaim TX (ReclaimOrder redeemer)');
+
+    const ownerAddress = props.creator;
+
+    let unsignedTx: string;
+    try {
+      const result = await this.txBuilder.buildReclaimOrderTx({
+        keeperAddress: keeperAddress,
+        orderTxHash: props.escrowTxHash!,
+        orderOutputIndex: props.escrowOutputIndex!,
+        ownerAddress: ownerAddress,
+      });
+      unsignedTx = result.unsignedTx;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // If UTxO is already spent (reclaimed/executed elsewhere), clean up DB
+      if (msg.includes('not found on-chain') || msg.includes('already be reclaimed')) {
+        this.logger.info(
+          { orderId: order.id },
+          'Order UTxO already spent on-chain — marking CANCELLED in DB',
+        );
+        await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+        return;
+      }
+      throw err;
+    }
+
+    const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
+    const submittedHash = await signed.submit();
+
+    this.logger.info(
+      { orderId: order.id, txHash: submittedHash },
+      'Order reclaim TX submitted — awaiting on-chain confirmation',
+    );
+
+    // CRITICAL RULE: Await on-chain confirmation before updating DB
+    const confirmed = await lucid.awaitTx(submittedHash, 120_000);
+    if (!confirmed) {
+      this.logger.warn(
+        { orderId: order.id, txHash: submittedHash },
+        'Order reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
+      );
+      return;
+    }
+
+    // Only update DB after confirmed on-chain — mark CANCELLED since funds are returned
+    await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+
+    this.logger.info(
+      { orderId: order.id, txHash: submittedHash },
+      'Expired order reclaim confirmed and DB updated → CANCELLED',
+    );
   }
 }

@@ -83,15 +83,22 @@ export class Pool {
 
   /** Calculate swap output (constant product formula) — delegates to AmmMath */
   calculateSwapOutput(inputAmount: bigint, aToB: boolean): bigint {
-    const reserveIn = aToB ? this.props.reserveA : this.props.reserveB;
-    const reserveOut = aToB ? this.props.reserveB : this.props.reserveA;
+    // CRITICAL: Use ACTIVE reserves (physical - protocol fees) for AMM math,
+    // matching the on-chain validator which subtracts protocol_fees before calculation.
+    const activeA = this.props.reserveA - this.props.protocolFeeAccA;
+    const activeB = this.props.reserveB - this.props.protocolFeeAccB;
+    const reserveIn = aToB ? activeA : activeB;
+    const reserveOut = aToB ? activeB : activeA;
     return ammSwapOutput(reserveIn, reserveOut, inputAmount, BigInt(this.props.feeNumerator));
   }
 
   /** Calculate price impact as percentage (0-100) */
   calculatePriceImpact(inputAmount: bigint, aToB: boolean): number {
-    const reserveIn = aToB ? this.props.reserveA : this.props.reserveB;
-    const reserveOut = aToB ? this.props.reserveB : this.props.reserveA;
+    // Use active reserves (physical - protocol fees) for consistency
+    const activeA = this.props.reserveA - this.props.protocolFeeAccA;
+    const activeB = this.props.reserveB - this.props.protocolFeeAccB;
+    const reserveIn = aToB ? activeA : activeB;
+    const reserveOut = aToB ? activeB : activeA;
 
     // Spot price
     const spotPrice = Number(reserveOut) / Number(reserveIn);

@@ -7,12 +7,14 @@ import type { Request, Response, NextFunction } from 'express';
 import { writeLimiter } from '../middleware/rate-limiter.js';
 import type { BlockfrostClient } from '../../../infrastructure/cardano/BlockfrostClient.js';
 import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.js';
+import type { IOrderRepository } from '../../../domain/ports/IOrderRepository.js';
 import type { IPoolRepository } from '../../../domain/ports/IPoolRepository.js';
 
 export function createTxRouter(
   blockfrost: BlockfrostClient,
   intentRepo: IIntentRepository,
   poolRepo?: IPoolRepository,
+  orderRepo?: IOrderRepository,
 ): Router {
   const router = Router();
 
@@ -60,17 +62,18 @@ export function createTxRouter(
 
   /**
    * POST /v1/tx/confirm
-   * Frontend calls after TX is confirmed on-chain, to update intent status.
-   * Body: { txHash: string, intentId?: string, action: 'create' | 'cancel' }
+   * Frontend calls after TX is confirmed on-chain, to update intent/order status.
+   * Body: { txHash: string, intentId?: string, orderId?: string, action: string }
    */
   router.post(
     '/tx/confirm',
     writeLimiter,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { txHash, intentId, poolId, action } = req.body as {
+        const { txHash, intentId, orderId, poolId, action } = req.body as {
           txHash?: string;
           intentId?: string;
+          orderId?: string;
           poolId?: string;
           action?: string;
         };
@@ -89,6 +92,13 @@ export function createTxRouter(
           const isCancel = action === 'cancel' || action === 'cancel_intent';
           const newStatus = isCancel ? 'CANCELLED' : 'ACTIVE';
           await intentRepo.updateStatus(intentId, newStatus);
+        }
+
+        // If an orderId was provided, update its status
+        if (orderId && orderRepo) {
+          const isCancel = action === 'cancel' || action === 'cancel_order';
+          const newStatus = isCancel ? 'CANCELLED' : 'ACTIVE';
+          await orderRepo.updateStatus(orderId, newStatus);
         }
 
         // If a poolId was provided with burn action, mark pool INACTIVE

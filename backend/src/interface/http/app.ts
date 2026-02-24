@@ -121,7 +121,7 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createPoolRouter(deps.getPoolInfo, deps.createPool, deps.depositLiquidity, deps.withdrawLiquidity));
   v1.use(createAnalyticsRouter());
   v1.use(createChartRouter(deps.candlestickService));
-  v1.use(createTxRouter(deps.blockfrost, deps.intentRepo, deps.poolRepo));
+  v1.use(createTxRouter(deps.blockfrost, deps.intentRepo, deps.poolRepo, deps.orderRepo));
   v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
   v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo, deps.poolRepo, deps.txBuilder));
   v1.use(createSwapRouter({

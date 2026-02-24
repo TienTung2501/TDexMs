@@ -1435,7 +1435,11 @@ export class TxBuilder implements ITxBuilder {
           }
           
           // Protocol fee accrues on input side (A)
-          const protocolFee = (actualInput * feeNumerator / 10000n) / 6n; // protocol_fee_share = 6
+          // CRITICAL: The on-chain validator computes fee from the ACTIVE reserve
+          // delta (net of protocol fee), not from the raw input. Closed-form:
+          //   pf = actualInput * feeNum / (feeNum + feeDenom * protocolFeeShare)
+          // This ensures the off-chain datum exactly matches the on-chain re-derivation.
+          const protocolFee = actualInput * feeNumerator / (feeNumerator + 10000n * 6n);
           protocolFeesA += protocolFee;
           
           // Update physical reserves (for pool output UTxO)
@@ -1463,7 +1467,8 @@ export class TxBuilder implements ITxBuilder {
             outputAmount = (activeA * recalcInputWithFee) / (activeB * 10000n + recalcInputWithFee);
           }
           
-          const protocolFee = (actualInput * feeNumerator / 10000n) / 6n;
+          // Same closed-form as AToB — fee from active delta, not raw input
+          const protocolFee = actualInput * feeNumerator / (feeNumerator + 10000n * 6n);
           protocolFeesB += protocolFee;
           
           // Update physical reserves
@@ -2582,7 +2587,8 @@ export class TxBuilder implements ITxBuilder {
       if (direction === 'AToB') {
         const inputWithFee = amountConsumed * (10000n - feeNumerator);
         outputDelivered = (activeB * inputWithFee) / (activeA * 10000n + inputWithFee);
-        const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
+        // Closed-form protocol fee matching on-chain active-delta derivation
+        const protocolFee = amountConsumed * feeNumerator / (feeNumerator + 10000n * 6n);
         protocolFeesA += protocolFee;
         physicalA += amountConsumed;
         physicalB -= outputDelivered;
@@ -2591,7 +2597,8 @@ export class TxBuilder implements ITxBuilder {
       } else {
         const inputWithFee = amountConsumed * (10000n - feeNumerator);
         outputDelivered = (activeA * inputWithFee) / (activeB * 10000n + inputWithFee);
-        const protocolFee = (amountConsumed * feeNumerator / 10000n) / 6n;
+        // Closed-form protocol fee matching on-chain active-delta derivation
+        const protocolFee = amountConsumed * feeNumerator / (feeNumerator + 10000n * 6n);
         protocolFeesB += protocolFee;
         physicalA -= outputDelivered;
         physicalB += amountConsumed;

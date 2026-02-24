@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Solver Engine â€” Main orchestrator
  * Runs the continuous loop: collect â†’ validate â†’ route â†’ batch â†’ settle.
  * Uses Blockfrost for chain interaction (replaces Ogmios).
@@ -150,6 +150,15 @@ export class SolverEngine {
         );
         continue;
       }
+      // Skip intents whose deadline has already passed — the on-chain validator
+      // will reject settlement TXs for expired intents.
+      if (dbIntent.deadline && BigInt(dbIntent.deadline) <= BigInt(Date.now())) {
+        this.logger.debug(
+          { intentId: dbIntent.id, deadline: String(dbIntent.deadline) },
+          'Skipping expired intent (deadline passed)',
+        );
+        continue;
+      }
       intents.push(intent);
     }
 
@@ -246,7 +255,7 @@ export class SolverEngine {
   /** Settle a batch with retry on contention */
   private async settleBatch(batch: import('./BatchBuilder.js').BatchGroup): Promise<void> {
     if (!this.txBuilder || !this.chainProvider) {
-      this.logger.warn('TxBuilder or ChainProvider not configured â€” skipping settlement');
+      this.logger.warn('TxBuilder or ChainProvider not configured — skipping settlement');
       return;
     }
 
@@ -306,7 +315,7 @@ export class SolverEngine {
 
         this.logger.info(
           { txHash: submittedTxHash, poolId: batch.poolId },
-          'Settlement TX signed and submitted â€” awaiting on-chain confirmation',
+          'Settlement TX signed and submitted — awaiting on-chain confirmation',
         );
 
         // CRITICAL RULE: Await on-chain confirmation before any DB updates
@@ -317,7 +326,7 @@ export class SolverEngine {
           // can re-evaluate them (they may still confirm on-chain later).
           this.logger.warn(
             { txHash: submittedTxHash },
-            'Settlement TX not confirmed within 120s â€” reverting FILLING â†’ ACTIVE',
+            'Settlement TX not confirmed within 120s reverting FILLING → ACTIVE',
           );
           for (const intent of batch.intents) {
             const intentId = await this.resolveIntentId(
@@ -333,7 +342,7 @@ export class SolverEngine {
 
         this.logger.info(
           { txHash: submittedTxHash, poolId: batch.poolId },
-          'Settlement TX confirmed on-chain â€” updating DB',
+          'Settlement TX confirmed on-chain” updating DB',
         );
 
         // â”€â”€ Post-confirmation DB updates â”€â”€
@@ -426,11 +435,16 @@ export class SolverEngine {
         // 3. Update pool reserves in DB (if poolRepo available)
         if (this.poolRepo && pool) {
           try {
+              // Determine actual swap direction from the batch intents
+              const batchDirectionAToB = batch.intents.length > 0 && poolAssetA
+                ? batch.intents[0]!.inputAsset === poolAssetA
+                : true;
+
               // Apply swap to domain entity to compute new reserves
               pool.applySwap(
                 batch.totalInputAmount,
                 batch.totalOutputAmount,
-                true, // direction is determined by the batch
+                batchDirectionAToB, // Bug #2 fix: use actual direction
               );
               await this.poolRepo.updateReserves(
                 pool.id,
@@ -440,12 +454,7 @@ export class SolverEngine {
                 submittedTxHash,
                 0, // Will be corrected by ChainSync
               );
-              // R-15 fix: Normalize volume to assetA units so Aâ†’B and Bâ†’A are comparable
-              // For Aâ†’B: volumeInA = totalInputAmount (already in A)
-              // For Bâ†’A: volumeInA = totalOutputAmount (the A side of the swap)
-              const batchDirectionAToB = batch.intents.length > 0 && poolAssetA
-                ? batch.intents[0]!.inputAsset === poolAssetA
-                : true;
+              // R-15: Normalize volume to assetA units so A→B and B→A are comparable
               const normalizedVolume = batchDirectionAToB
                 ? batch.totalInputAmount
                 : batch.totalOutputAmount;

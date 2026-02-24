@@ -112,7 +112,7 @@ export class IntentRepository implements IIntentRepository {
   async markExpired(currentTimeMs: number): Promise<number> {
     const result = await this.prisma.intent.updateMany({
       where: {
-        status: { in: ['ACTIVE', 'FILLING'] },
+        status: { in: ['CREATED', 'PENDING', 'ACTIVE', 'FILLING'] },
         deadline: { lte: BigInt(currentTimeMs) },
       },
       data: { status: 'EXPIRED' },
