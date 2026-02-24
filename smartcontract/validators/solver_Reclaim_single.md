@@ -1,0 +1,4 @@
+Có một vấn đề đó là đối với tính năng cancel thì có thể do user tự cancel đúng không nhung reclaim hiện nay là reclaim là do bot của hệ thống reclaim đúng không, nếu hiện tại reclaim từ utxo một thì hơi có vấn đề đó là tự reclaim từng utxo một thì rất tốn chi phí.
+Tốn thời gian nếu đợi từ thằng để reclaim. trong bot không được đợi từng utxo confirm xong mới thực hiện tiếp mà chỉ cần giao dịch thành công và không cần đợi confirm.
+
+Vấn đề đồng bộ database, hiện nay quá trình đồng bộ đã hợp lý chưa vì tôi clear database nhưng lại thất bại trong việc clear utxo vậy nên làm sao để đồng bộ một cách hợp lý đây phải clear thành công hợp đồng thông minh mới chuyển tiếp sang clear database.
