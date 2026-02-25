@@ -60,6 +60,15 @@ export class Order {
     return marketPriceNum * this.props.priceDenominator >= this.props.priceNumerator * marketPriceDen;
   }
 
+  /** Check if DCA price cap is met (market price not worse than cap) */
+  meetsDcaPriceCap(marketPriceNum: bigint, marketPriceDen: bigint): boolean {
+    if (!this.props.priceNumerator || !this.props.priceDenominator) {
+      return true; // no price cap → always OK
+    }
+    // Same logic as limit: market_num * target_den >= target_num * market_den
+    return marketPriceNum * this.props.priceDenominator >= this.props.priceNumerator * marketPriceDen;
+  }
+
   /** Check if stop-loss should trigger */
   triggersStopLoss(marketPriceNum: bigint, marketPriceDen: bigint): boolean {
     if (this.props.type !== 'STOP_LOSS' || !this.props.priceNumerator || !this.props.priceDenominator) {

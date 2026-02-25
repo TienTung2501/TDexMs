@@ -141,8 +141,37 @@ export class OrderExecutorCron {
       .filter((o) => !o.isExpired(now));
 
     // Separate by type so we can apply type-specific readiness checks
-    const dcaCandidates = allOrders
+    const dcaRipeCandidates = allOrders
       .filter((o) => o.type === 'DCA' && o.isDcaIntervalRipe(now));
+
+    // DCA orders with a price cap need pool price checking before execution
+    const dcaCandidates: Order[] = [];
+    for (const order of dcaRipeCandidates) {
+      const props = order.toProps();
+      if (!props.priceNumerator || !props.priceDenominator) {
+        // No price cap — always execute
+        dcaCandidates.push(order);
+        continue;
+      }
+      try {
+        const pool = await this.resolvePool(order);
+        if (!pool) { dcaCandidates.push(order); continue; }
+        const isInputA = this.isOrderInputA(props, pool);
+        const reserveIn = isInputA ? pool.reserveA : pool.reserveB;
+        const reserveOut = isInputA ? pool.reserveB : pool.reserveA;
+        if (reserveIn === 0n) continue;
+        if (order.meetsDcaPriceCap(reserveOut, reserveIn)) {
+          dcaCandidates.push(order);
+        } else {
+          this.logger.debug(
+            { orderId: order.id, type: 'DCA' },
+            'DCA order price cap not met — skipping',
+          );
+        }
+      } catch {
+        dcaCandidates.push(order); // on error, still include
+      }
+    }
 
     // Limit and StopLoss need pool price checking — resolve pools first
     const limitStopCandidates = allOrders.filter(

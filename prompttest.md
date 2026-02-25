@@ -44,3 +44,9 @@ Các scripts cần test:
 
 
     Có cách nào để xử lý 4 lỗi trên không? TÔi không thế sửa hợp đồng được, bạn hãy xem xem là do logic hợp đồng sai, hay build giao dịch bị sai. Nếu build giao dịch sai thì hãy sửa lại backend.
+
+
+oke về cơ bản thì tôi thấy hệ thống hoạt động oke bao gồm các lệnh liên quan đến intent fill, cancel, reclaim nhưng có một vấn đề đó là trong quá trình test đang chưa thể hiện được bot thực hiện xử lý các intent user trước sau đó mới swap với pool sau cùng hiện nay hệ thống đã thiết kế như vậy mà, ngoài ra tôi đang muốn đó là làm sao để thể hiện fill một phần đối với những intent mà hệ thống không thể đáp ứng full rõ ràng hệ thống đã thiết kế như vậy sao tôi không thấy nó được thực hiện nhỉ? ngoài ra trong những lần test trước đây phần intent tôi thấy tất cả các intent gửi lên đều được fill nhưng chỉ sót lại một intent là vẫn active không biết tại sao? Hiện nay hệ thống đang xử lý những intent có thể fill một phần như thế nào nhỉ? chuyển trạng thái như thế nào? đó là một vấn đề mà tôi chưa thấy được biểu thị trong test, ví dụ 1 intent gửi lên nhưng không thể fill toàn bộ, hệ thống sẽ tính toán lượng có thể fill tối đa cho intent đó xong cập nhật database như thế nào? nếu nó hết thời gian mà vẫn chưa được fill thì sao hệ thống có thể reclaim nó hoặc user cancel thì cập nhật vào database như thế nào để chúng ta hiển đó là 1 intent fill một phần và phần còn lại hết hạn chưa kịp fill thì người dùng cancel hoặc hệ thống tự động reclaim,  hay là trường hợp khác đó là ban đầu chỉ fill được 1 phần nhưng sau đó tiếp tục fill tiếp cho đên khi fill toàn bộ hệ thống xử lý vấn đền này chưa?
+TRước đó tôi đã cho bạn tích hợp netting vào solver rồi mà nhỉ. Sao hiện tại hệ thống không có minh họa swap giữa 2 người trước khi swap với pool nhỉ?
+
+npx prisma db push --force-reset 2>&1 | Select-Object -Last 10

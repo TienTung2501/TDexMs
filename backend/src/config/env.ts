@@ -50,6 +50,12 @@ const envSchema = z.object({
     .transform((val) => val === 'true')
     .default('false'),
 
+  // Order executor (DCA/LIMIT/STOP_LOSS) — disabled by default for intent-focused demo
+  ORDER_EXECUTOR_ENABLED: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
+
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
 

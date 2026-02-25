@@ -8,6 +8,13 @@
 			"isBackground": true,
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Run System Test",
+			"type": "shell",
+			"command": "cd d:\\Code\\decentralize\\backend && pnpm exec tsx scripts/test-system.ts 2>&1",
+			"isBackground": true,
+			"group": "test"
 		}
 	]
 }

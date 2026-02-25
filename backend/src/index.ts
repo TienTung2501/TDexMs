@@ -301,7 +301,12 @@ async function main(): Promise<void> {
 
   priceCron.start();
   reclaimKeeper.start();
-  orderExecutorCron.start();
+  if (env.ORDER_EXECUTOR_ENABLED) {
+    orderExecutorCron.start();
+    logger.info('OrderExecutorCron started (ORDER_EXECUTOR_ENABLED=true)');
+  } else {
+    logger.info('OrderExecutorCron disabled (ORDER_EXECUTOR_ENABLED=false) — intent-only mode');
+  }
   poolSnapshotCron.start();
   faucetBot.start();
 

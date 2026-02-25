@@ -10,6 +10,7 @@ import { getLogger } from '../config/logger.js';
 import type { IPoolRepository } from '../domain/ports/IPoolRepository.js';
 import { Pool } from '../domain/entities/Pool.js';
 import type { EscrowIntent } from './IntentCollector.js';
+import { calculateMaxIntentFill } from './AmmMath.js';
 
 export interface RouteHop {
   poolId: string;
@@ -48,7 +49,7 @@ export class RouteOptimizer {
   private readonly logger;
   private poolCache: Pool[] = [];
   private cacheTimestamp = 0;
-  private readonly CACHE_TTL_MS = 5_000;
+  private readonly CACHE_TTL_MS = 1_000;
 
   constructor(private readonly poolRepo: IPoolRepository) {
     this.logger = getLogger().child({ service: 'route-optimizer' });
@@ -151,93 +152,67 @@ export class RouteOptimizer {
     return best;
   }
 
-  /**
-   * Try a partial fill: find the maximum amount the pool can absorb
-   * while still meeting the on-chain partial fill constraints:
-   * - Capped at 50% of output reserve (matches TxBuilder logic)
-   * - At least 10% of remaining input (on-chain min_fill_percent)
-   * - Pro-rata minOutput must be met
+/**
+   * Phiên bản tối ưu: Sử dụng Binary Search để tìm lượng khớp lệnh một phần (Partial Fill)
+   * lớn nhất mà vẫn thỏa mãn mức trượt giá (minOutput) của người dùng.
    */
   private tryPartialFill(intent: EscrowIntent, effectiveInput: bigint): SwapRoute | null {
-    // Find the pool for direct route
     const pool = this.findDirectPool(intent.inputAsset, intent.outputAsset);
     if (!pool) return null;
 
     const isAtoB = this.matchesAssetA(pool, intent.inputAsset);
 
-    // Active reserves (matching Pool.calculateSwapOutput)
+    // 1. Tính toán dựa trên tài sản dự trữ thực tế của Pool
     const activeA = pool.reserveA - pool.protocolFeeAccA;
     const activeB = pool.reserveB - pool.protocolFeeAccB;
-    const reserveOut = isAtoB ? activeB : activeA;
     const reserveIn = isAtoB ? activeA : activeB;
+    const reserveOut = isAtoB ? activeB : activeA;
 
     if (reserveOut <= 0n || reserveIn <= 0n) return null;
 
-    // Cap output at 50% of output reserve (same logic as TxBuilder)
-    const maxOutput = reserveOut / 2n;
+    // 2. Tìm lượng Input tối ưu bằng Binary Search thay vì dùng hằng số 50%
+    // Điều này giải quyết triệt để lỗi "output below minimum" khi thanh khoản thấp.
+    let partialInput = calculateMaxIntentFill(
+      reserveIn,
+      reserveOut,
+      effectiveInput,
+      intent.inputAmount,
+      intent.minOutput,
+      BigInt(pool.feeNumerator)
+    );
 
-    // Reverse-derive the input needed for maxOutput:
-    // output = reserveOut * inputWithFee / (reserveIn * FEE_DENOM + inputWithFee)
-    // → inputWithFee = reserveIn * FEE_DENOM * output / (reserveOut - output)
-    // → input = inputWithFee / (FEE_DENOM - feeNumerator)
-    const feeDenom = BigInt(FEE_DENOMINATOR);
-    const feeNum = BigInt(pool.feeNumerator);
-    const numerator = reserveIn * feeDenom * maxOutput;
-    const denominator = (reserveOut - maxOutput) * (feeDenom - feeNum);
-    if (denominator <= 0n) return null;
-
-    let partialInput = (numerator / denominator) + 1n;
-
-    // Cap partialInput at effectiveInput (can't consume more than what's in escrow)
-    if (partialInput > effectiveInput) {
-      partialInput = effectiveInput;
+    // 3. Giới hạn bổ sung: Không bao giờ rút quá 50% Pool để tránh làm hỏng giá thị trường
+    const inputFor50Percent = reserveIn; // Theo hằng số AMM, input = reserveIn sẽ lấy ra ~50%
+    if (partialInput > inputFor50Percent) {
+      partialInput = inputFor50Percent;
     }
 
-    // Check on-chain minimum: at least 10% of remaining input
-    const minPartialInput = (effectiveInput * MIN_PARTIAL_FILL_PERCENT) / MIN_PARTIAL_FILL_DENOM;
-    if (partialInput < minPartialInput) {
+    // 4. Kiểm tra ràng buộc 10% tối thiểu của mạng lưới
+    const minRequiredInput = (effectiveInput * MIN_PARTIAL_FILL_PERCENT) / MIN_PARTIAL_FILL_DENOM;
+    if (partialInput < minRequiredInput) {
       this.logger.debug(
-        {
-          partialInput: partialInput.toString(),
-          minPartialInput: minPartialInput.toString(),
+        { 
+          intentId: intent.utxoRef.txHash.slice(0, 10), 
+          partialInput: partialInput.toString(), 
+          minRequired: minRequiredInput.toString() 
         },
-        'Partial fill input below 10% threshold — skipping',
+        'Partial fill amount cannot satisfy 10% rule and slippage simultaneously'
       );
       return null;
     }
 
-    // Calculate actual output for partialInput
+    // 5. Xây dựng Route với thông số đã tính toán
     const outputAmount = pool.calculateSwapOutput(partialInput, isAtoB);
-    if (outputAmount <= 0n) return null;
-
-    // Pro-rata minOutput for partial: minOutput * partialInput / inputAmount
-    const proRataMinOutput = intent.inputAmount > 0n
-      ? (intent.minOutput * partialInput) / intent.inputAmount
-      : 0n;
-
-    if (outputAmount < proRataMinOutput) {
-      this.logger.debug(
-        {
-          partialInput: partialInput.toString(),
-          outputAmount: outputAmount.toString(),
-          proRataMinOutput: proRataMinOutput.toString(),
-        },
-        'Partial fill output below pro-rata min — skipping',
-      );
-      return null;
-    }
-
     const fee = (partialInput * BigInt(pool.feeNumerator)) / BigInt(FEE_DENOMINATOR);
 
     this.logger.info(
       {
-        partialInput: partialInput.toString(),
-        outputAmount: outputAmount.toString(),
-        proRataMinOutput: proRataMinOutput.toString(),
-        originalInput: effectiveInput.toString(),
-        fillPercent: Number(partialInput * 100n / effectiveInput),
+        intentId: intent.utxoRef.txHash.slice(0, 10),
+        fillAmount: partialInput.toString(),
+        output: outputAmount.toString(),
+        fillPercent: Number((partialInput * 100n) / effectiveInput) + '%',
       },
-      'Partial fill route found',
+      '⚡ Optimized Partial Fill found via Binary Search'
     );
 
     return {

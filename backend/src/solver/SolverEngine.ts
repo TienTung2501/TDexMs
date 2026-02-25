@@ -14,6 +14,7 @@ import { getLogger } from '../config/logger.js';
 import { IntentCollector } from './IntentCollector.js';
 import { RouteOptimizer } from './RouteOptimizer.js';
 import { BatchBuilder } from './BatchBuilder.js';
+import { NettingEngine, type EscrowInfo, type PoolState, type BatchPlan } from './NettingEngine.js';
 import type { BlockfrostClient } from '../infrastructure/cardano/BlockfrostClient.js';
 import type { IIntentRepository } from '../domain/ports/IIntentRepository.js';
 import type { IPoolRepository } from '../domain/ports/IPoolRepository.js';
@@ -207,10 +208,92 @@ export class SolverEngine {
     // Phase 3: Group into batches
     const batches = this.batchBuilder.groupByPool(routableIntents, routes);
 
-    // Phase 4: Process each batch — settle ONE intent at a time because the
-    // on-chain minting policy (check_exactly_one_burn) only allows burning
-    // 1 escrow token per TX.  We split multi-intent batches into single-intent
-    // sub-batches that share pool/direction metadata.
+    // Phase 3b: NettingEngine analysis — cross-match opposing intents to reduce AMM impact.
+    // When opposing intents exist (A→B and B→A), NettingEngine computes:
+    //   - How much flow cancels out (cross-matched at spot price theoretically)
+    //   - The residual net flow that must go through the AMM
+    // Due to on-chain pool validator constraints (single-direction redeemer,
+    // protocol fee accrual on one side), true cross-matching requires a
+    // dedicated Netting redeemer. For now, we split mixed batches into
+    // same-direction sub-batches and process each as one TX.
+    // The NettingEngine analysis shows the theoretical netting benefit.
+    for (const batch of batches) {
+      if (this.poolRepo && batch.intents.length > 1) {
+        try {
+          const pool = await this.poolRepo.findById(batch.poolId);
+          if (pool) {
+            const poolAssetA = pool.assetAPolicyId
+              ? `${pool.assetAPolicyId}.${pool.assetAAssetName}` : '';
+            const escrowInfos: EscrowInfo[] = batch.intents.map((intent) => ({
+              txHash: intent.utxoRef.txHash,
+              outputIndex: intent.utxoRef.outputIndex,
+              direction: (intent.inputAsset === poolAssetA ? 'AToB' : 'BToA') as 'AToB' | 'BToA',
+              remainingInput: intent.remainingInput > 0n ? intent.remainingInput : intent.inputAmount,
+              minOutput: intent.minOutput,
+              originalInput: intent.inputAmount,
+              ownerAddress: intent.owner,
+            }));
+            const poolState: PoolState = {
+              activeA: pool.reserveA - pool.protocolFeeAccA,
+              activeB: pool.reserveB - pool.protocolFeeAccB,
+              feeNumerator: BigInt(pool.feeNumerator),
+            };
+            const plan: BatchPlan = NettingEngine.analyze(escrowInfos, poolState);
+
+            // Compute netting savings ratio
+            const grossA = escrowInfos.filter(e => e.direction === 'AToB').reduce((s, e) => s + e.remainingInput, 0n);
+            const grossB = escrowInfos.filter(e => e.direction === 'BToA').reduce((s, e) => s + e.remainingInput, 0n);
+            const hasOpposing = grossA > 0n && grossB > 0n;
+
+            this.logger.info(
+              {
+                poolId: batch.poolId,
+                intentCount: batch.intents.length,
+                aToBCount: escrowInfos.filter(e => e.direction === 'AToB').length,
+                bToACount: escrowInfos.filter(e => e.direction === 'BToA').length,
+                grossAToB: grossA.toString(),
+                grossBToA: grossB.toString(),
+                netAToB: plan.netAToB.toString(),
+                netBToA: plan.netBToA.toString(),
+                completeFills: plan.completeFills,
+                partialFills: plan.partialFills,
+                ammOutput: plan.ammOutput.toString(),
+                hasOpposing,
+                nettingSavings: hasOpposing
+                  ? `${100 - Number((plan.netAToB + plan.netBToA) * 100n / (grossA + grossB + 1n))}% of flow cross-matched`
+                  : 'N/A (single direction)',
+              },
+              hasOpposing
+                ? '⚡ NettingEngine: opposing intents detected — cross-matching analysis'
+                : 'NettingEngine analysis (single direction — no netting possible)',
+            );
+
+            // Log individual fill allocations
+            for (const fill of plan.fills) {
+              this.logger.info(
+                {
+                  escrow: `${fill.escrow.txHash.slice(0, 12)}…#${fill.escrow.outputIndex}`,
+                  direction: fill.escrow.direction,
+                  inputConsumed: fill.inputConsumed.toString(),
+                  outputDelivered: fill.outputDelivered.toString(),
+                  isComplete: fill.isComplete,
+                  owner: fill.escrow.ownerAddress.slice(0, 20) + '…',
+                },
+                'NettingEngine fill allocation',
+              );
+            }
+          }
+        } catch (err) {
+          this.logger.debug({ err, poolId: batch.poolId }, 'NettingEngine analysis failed (non-fatal)');
+        }
+      }
+    }
+
+    // Phase 4: Process each batch.
+    // The on-chain pool validator accepts only a single swap direction per TX
+    // (protocol fees accrue on one side). For mixed-direction batches, we split
+    // into same-direction sub-batches and process each as a single TX.
+    // Same-direction intents within a sub-batch are settled atomically.
     for (const batch of batches) {
       // Check profitability
       const surplus = this.batchBuilder.calculateSurplus(batch);
@@ -222,48 +305,121 @@ export class SolverEngine {
         continue;
       }
 
-      // Process intents one-by-one within this pool batch
-      for (const singleIntent of batch.intents) {
-        const intentKey = `${singleIntent.utxoRef.txHash}#${singleIntent.utxoRef.outputIndex}`;
-        const route = routes.get(intentKey);
-        // Use route's actual input/output (may be partial fill)
-        const actualInput = route?.actualInput ?? singleIntent.inputAmount;
-        const actualOutput = route?.totalOutput ?? 0n;
-        const isPartialFill = route?.isPartialFill ?? false;
+      // Classify intents by direction
+      let aToBIntents: typeof batch.intents = [];
+      let bToAIntents: typeof batch.intents = [];
 
-        const singleBatch: typeof batch = {
-          ...batch,
-          intents: [singleIntent],
-          totalInputAmount: actualInput,
-          totalOutputAmount: actualOutput,
-        };
-
-        if (isPartialFill) {
-          this.logger.info(
-            {
-              utxoRef: intentKey,
-              actualInput: actualInput.toString(),
-              actualOutput: actualOutput.toString(),
-              remainingInput: singleIntent.remainingInput.toString(),
-            },
-            'Processing partial fill for intent',
-          );
+      if (this.poolRepo) {
+        const pool = await this.poolRepo.findById(batch.poolId);
+        if (pool) {
+          const poolAssetA = pool.assetAPolicyId
+            ? `${pool.assetAPolicyId}.${pool.assetAAssetName}` : '';
+          for (const intent of batch.intents) {
+            if (intent.inputAsset === poolAssetA) {
+              aToBIntents.push(intent);
+            } else {
+              bToAIntents.push(intent);
+            }
+          }
+        } else {
+          // Fallback: treat all as same direction
+          aToBIntents = batch.intents;
         }
+      } else {
+        aToBIntents = batch.intents;
+      }
 
-        const refs = [singleIntent.utxoRef];
-        this.collector.markProcessing(refs);
+      // Build sub-batches: same-direction intents go together
+      const subBatches: Array<{ intents: typeof batch.intents; label: string }> = [];
+      if (aToBIntents.length > 0) subBatches.push({ intents: aToBIntents, label: 'AToB' });
+      if (bToAIntents.length > 0) subBatches.push({ intents: bToAIntents, label: 'BToA' });
 
-        try {
-          await this.settleBatch(singleBatch, isPartialFill);
-          // Wait for pool UTxO to propagate after each successful settlement
-          await sleep(2000);
-        } catch (err) {
-          this.logger.error(
-            { err, poolId: batch.poolId, utxoRef: `${singleIntent.utxoRef.txHash}#${singleIntent.utxoRef.outputIndex}` },
-            'Failed to settle single intent',
+      if (subBatches.length > 1) {
+        this.logger.info(
+          {
+            poolId: batch.poolId,
+            aToBCount: aToBIntents.length,
+            bToACount: bToAIntents.length,
+          },
+          '⚡ Mixed-direction batch → splitting into same-direction sub-batches',
+        );
+      }
+
+      for (const subBatch of subBatches) {
+        if (subBatch.intents.length > 1) {
+          // ── BATCH SETTLEMENT: multiple same-direction intents in one TX ──
+          this.logger.info(
+            { poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
+            'Settling batch of same-direction intents in single TX',
           );
-        } finally {
-          this.collector.clearProcessing(refs);
+
+          const subBatchGroup: typeof batch = {
+            ...batch,
+            intents: subBatch.intents,
+            totalInputAmount: subBatch.intents.reduce((s, i) => s + (i.remainingInput > 0n ? i.remainingInput : i.inputAmount), 0n),
+            totalOutputAmount: 0n, // Will be computed by buildSettlementTx
+          };
+
+          const refs = subBatch.intents.map(i => i.utxoRef);
+          this.collector.markProcessing(refs);
+          try {
+            const anyPartial = subBatch.intents.some(i => {
+              const k = `${i.utxoRef.txHash}#${i.utxoRef.outputIndex}`;
+              return routes.get(k)?.isPartialFill ?? false;
+            });
+            await this.settleBatch(subBatchGroup, anyPartial);
+            await sleep(2000);
+          } catch (err) {
+            this.logger.error(
+              { err, poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
+              'Failed to settle sub-batch',
+            );
+          } finally {
+            this.collector.clearProcessing(refs);
+          }
+        } else {
+          // ── SINGLE INTENT ──
+          const singleIntent = subBatch.intents[0];
+          const intentKey = `${singleIntent.utxoRef.txHash}#${singleIntent.utxoRef.outputIndex}`;
+          const route = routes.get(intentKey);
+          const actualInput = route?.actualInput ?? singleIntent.inputAmount;
+          const actualOutput = route?.totalOutput ?? 0n;
+          const isPartialFill = route?.isPartialFill ?? false;
+
+          const singleBatch: typeof batch = {
+            ...batch,
+            intents: [singleIntent],
+            totalInputAmount: actualInput,
+            totalOutputAmount: actualOutput,
+          };
+
+          if (isPartialFill) {
+            this.logger.info(
+              {
+                utxoRef: intentKey,
+                direction: subBatch.label,
+                actualInput: actualInput.toString(),
+                actualOutput: actualOutput.toString(),
+                remainingInput: singleIntent.remainingInput.toString(),
+              },
+              'Processing partial fill for intent',
+            );
+          }
+
+          const refs = [singleIntent.utxoRef];
+          this.collector.markProcessing(refs);
+
+          try {
+            await this.settleBatch(singleBatch, isPartialFill);
+            await sleep(2000);
+          } catch (err) {
+            this.logger.error(
+              { err, poolId: batch.poolId, utxoRef: intentKey },
+              'Failed to settle single intent',
+            );
+          } finally {
+            this.collector.clearProcessing(refs);
+          }
         }
       }
     }

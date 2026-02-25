@@ -6,3 +6,5 @@ export { RouteOptimizer } from './RouteOptimizer.js';
 export type { SwapRoute, RouteHop } from './RouteOptimizer.js';
 export { BatchBuilder } from './BatchBuilder.js';
 export type { BatchGroup } from './BatchBuilder.js';
+export { NettingEngine } from './NettingEngine.js';
+export type { EscrowInfo, PoolState, FillResult, BatchPlan } from './NettingEngine.js';

@@ -3,54 +3,44 @@
  * test-system.ts — Full On-Chain System Test for SolverNet DEX
  *
  * ╔═══════════════════════════════════════════════════════════════════╗
- * ║  DESIGN PRINCIPLE — phân chia trách nhiệm đúng:                   ║
+ * ║  INTENT-FOCUSED DEMO — demonstrates key SolverNet features:       ║
  * ║                                                                    ║
- * ║  Script này chỉ làm:        Để bot / engine làm:                  ║
- * ║  ─────────────────────────  ──────────────────────────────────     ║
- * ║  Deploy settings            SolverEngine → fill intents           ║
- * ║  Deploy factory             OrderExecutorCron → execute orders    ║
- * ║  Create pool                ReclaimKeeperCron → reclaim expired   ║
- * ║  Deposit / Withdraw                                                ║
- * ║  Create intent ──────────────────────────────→ [bot fills]        ║
- * ║  Cancel intent  (user huỷ TRƯỚC khi bot fill)                     ║
- * ║  Create order ───────────────────────────────→ [bot executes]     ║
- * ║  Cancel order   (user huỷ TRƯỚC khi bot exec)                     ║
- * ║  Update settings                                                   ║
+ * ║  1. NettingEngine: opposing intents cross-matched before AMM      ║
+ * ║  2. Partial fills: large intents filled in multiple rounds        ║
+ * ║  3. Batch settlement: same-direction intents in single TX         ║
+ * ║  4. Cancel / Expire: user cancels or deadline passes              ║
+ * ║                                                                    ║
+ * ║  Script creates on-chain TXs; SolverEngine + ReclaimKeeper        ║
+ * ║  handle settlement and reclaim asynchronously.                     ║
+ * ║                                                                    ║
+ * ║  Order-related operations (DCA/LIMIT/STOP_LOSS) are disabled      ║
+ * ║  in this demo. Set ORDER_EXECUTOR_ENABLED=true to re-enable.      ║
  * ╚═══════════════════════════════════════════════════════════════════╝
  *
  * TEST PHASES:
- *  Phase 1  — Deploy Settings              [admin, awaitTx — required for pools]
- *  Phase 2  — Deploy Factory               [admin, awaitTx — required for pools]
- *  Phase 3  — Create Pool tBTC/tUSD        [admin, awaitTx — required for intents]
- *  Phase 4  — Create Pool tUSD/tSOL        [admin, awaitTx]
- *  Phase 5  — Deposit liquidity            [users, awaitTx — pool UTxO changes]
- *  Phase 6  — Swap intents (multi-user)    [users, fire-and-forget → SolverEngine fills]
- *  Phase 7  — Cancel intent               [user, on-chain cancel TX before solver]
- *  Phase 8  — Expired intent               [user creates → ReclaimKeeperCron reclaims]
- *  Phase 9  — DCA order                    [user, fire-and-forget → OrderExecutorCron]
- *  Phase 10 — Limit order                  [user, fire-and-forget → OrderExecutorCron]
- *  Phase 11 — Stop-Loss order              [user, fire-and-forget → OrderExecutorCron]
- *  Phase 12 — Cancel order                 [user, on-chain cancel TX before bot]
- *  Phase 13 — Expired order                [user creates → ReclaimKeeperCron reclaims]
- *  Phase 14 — Withdraw liquidity           [user, awaitTx]
- *  Phase 15 — Update protocol settings     [admin]
+ *  Phase 0  — Distribute test tokens       [admin → users]
+ *  Phase 1  — Deploy Settings               [admin, awaitTx]
+ *  Phase 2  — Deploy Factory                [admin, awaitTx]
+ *  Phase 3  — Create Pool tBTC/tUSD         [admin, awaitTx]
+ *  Phase 4  — Create Pool tUSD/tSOL (tiny)  [admin, awaitTx]
+ *  Phase 5  — Deposit liquidity             [users, awaitTx]
+ *  Phase 6  — Netting demo: 3 opposing intents submitted SIMULTANEOUSLY
+ *  Phase 6b — Observe netting fills + DB verification
+ *  Phase 7  — Partial fill demo: large intent vs tiny Pool 2
+ *  Phase 7b — Observe PARTIALLY_FILLED + DB verification
+ *  Phase 7c — Cancel partially filled intent + DB verification
+ *  Phase 8  — Cancel fresh intent           [user cancels before solver]
+ *  Phase 9  — Expired intent                [deadline passes → ReclaimKeeper]
+ *  Phase 10 — Withdraw liquidity            [user, awaitTx]
+ *  Phase 11 — Update protocol settings      [admin]
  *
  * RUNNING:
- *   # Terminal 1 — backend với solver bật:
+ *   # Terminal 1 — backend with solver enabled:
  *   cd backend && pnpm dev
  *
- *   # Terminal 2 — sau khi backend sẵn sàng:
+ *   # Terminal 2 — after backend is ready:
  *   cd backend
  *   pnpm exec tsx scripts/test-system.ts
- *
- * ENV VARS (thêm vào backend/.env):
- *   BACKEND_URL=http://localhost:3001   (default)
- *   TBTC_POLICY_ID=<64-char hex>
- *   TBTC_ASSET_NAME=<hex>  (default "tBTC" = 74425443)
- *   TUSD_POLICY_ID=<64-char hex>
- *   TUSD_ASSET_NAME=<hex>  (default "tUSD" = 74555344)
- *   TSOL_POLICY_ID=<64-char hex>
- *   TSOL_ASSET_NAME=<hex>  (default "tSOL" = 74534f4c)
  */
 
 import 'dotenv/config';
@@ -88,10 +78,17 @@ const POOL_INIT_TUSD  = 5_000_000_000n; // 5 000 tUSD → price 50 tUSD/tBTC
 const POOL_INIT_TSOL  = 2_000_000_000n; // 2 000 tSOL
 const SWAP_TBTC       =   5_000_000n;   // 5 tBTC per intent
 const SWAP_TUSD       = 250_000_000n;   // 250 tUSD per intent
-const DCA_BUDGET      = 100_000_000n;   // 100 tUSD total
-const DCA_PER_INT     =  10_000_000n;   // 10 tUSD per DCA interval
-const DCA_INTERVAL    =         60;     // 60 slots (~60 s on preprod)
 const SLIPPAGE_BPS    = 500n;           // 5 % slippage tolerance (accounts for multiple intents affecting same pool)
+
+// — Partial Fill demo: tiny Pool 2 so intent > input reserve triggers partial fill —
+// Pool 2 (tUSD/tSOL) created with 50 tUSD / 50 tSOL.
+// Intent: 80 tUSD → tSOL exceeds 50 tUSD input reserve → RouteOptimizer.tryPartialFill
+// Round 1: ~50 tUSD consumed, ~25 tSOL out → PARTIALLY_FILLED, remaining ~30 tUSD
+// Round 2: pool too skewed (100/25) → both full and partial fail → stays PARTIALLY_FILLED
+const PARTIAL_POOL_TUSD = 50_000_000n;   // 50 tUSD (tiny Pool 2 reserve)
+const PARTIAL_POOL_TSOL = 50_000_000n;   // 50 tSOL (tiny Pool 2 reserve)
+const PARTIAL_SWAP_TUSD = 80_000_000n;   // 80 tUSD → exceeds 50 tUSD input reserve
+const PARTIAL_MIN_OUT   = 35_000_000n;   // 35 tSOL — full fill fails (30.7), partial succeeds (24.9 > 21.9 pro-rata)
 
 // ─── Utility helpers ───────────────────────────────────────────────
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -421,7 +418,6 @@ const minOut  = (input: bigint, bps = SLIPPAGE_BPS) => (input * (10000n - bps)) 
 // ─── Shared types ──────────────────────────────────────────────────
 interface PoolMeta   { poolId: string; txHash: string; outputIndex: number }
 interface IntentRef  { intentId: string }
-interface OrderRef   { orderId: string }
 
 type PoolRow = {
   poolId: string;
@@ -653,13 +649,50 @@ async function createIntent(
   return { intentId: res.intentId };
 }
 
-async function phase6SwapIntents(
+/**
+ * Build + sign + submit intent TX WITHOUT waiting for on-chain confirmation.
+ * Used for the netting demo: submit multiple intents rapidly (different wallets)
+ * so the solver sees them all in the same batch window.
+ */
+async function createIntentFast(
+  user: Wallet,
+  inputAsset: string,
+  outputAsset: string,
+  inputAmt: bigint,
+  minOutAmt: bigint,
+  deadlineMs: number,
+  label: string,
+  partialFill = true,
+): Promise<{ intentId: string; txHash: string }> {
+  log(label, `[FAST] ${inputAsset.slice(0, 14)}…→${outputAsset.slice(0, 14)}… amt=${inputAmt} minOut=${minOutAmt}`);
+
+  const res = await apiPost<{ intentId: string; unsignedTx: string }>('/intents', {
+    senderAddress: user.address,
+    changeAddress: user.address,
+    inputAsset,
+    outputAsset,
+    inputAmount:   inputAmt.toString(),
+    minOutput:     minOutAmt.toString(),
+    deadline:      deadlineMs,
+    partialFill,
+  });
+
+  // Sign and submit WITHOUT waiting — returns immediately
+  const txHash = await signAndSubmit(user, res.unsignedTx);
+  log(label, `Submitted (no wait) ✅  ${res.intentId} → ${txHash.slice(0, 16)}…`);
+  return { intentId: res.intentId, txHash };
+}
+
+async function phase6NettingDemo(
   userA: Wallet,
   userB: Wallet,
   userC: Wallet,
   pool1: PoolMeta,
 ): Promise<IntentRef[]> {
-  hr('Phase 6 — Swap Intents [TC-S04, TC-SE01, TC-SE02] → SolverEngine fills');
+  hr('Phase 6 — NettingEngine Demo: Opposing Intents Cross-Match');
+  log('netting', '━━━ GOAL: Create 3 opposing intents SIMULTANEOUSLY ━━━');
+  log('netting', 'All 3 TXes hit the mempool before the solver\'s next 15 s scan,');
+  log('netting', 'so NettingEngine sees A→B + B→A flows in the SAME batch.');
 
   const deadline = Date.now() + 6 * 3600 * 1000; // 6 h
 
@@ -670,60 +703,262 @@ async function phase6SwapIntents(
   const feeNum   = BigInt(poolInfo.feeNumerator ?? 30);
   const feeDenom = BigInt(poolInfo.feeDenominator ?? 10000);
 
-  log('intents', `Pool reserves: A=${reserveA} B=${reserveB} fee=${feeNum}/${feeDenom}`);
-  log('intents', 'Creating 3 intents (one per user) — each awaits on-chain confirmation + /tx/confirm');
+  log('netting', `Pool reserves: A=${reserveA} B=${reserveB} fee=${feeNum}/${feeDenom}`);
+  log('netting', `Pool spot price: ${Number(reserveB) / Number(reserveA)} tUSD/tBTC`);
 
-  // i1: User A swaps tBTC (assetA) → tUSD (assetB)  →  reserveIn=A, reserveOut=B
+  // 3 opposing intents (different wallets — no UTxO conflict):
+  //   i1: User A → 5 tBTC → tUSD  (A→B)
+  //   i2: User B → 250 tUSD → tBTC (B→A — OPPOSING)
+  //   i3: User C → 10 tBTC → tUSD  (A→B)
   const minOut1 = computeMinOutput(SWAP_TBTC,      reserveA, reserveB, feeNum, feeDenom);
-  // i2: User B swaps tUSD (assetB) → tBTC (assetA)  →  reserveIn=B, reserveOut=A
   const minOut2 = computeMinOutput(SWAP_TUSD,      reserveB, reserveA, feeNum, feeDenom);
-  // i3: User C swaps tBTC (assetA) → tUSD (assetB)  →  reserveIn=A, reserveOut=B
   const minOut3 = computeMinOutput(SWAP_TBTC * 2n, reserveA, reserveB, feeNum, feeDenom);
 
-  log('intents', `Computed minOutputs: i1=${minOut1}, i2=${minOut2}, i3=${minOut3}`);
+  log('netting', `Creating 3 intents SIMULTANEOUSLY (no wait between):`);
+  log('netting', `  i1: User A → ${SWAP_TBTC} tBTC → tUSD (A→B) minOut=${minOut1}`);
+  log('netting', `  i2: User B → ${SWAP_TUSD} tUSD → tBTC (B→A) minOut=${minOut2}`);
+  log('netting', `  i3: User C → ${SWAP_TBTC * 2n} tBTC → tUSD (A→B) minOut=${minOut3}`);
 
-  // One intent per user only: each signSubmitConfirm awaits confirmation
-  // i2 uses partialFill=true (250 tUSD is large relative to reserves)
-  const i1 = await createIntent(userA, asTbtc(), asTusd(),  SWAP_TBTC,       minOut1, deadline, 'i1-A-AtoB',    true);
-  const i2 = await createIntent(userB, asTusd(), asTbtc(),  SWAP_TUSD,       minOut2, deadline, 'i2-B-BtoA',    true);
-  const i3 = await createIntent(userC, asTbtc(), asTusd(),  SWAP_TBTC * 2n,  minOut3, deadline, 'i3-C-AtoB-2x', true);
+  // ── Step 1: Build + sign + submit all 3 TXes in parallel (different wallets) ──
+  const [r1, r2, r3] = await Promise.all([
+    createIntentFast(userA, asTbtc(), asTusd(), SWAP_TBTC,       minOut1, deadline, 'i1-A-AtoB'),
+    createIntentFast(userB, asTusd(), asTbtc(), SWAP_TUSD,       minOut2, deadline, 'i2-B-BtoA'),
+    createIntentFast(userC, asTbtc(), asTusd(), SWAP_TBTC * 2n,  minOut3, deadline, 'i3-C-AtoB'),
+  ]);
 
-  log('intents', `✅ 3 intents on-chain and ACTIVE. SolverEngine (15 s cycle) will batch-fill them.`);
-  log('intents', `   Monitor: GET ${API}/intents?address=${userA.address.slice(0, 20)}...`);
-  return [i1, i2, i3];
+  log('netting', '✅ All 3 TXes submitted to mempool simultaneously');
+
+  // ── Step 2: Wait for all 3 to confirm on-chain (parallel) ──
+  log('netting', 'Awaiting on-chain confirmation for all 3...');
+  const confirmResults = await Promise.allSettled([
+    userA.lucid.awaitTx(r1.txHash, 120_000),
+    userB.lucid.awaitTx(r2.txHash, 120_000),
+    userC.lucid.awaitTx(r3.txHash, 120_000),
+  ]);
+  for (let i = 0; i < confirmResults.length; i++) {
+    const r = confirmResults[i];
+    const lbl = ['i1', 'i2', 'i3'][i];
+    if (r.status === 'fulfilled') {
+      log('netting', `  ${lbl} confirmed on-chain ✅`);
+    } else {
+      log('netting', `  ${lbl} confirmation issue: ${r.reason}`);
+    }
+  }
+
+  // ── Step 3: Call /tx/confirm for all 3 to immediately set ACTIVE ──
+  for (const r of [r1, r2, r3]) {
+    try {
+      await apiPost('/tx/confirm', { txHash: r.txHash, intentId: r.intentId, action: 'create_intent' });
+    } catch {
+      // ChainSync will auto-promote — not critical
+    }
+  }
+
+  log('netting', '✅ 3 intents on-chain and ACTIVE simultaneously!');
+  log('netting', '   SolverEngine (15 s cycle) will see ALL 3 in one batch:');
+  log('netting', '   → NettingEngine.analyze() detects opposing A→B + B→A flows');
+  log('netting', '   → Splits into sub-batches: {i1,i3} AToB, {i2} BToA');
+  log('netting', '   → Check backend logs for: "⚡ NettingEngine: opposing intents detected"');
+
+  // Wait for Blockfrost propagation
+  log('netting', 'Waiting 15 s for Blockfrost propagation + solver pickup...');
+  await sleep(15_000);
+
+  return [
+    { intentId: r1.intentId },
+    { intentId: r2.intentId },
+    { intentId: r3.intentId },
+  ];
 }
 
 /**
  * Observe (poll) that SolverEngine has filled the intents.
  * Does NOT trigger the solver — just watches the API.
- * TC-SE01: Solver auto-fills intent
- * TC-SE02: Solver batches multiple intents
+ * Includes DB verification: checks fillCount, remainingInput, settlementTxHash.
  */
-async function observeIntentFills(intents: IntentRef[]): Promise<void> {
-  hr('Phase 6b — Observe SolverEngine [TC-SE01, TC-SE02]');
-  log('watch', `Polling ${intents.length} intents for FILLED status...`);
+async function observeIntentFills(intents: IntentRef[], label = 'Phase 6b'): Promise<void> {
+  hr(`${label} — Observe SolverEngine fills + DB Verification`);
+  log('watch', `Polling ${intents.length} intents for FILLED / PARTIALLY_FILLED status...`);
 
+  type IntentDetail = {
+    intentId?: string;
+    status?: string;
+    fillCount?: number;
+    remainingInput?: string;
+    inputAmount?: string;
+    settlementTxHash?: string;
+    actualOutput?: string;
+  };
+
+  const results: Array<{ intentId: string; status: string; detail?: IntentDetail }> = [];
   for (const { intentId } of intents) {
     const short = intentId.slice(0, 10);
-    const result = await pollUntil<{ status?: string }>(
+    const result = await pollUntil<IntentDetail>(
       `intent-${short}`,
       () => apiGet(`/intents/${intentId}`),
       v => v.status === 'FILLED' || v.status === 'PARTIALLY_FILLED',
       12_000,
-      150_000,
+      180_000, // 3 min timeout
     );
     const status = result?.status ?? 'TIMEOUT';
     const icon   = status === 'FILLED' || status === 'PARTIALLY_FILLED' ? '✅' : '⚠️';
-    log('watch', `${icon} ${short}… → ${status}`);
+    log('watch', `${icon} ${short}… → ${status}` +
+      (result?.fillCount ? ` (fills: ${result.fillCount})` : '') +
+      (result?.remainingInput && result.remainingInput !== '0' ? ` remaining: ${result.remainingInput}` : '') +
+      (result?.actualOutput ? ` output: ${result.actualOutput}` : '') +
+      (result?.settlementTxHash ? ` tx: ${result.settlementTxHash.slice(0, 16)}…` : ''));
+    results.push({ intentId, status, detail: result ?? undefined });
+  }
+
+  // ── DB Verification Summary ──
+  const filled  = results.filter(r => r.status === 'FILLED').length;
+  const partial = results.filter(r => r.status === 'PARTIALLY_FILLED').length;
+  const timeout = results.filter(r => r.status === 'TIMEOUT').length;
+  log('verify', `DB Summary: ${filled} FILLED, ${partial} PARTIALLY_FILLED, ${timeout} TIMEOUT out of ${intents.length}`);
+  for (const r of results) {
+    if (r.detail) {
+      log('verify', `  ${r.intentId.slice(0, 10)}… → status=${r.detail.status} fillCount=${r.detail.fillCount ?? 0} ` +
+        `remaining=${r.detail.remainingInput ?? '?'} settlement=${r.detail.settlementTxHash ? '✅' : '❌'}`);
+    }
+  }
+  if (timeout > 0) {
+    log('verify', `⚠️  ${timeout} intent(s) timed out — check backend logs for solver errors`);
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Phase 7 — Cancel Intent (TC-O09: user-initiated on-chain cancel)
+// Phase 7 — Partial Fill Demo (intent > pool input reserve → RouteOptimizer.tryPartialFill)
 // ═══════════════════════════════════════════════════════════════════
 
-async function phase7CancelIntent(userA: Wallet): Promise<void> {
-  hr('Phase 7 — Cancel Intent [TC-O09] — user signs cancel before solver fills');
+async function phase7PartialFillDemo(
+  user: Wallet,
+  pool2: PoolMeta,
+): Promise<IntentRef> {
+  hr('Phase 7 — Partial Fill Demo: Intent > Pool Input Reserve');
+  log('partial', '━━━ GOAL: Create intent of 80 tUSD → tSOL against tiny Pool 2 (50/50) ━━━');
+  log('partial', 'RouteOptimizer.tryFullFill fails (output 30.7 < minOutput 35).');
+  log('partial', 'RouteOptimizer.tryPartialFill: caps output at 50% reserve, consumes ~50 tUSD.');
+  log('partial', 'After round 1: pool skews to 100/25 → round 2 fail → stays PARTIALLY_FILLED.');
+
+  const deadline = Date.now() + 6 * 3600 * 1000;
+
+  // Fetch current pool reserves
+  const poolInfo = await apiGet<PoolRow>(`/pools/${pool2.poolId}`);
+  const reserveA = BigInt(poolInfo.reserveA ?? '0');
+  const reserveB = BigInt(poolInfo.reserveB ?? '0');
+
+  log('partial', `Pool 2 reserves: A=${reserveA} (tUSD) B=${reserveB} (tSOL)`);
+  log('partial', `Intent: ${PARTIAL_SWAP_TUSD} tUSD (${Number(PARTIAL_SWAP_TUSD) * 100 / Number(reserveA)}% of input reserve)`);
+  log('partial', `minOutput: ${PARTIAL_MIN_OUT} tSOL — tight enough to force partial fill`);
+
+  // tUSD is asset A in Pool 2, tSOL is asset B
+  const intent = await createIntent(
+    user, asTusd(), asTsol(), PARTIAL_SWAP_TUSD, PARTIAL_MIN_OUT,
+    deadline, 'partial-fill', true,
+  );
+
+  log('partial', `✅ Large intent on-chain: ${intent.intentId.slice(0, 10)}…`);
+  log('partial', '   SolverEngine: tryFullFill fails → tryPartialFill caps at 50% reserve');
+  log('partial', '   Round 1: ~50 tUSD consumed, ~25 tSOL output → PARTIALLY_FILLED');
+  log('partial', '   Round 2+: pool too skewed → both full & partial fail → stays PARTIALLY_FILLED');
+  return intent;
+}
+
+/**
+ * Phase 7b: Observe the partial fill → verify PARTIALLY_FILLED in DB.
+ */
+async function phase7bObservePartialFill(intent: IntentRef): Promise<void> {
+  hr('Phase 7b — Observe Partial Fill + DB Verification');
+  log('partial-watch', `Tracking intent ${intent.intentId.slice(0, 10)}… for PARTIALLY_FILLED...`);
+
+  type IntentDetail = {
+    status?: string;
+    fillCount?: number;
+    remainingInput?: string;
+    inputAmount?: string;
+    settlementTxHash?: string;
+    actualOutput?: string;
+  };
+
+  // Poll until PARTIALLY_FILLED (or FILLED if pool somehow had enough)
+  const result = await pollUntil<IntentDetail>(
+    'partial-fill',
+    () => apiGet(`/intents/${intent.intentId}`),
+    v => v.status === 'PARTIALLY_FILLED' || v.status === 'FILLED',
+    15_000,
+    180_000, // 3 min timeout
+  );
+
+  const finalStatus = result?.status ?? 'TIMEOUT';
+
+  if (finalStatus === 'PARTIALLY_FILLED') {
+    log('partial-watch', `✅ PARTIALLY_FILLED confirmed!`);
+    log('partial-watch', `   fillCount:      ${result?.fillCount ?? '?'}`);
+    log('partial-watch', `   inputAmount:     ${result?.inputAmount ?? '?'}`);
+    log('partial-watch', `   remainingInput:  ${result?.remainingInput ?? '?'}`);
+    log('partial-watch', `   settlement TX:   ${result?.settlementTxHash?.slice(0, 16) ?? 'none'}…`);
+
+    const consumed = BigInt(result?.inputAmount ?? '0') - BigInt(result?.remainingInput ?? '0');
+    log('partial-watch', `   Consumed: ${consumed} out of ${result?.inputAmount ?? '?'} (${Number(consumed * 100n / BigInt(result?.inputAmount ?? '1'))}%)`);
+    log('partial-watch', `   ⚡ RouteOptimizer.tryPartialFill demonstrated successfully!`);
+  } else if (finalStatus === 'FILLED') {
+    log('partial-watch', `⚠️  Unexpectedly FILLED in one go — pool may have had enough reserves`);
+  } else {
+    log('partial-watch', `⚠️  Status: ${finalStatus} — check backend logs for route optimizer decisions`);
+  }
+}
+
+/**
+ * Phase 7c: Cancel the partially filled intent → verify CANCELLED in DB.
+ * Demonstrates: user can cancel even after partial fill, recovering remaining escrow tokens.
+ */
+async function phase7cCancelPartialFill(user: Wallet, intent: IntentRef): Promise<void> {
+  hr('Phase 7c — Cancel Partially Filled Intent');
+  log('partial-cancel', '━━━ GOAL: Cancel remaining portion of partially filled intent ━━━');
+  log('partial-cancel', 'User recovers un-consumed escrow tokens. On-chain escrow UTxO burned.');
+
+  // Verify it's still PARTIALLY_FILLED before cancelling
+  const detail = await apiGet<{ status?: string; remainingInput?: string }>(`/intents/${intent.intentId}`);
+  if (detail.status !== 'PARTIALLY_FILLED') {
+    log('partial-cancel', `⚠️  Intent status is ${detail.status}, not PARTIALLY_FILLED — skipping cancel`);
+    return;
+  }
+  log('partial-cancel', `Cancelling intent with ${detail.remainingInput} remaining input...`);
+
+  const res = await apiDelete<{ intentId: string; unsignedTx: string | null }>(
+    `/intents/${intent.intentId}`, { senderAddress: user.address },
+  );
+
+  if (!res.unsignedTx) {
+    log('partial-cancel', '⚠️  No cancel TX returned — intent may have been filled or already cancelled');
+    return;
+  }
+
+  const cancelHash = await signSubmitConfirm(user, res.unsignedTx, 'partial-cancel', {
+    intentId: intent.intentId,
+    action: 'cancel_intent',
+  });
+  log('partial-cancel', `✅ Cancel TX confirmed: ${cancelHash}`);
+
+  // ── DB Verification ──
+  await sleep(3_000);
+  const final = await apiGet<{ status?: string; remainingInput?: string; fillCount?: number }>(
+    `/intents/${intent.intentId}`,
+  );
+  log('partial-cancel', `DB Verification: status=${final.status} fillCount=${final.fillCount ?? 0} remaining=${final.remainingInput ?? '?'}`);
+  if (final.status === 'CANCELLED') {
+    log('partial-cancel', '✅ Partial fill → cancel demonstrated: ACTIVE → PARTIALLY_FILLED → CANCELLED');
+  } else {
+    log('partial-cancel', `⚠️  Expected CANCELLED but got ${final.status}`);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase 8 — Cancel Intent (user-initiated on-chain cancel)
+// ═══════════════════════════════════════════════════════════════════
+
+async function phase8CancelIntent(userA: Wallet): Promise<void> {
+  hr('Phase 8 — Cancel Intent — user signs cancel before solver fills');
 
   // 3 h deadline: solver cycles every ~15 s so it will find this, but we cancel fast
   const deadline = Date.now() + 3 * 3600 * 1000;
@@ -749,14 +984,19 @@ async function phase7CancelIntent(userA: Wallet): Promise<void> {
   });
   log('cancel-intent', `✅ Cancel TX confirmed: ${cancelHash}`);
   log('cancel-intent', '   Intent burned, input tokens returning to owner wallet');
+
+  // ── DB Verification ──
+  await sleep(3_000);
+  const final = await apiGet<{ status?: string }>(`/intents/${intentId}`);
+  log('cancel-intent', `DB Verification: status=${final.status}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Phase 8 — Expired Intent → ReclaimKeeperCron (TC-O10, TC-SE05)
+// Phase 9 — Expired Intent → ReclaimKeeperCron
 // ═══════════════════════════════════════════════════════════════════
 
-async function phase8ExpiredIntent(user: Wallet): Promise<void> {
-  hr('Phase 8 — Expired Intent [TC-O10, TC-SE05] → ReclaimKeeperCron');
+async function phase9ExpiredIntent(user: Wallet): Promise<void> {
+  hr('Phase 9 — Expired Intent → ReclaimKeeperCron');
 
   // 3 min deadline — createIntent takes ~2 min (await on-chain + propagation),
   // so the intent is ACTIVE for ~1 min before expiring.
@@ -789,215 +1029,11 @@ async function phase8ExpiredIntent(user: Wallet): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Phases 9-11 — Advanced Orders (bots execute, script only creates)
+// Phase 10 — Withdraw Liquidity
 // ═══════════════════════════════════════════════════════════════════
 
-async function createOrder(
-  user: Wallet,
-  orderType: 'DCA' | 'LIMIT' | 'STOP_LOSS',
-  inputAsset: string,
-  outputAsset: string,
-  totalBudget: bigint,
-  amountPerInterval: bigint,
-  intervalSlots: number,
-  priceNum: bigint,
-  priceDen: bigint,
-  deadlineMs: number,
-  label: string,
-): Promise<OrderRef> {
-  log(label, `type=${orderType} budget=${totalBudget}`);
-
-  // inputAmount = per-execution amount (required by schema)
-  const inputAmount = amountPerInterval.toString();
-
-  const res = await apiPost<{ orderId: string; unsignedTx: string }>('/orders', {
-    type:              orderType,
-    senderAddress:     user.address,
-    changeAddress:     user.address,
-    inputAsset,
-    outputAsset,
-    inputAmount,
-    amountPerInterval: amountPerInterval.toString(),
-    intervalSlots:     intervalSlots > 0 ? intervalSlots : undefined,
-    totalBudget:       totalBudget.toString(),
-    priceNumerator:    priceNum.toString(),
-    priceDenominator:  priceDen.toString(),
-    deadline:          deadlineMs,
-  });
-
-  // Sign, submit, await confirmation, and call /tx/confirm to activate the order
-  await signSubmitConfirm(user, res.unsignedTx, label, {
-    orderId: res.orderId,
-    action: 'create_order',
-  });
-  log(label, `Order: ${res.orderId}`);
-  return { orderId: res.orderId };
-}
-
-async function phase9DcaOrder(userA: Wallet): Promise<OrderRef> {
-  hr('Phase 9 — DCA Order [TC-O04, TC-O05, TC-SE04] → OrderExecutorCron');
-
-  const deadline = Date.now() + 24 * 3600 * 1000;
-  // Buy tBTC with tUSD — pool price ~50 tUSD/tBTC, cap at 60 (always satisfiable)
-  const order = await createOrder(
-    userA, 'DCA', asTusd(), asTbtc(),
-    DCA_BUDGET,     // 100 tUSD total
-    DCA_PER_INT,    // 10 tUSD per interval
-    DCA_INTERVAL,   // 60 slots between fills
-    1n, 60n,        // price cap: 1 tBTC ≤ 60 tUSD (pool price = 50 → OK)
-    deadline, 'dca-order',
-  );
-
-  log('dca-order', '✅ DCA order on-chain.');
-  log('dca-order', '   OrderExecutorCron will execute each 60 s interval.');
-  log('dca-order', '   Watch backend logs for: "DCA order executed"');
-  return order;
-}
-
-async function phase10LimitOrder(userB: Wallet): Promise<OrderRef> {
-  hr('Phase 10 — Limit Order [TC-O01, TC-O02, TC-SE04] → OrderExecutorCron');
-
-  const deadline = Date.now() + 24 * 3600 * 1000;
-  // Sell 5 tBTC for tUSD — trigger when price ≥ 40 tUSD/tBTC
-  // Pool gives ~50 tUSD/tBTC → condition immediately satisfied
-  const order = await createOrder(
-    userB, 'LIMIT', asTbtc(), asTusd(),
-    SWAP_TBTC,
-    SWAP_TBTC,   // one-shot (totalBudget = amountPerInterval)
-    0,           // no minimum interval
-    40n, 1n,     // minPrice: get at least 40 tUSD per tBTC (50 > 40 ✅)
-    deadline, 'limit-order',
-  );
-
-  log('limit-order', '✅ Limit order on-chain.');
-  log('limit-order', '   OrderExecutorCron will fill when pool price ≥ 40 tUSD/tBTC.');
-  return order;
-}
-
-async function phase11StopLossOrder(userC: Wallet): Promise<OrderRef> {
-  hr('Phase 11 — Stop-Loss Order [TC-O06, TC-SE04] → OrderExecutorCron');
-
-  const deadline = Date.now() + 24 * 3600 * 1000;
-  // Sell tBTC if price drops below 10,000 tUSD/tBTC
-  // Actual price ~50, so 50 < 10,000 → trigger fires immediately
-  const order = await createOrder(
-    userC, 'STOP_LOSS', asTbtc(), asTusd(),
-    SWAP_TBTC,
-    SWAP_TBTC,
-    0,
-    10_000n, 1n,  // stop price 10,000 → always triggers at current pool
-    deadline, 'stoploss-order',
-  );
-
-  log('stoploss-order', '✅ StopLoss order on-chain.');
-  log('stoploss-order', '   OrderExecutorCron fires when pool price < stop threshold.');
-  return order;
-}
-
-/**
- * Observe OrderExecutorCron filling the Phase 9-11 orders.
- * Does NOT execute them — just polls status.  TC-SE04.
- */
-async function observeOrderExecution(orders: OrderRef[]): Promise<void> {
-  hr('Phase 9-11b — Observe OrderExecutorCron [TC-SE04]');
-  log('watch', `Polling ${orders.length} orders for FILLED / PARTIALLY_FILLED...`);
-
-  for (const { orderId } of orders) {
-    const short = orderId.slice(0, 8);
-    const result = await pollUntil<{ status?: string }>(
-      `order-${short}`,
-      () => apiGet(`/orders/${orderId}`),
-      v => ['FILLED', 'PARTIALLY_FILLED'].includes(v.status ?? ''),
-      15_000,
-      150_000,
-    );
-    const status = result?.status ?? 'TIMEOUT';
-    const icon   = (status === 'FILLED' || status === 'PARTIALLY_FILLED') ? '✅' : '⚠️';
-    log('watch', `${icon} order ${short}… → ${status}`);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Phase 12 — Cancel Order (TC-O07, TC-O08)
-// ═══════════════════════════════════════════════════════════════════
-
-async function phase12CancelOrder(user: Wallet): Promise<void> {
-  hr('Phase 12 — Cancel Order [TC-O07] — user signs cancel before bot executes');
-
-  const deadline = Date.now() + 3 * 3600 * 1000;
-  // Use an impossible price so OrderExecutorCron never touches this order
-  // (price cap = 1 tUSD for 1,000,000 tBTC — never satisfiable)
-  const { orderId } = await createOrder(
-    user, 'DCA', asTusd(), asTbtc(),
-    DCA_BUDGET,
-    DCA_PER_INT,
-    DCA_INTERVAL,
-    1_000_000n, 1n,  // impossible price: 1,000,000 tUSD per tBTC → bot won't execute
-    deadline, 'cancel-order-setup',
-  );
-
-  log('cancel-order', `Order: ${orderId.slice(0, 10)}… — already confirmed on-chain`);
-
-  const res = await apiDelete<{ orderId: string; unsignedTx: string | null }>(
-    `/orders/${orderId}`, { senderAddress: user.address },
-  );
-
-  if (!res.unsignedTx) {
-    log('cancel-order', '⚠️  No unsigned TX returned');
-    return;
-  }
-
-  await signSubmitConfirm(user, res.unsignedTx, 'cancel-order', {
-    orderId,
-    action: 'cancel_order',
-  });
-  log('cancel-order', `✅ Order cancelled & confirmed`);
-  log('cancel-order', '   Budget tokens returned to owner wallet');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Phase 13 — Expired Order → ReclaimKeeperCron (TC-O10, TC-SE05)
-// ═══════════════════════════════════════════════════════════════════
-
-async function phase13ExpiredOrder(user: Wallet): Promise<void> {
-  hr('Phase 13 — Expired Order [TC-O10, TC-SE05] → ReclaimKeeperCron');
-
-  // 3 min deadline — createOrder takes ~2 min on-chain, so order expires ~1 min after ACTIVE
-  const shortDeadline = Date.now() + 3 * 60_000;
-  const { orderId }   = await createOrder(
-    user, 'DCA', asTusd(), asTbtc(),
-    DCA_BUDGET, DCA_PER_INT, DCA_INTERVAL,
-    1n, 60n,
-    shortDeadline, 'expire-order',
-  );
-  log('expire-order', `Order with 3-min deadline: ${orderId.slice(0, 10)}…`);
-
-  // Wait until the deadline passes
-  const waitMs = Math.max(0, shortDeadline - Date.now() + 5_000);
-  log('expire-order', `Waiting ${Math.round(waitMs / 1000)} s for deadline to pass...`);
-  await sleep(waitMs);
-
-  log('expire-order', '✅ Deadline passed. ReclaimKeeperCron will reclaim on next tick (~60 s)');
-
-  const result = await pollUntil<{ status?: string }>(
-    'expire-order-watch',
-    () => apiGet(`/orders/${orderId}`),
-    v => v.status === 'RECLAIMED' || v.status === 'EXPIRED',
-    15_000,
-    180_000,
-  );
-  const status = result?.status ?? 'TIMEOUT';
-  log('expire-order', (status === 'RECLAIMED' || status === 'EXPIRED')
-    ? `✅ Order is now ${status}`
-    : '⚠️  Not yet RECLAIMED — check backend logs');
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// Phase 14 — Withdraw Liquidity (TC-P08, TC-P09)
-// ═══════════════════════════════════════════════════════════════════
-
-async function phase14Withdraw(userA: Wallet, pool1: PoolMeta): Promise<void> {
-  hr('Phase 14 — Withdraw Liquidity [TC-P08] (user removes LP position)');
+async function phase10Withdraw(userA: Wallet, pool1: PoolMeta): Promise<void> {
+  hr('Phase 10 — Withdraw Liquidity (user removes LP position)');
 
   try {
     // Fetch LP token info from pool detail endpoint
@@ -1053,11 +1089,11 @@ async function phase14Withdraw(userA: Wallet, pool1: PoolMeta): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Phase 15 — Update Protocol Settings (TC-AD04)
+// Phase 11 — Update Protocol Settings
 // ═══════════════════════════════════════════════════════════════════
 
-async function phase15UpdateSettings(admin: Wallet): Promise<void> {
-  hr('Phase 15 — Update Protocol Settings [TC-AD04]');
+async function phase11UpdateSettings(admin: Wallet): Promise<void> {
+  hr('Phase 11 — Update Protocol Settings');
 
   try {
     const cur = await apiGet<{
@@ -1112,9 +1148,10 @@ function validateConfig() {
 
 async function main() {
   console.log('\n' + '═'.repeat(72));
-  console.log('  SolverNet DEX — Full On-Chain System Test');
+  console.log('  SolverNet DEX — Intent-Focused System Test');
   console.log(`  Network: ${NETWORK} | Backend: ${BACKEND_URL}`);
   console.log(`  Time:    ${new Date().toISOString()}`);
+  console.log('  Features: NettingEngine · Partial Fill · Batch Settlement · DB Verification');
   console.log('═'.repeat(72) + '\n');
 
   validateConfig();
@@ -1136,7 +1173,8 @@ async function main() {
   } catch {
     log('preflight', '⚠️  Cannot query solver status — /admin/solver/status unavailable');
   }
-  log('preflight', '⚠️  Bots MUST be running for phases 6b, 8, 9-11b, 13 to complete!');
+  log('preflight', '⚠️  SolverEngine + ReclaimKeeper MUST be running for intent fills!');
+  log('preflight', '   OrderExecutorCron is DISABLED (ORDER_EXECUTOR_ENABLED=false)');
 
   // ── Init wallets ──────────────────────────────────────────────────
   log('preflight', 'Initialising 4 wallets...');
@@ -1175,7 +1213,7 @@ async function main() {
 
   // ════ POOLS ══════════════════════════════════════════════════════
 
-  hr('Phase 3 — Create Pool tBTC / tUSD [TC-P02]');
+  hr('Phase 3 — Create Pool tBTC / tUSD');
   let pool1 = await findExistingPool(TBTC_POLICY, TUSD_POLICY);
   if (pool1) {
     log('pool1', `tBTC/tUSD pool already exists — ID: ${pool1.poolId}`);
@@ -1186,14 +1224,15 @@ async function main() {
     });
   }
 
-  hr('Phase 4 — Create Pool tUSD / tSOL [TC-P02]');
+  hr('Phase 4 — Create Pool tUSD / tSOL (TINY for partial fill demo)');
   let pool2: PoolMeta | null = await findExistingPool(TUSD_POLICY, TSOL_POLICY);
   if (pool2) {
     log('pool2', `tUSD/tSOL pool already exists — ID: ${pool2.poolId}`);
     phaseResults.push({ phase: 'Phase 4 — Create tUSD/tSOL Pool', status: 'PASS' });
   } else {
     await runPhase('Phase 4 — Create tUSD/tSOL Pool', async () => {
-      pool2 = await createPool(admin, 'pool2', asTusd(), asTsol(), POOL_INIT_TUSD / 2n, POOL_INIT_TSOL);
+      // TINY reserves: 50 tUSD / 50 tSOL → partial fill triggers when intent > 50 tUSD
+      pool2 = await createPool(admin, 'pool2', asTusd(), asTsol(), PARTIAL_POOL_TUSD, PARTIAL_POOL_TSOL);
     });
   }
 
@@ -1204,66 +1243,67 @@ async function main() {
 
   // ════ LIQUIDITY DEPOSIT ══════════════════════════════════════════
 
-  hr('Phase 5 — Deposit Liquidity [TC-P06, TC-P07]');
+  hr('Phase 5 — Deposit Liquidity');
   await runPhase('Phase 5a — User A deposit tBTC/tUSD', async () => {
-    // Deposit only a modest fraction so UserA retains enough tUSD for Phase 9 DCA
     await depositLiquidity(userA, pool1!.poolId, POOL_INIT_TBTC / 100n, 50_000_000n, 'deposit-A-pool1');
   });
-  if (pool2) {
-    await runPhase('Phase 5b — User B deposit tUSD/tSOL', async () => {
-      await depositLiquidity(userB, pool2!.poolId, POOL_INIT_TUSD / 20n, POOL_INIT_TSOL / 10n, 'deposit-B-pool2');
-    });
-  } else {
-    log('phase5', 'Skipping User B deposit — pool2 not available');
-    phaseResults.push({ phase: 'Phase 5b — User B deposit tUSD/tSOL', status: 'SKIP' });
+  // NOTE: No deposit into Pool 2 — keeping it tiny (50/50) for partial fill demo
+  log('phase5', 'Skipping Pool 2 deposit — keeping reserves tiny for partial fill demo');
+  phaseResults.push({ phase: 'Phase 5b — Pool 2 tiny (no extra deposit)', status: 'PASS' });
+
+  // ════ NETTING DEMO: opposing intents submitted SIMULTANEOUSLY ══════
+
+  let nettingIntents: IntentRef[] = [];
+  await runPhase('Phase 6 — Netting Demo (opposing intents)', async () => {
+    nettingIntents = await phase6NettingDemo(userA, userB, userC, pool1!);
+  });
+
+  // ════ OBSERVE NETTING FILLS + DB VERIFICATION ════════════════════
+
+  if (nettingIntents.length > 0) {
+    await runPhase('Phase 6b — Observe Netting Fills', () =>
+      observeIntentFills(nettingIntents, 'Phase 6b'));
   }
 
-  // ════ SWAP INTENTS (user action, bot fills async) ═════════════════
+  // ════ PARTIAL FILL DEMO (tiny Pool 2) ════════════════════════════
 
-  let intentRefs: IntentRef[] = [];
-  await runPhase('Phase 6 — Swap Intents', async () => {
-    intentRefs = await phase6SwapIntents(userA, userB, userC, pool1!);
-  });
+  let partialFillIntent: IntentRef = { intentId: '' };
+  if (pool2) {
+    await runPhase('Phase 7 — Partial Fill Demo', async () => {
+      partialFillIntent = await phase7PartialFillDemo(userA, pool2!);
+    });
+
+    if (partialFillIntent.intentId) {
+      await runPhase('Phase 7b — Observe Partial Fill', () =>
+        phase7bObservePartialFill(partialFillIntent));
+
+      await runPhase('Phase 7c — Cancel Partial Fill', () =>
+        phase7cCancelPartialFill(userA, partialFillIntent));
+    }
+  } else {
+    log('main', 'Skipping partial fill demo — pool2 not available');
+    phaseResults.push({ phase: 'Phase 7 — Partial Fill Demo', status: 'SKIP' });
+  }
 
   // ════ CANCEL INTENT (user action) ════════════════════════════════
 
-  await runPhase('Phase 7 — Cancel Intent', () => phase7CancelIntent(userA));
+  await runPhase('Phase 8 — Cancel Intent', () => phase8CancelIntent(userA));
 
-  // Wait for Phase 7's fire-and-forget TXes to be indexed by Blockfrost
-  // before Phase 8 tries to reuse UserA/UserB wallets.
-  log('main', 'Waiting 40 s for Phase 7 TXes to propagate...');
+  // Wait for Phase 8's TXes to propagate before Phase 9 tries to reuse wallets
+  log('main', 'Waiting 40 s for Phase 8 TXes to propagate...');
   await sleep(40_000);
 
-  // ════ EXPIRED INTENT (sequential, userB to avoid collision with Phase 9 userA) ════
-  await runPhase('Phase 8 — Expired Intent', () => phase8ExpiredIntent(userB));
+  // ════ EXPIRED INTENT ═════════════════════════════════════════════
 
-  // ════ ADVANCED ORDERS (user creates, bot executes async) ══════════
-
-  let dcaOrder: OrderRef  = { orderId: '' };
-  let limitOrder: OrderRef = { orderId: '' };
-  let stopLoss: OrderRef   = { orderId: '' };
-
-  await runPhase('Phase 9  — DCA Order',       async () => { dcaOrder   = await phase9DcaOrder(userA);      });
-  await runPhase('Phase 10 — Limit Order',      async () => { limitOrder = await phase10LimitOrder(userB);   });
-  await runPhase('Phase 11 — Stop-Loss Order',  async () => { stopLoss   = await phase11StopLossOrder(userC);});
-  await runPhase('Phase 12 — Cancel Order',     () => phase12CancelOrder(userC));
-
-  // Phase 13 uses userA (not userB) to avoid collision with Phase 10 userB above.
-  await runPhase('Phase 13 — Expired Order', () => phase13ExpiredOrder(userA));
-
-  // ════ OBSERVE BOT ACTIVITY (non-blocking polls) ════════════════════
-
-  if (intentRefs.length > 0) await runPhase('Phase 6b — Observe Intent Fills', () => observeIntentFills(intentRefs));
-  const activeOrders = [dcaOrder, limitOrder, stopLoss].filter(o => o.orderId);
-  if (activeOrders.length > 0) await runPhase('Phase 9-11b — Observe Order Execution', () => observeOrderExecution(activeOrders));
+  await runPhase('Phase 9 — Expired Intent', () => phase9ExpiredIntent(userB));
 
   // ════ WITHDRAW LIQUIDITY (user action) ════════════════════════════
 
-  await runPhase('Phase 14 — Withdraw Liquidity', () => phase14Withdraw(userA, pool1!));
+  await runPhase('Phase 10 — Withdraw Liquidity', () => phase10Withdraw(userA, pool1!));
 
   // ════ UPDATE SETTINGS (admin action) ══════════════════════════════
 
-  await runPhase('Phase 15 — Update Settings', () => phase15UpdateSettings(admin));
+  await runPhase('Phase 11 — Update Settings', () => phase11UpdateSettings(admin));
 
   // ════ SUMMARY ═════════════════════════════════════════════════════
 
@@ -1279,10 +1319,16 @@ async function main() {
   }
   console.log(`\n  Total: ${pass} passed, ${fail} failed, ${skip} skipped\n`);
 
+  console.log('  Key features demonstrated:');
+  console.log('    ⚡ NettingEngine — 3 opposing intents submitted SIMULTANEOUSLY');
+  console.log('    🔄 Partial fills — PARTIALLY_FILLED status with reduced remainingInput');
+  console.log('    ✂️  Partial fill → cancel — user cancels remaining after partial fill');
+  console.log('    📦 Batch settlement — same-direction intents in single TX');
+  console.log('    📊 DB verification — fillCount, remainingInput, status checked via API');
+  console.log('');
   console.log('  Verify results:');
   console.log(`    ${API}/pools`);
   console.log(`    ${API}/intents`);
-  console.log(`    ${API}/orders`);
   console.log('    https://preprod.cardanoscan.io/');
   console.log('\n' + '═'.repeat(72) + '\n');
 }

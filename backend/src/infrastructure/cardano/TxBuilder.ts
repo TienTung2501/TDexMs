@@ -713,9 +713,10 @@ export class TxBuilder implements ITxBuilder {
         this.getEscrowScripts();
 
       const userUtxos = await lucid.utxosAt(params.senderAddress);
-      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
 
       // Find the specific escrow UTxO for this intent
+      // NOTE: selectWallet is deferred until right before tx.complete() to
+      // prevent cron jobs from overriding the shared Lucid singleton's wallet.
       let escrowUtxo: LucidUTxO | undefined;
 
       // Prefer direct lookup by UTxO reference (escrowTxHash#outputIndex)
@@ -758,8 +759,13 @@ export class TxBuilder implements ITxBuilder {
       const escrowFields = escrowDatumParsed.fields;
       const escrowTokenAsset = escrowFields[0] as Constr<Data>;
       const intentId = escrowTokenAsset.fields[1] as string;
+      const ownerPlutus = escrowFields[1] as Constr<Data>;     // datum.owner (Plutus Address)
       const inputAsset = escrowFields[2] as Constr<Data>;
       const remainingInput = escrowFields[9] as bigint;
+
+      // Validator checks: out.address == datum.owner
+      // MUST pay to the address from datum, not necessarily params.senderAddress
+      const ownerAddress = plutusAddressToAddress(ownerPlutus, this.network);
 
       // Build explicit owner payment (validator requires check_payment_output_secure)
       const inputPolicyId = inputAsset.fields[0] as string;
@@ -773,6 +779,10 @@ export class TxBuilder implements ITxBuilder {
         ownerPayment[inputUnit] = remainingInput;
       }
 
+      // Select wallet IMMEDIATELY before building + completing the TX
+      // to avoid race conditions with cron jobs overriding the shared Lucid wallet.
+      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
+
       const tx = lucid
         .newTx()
         .collectFrom([escrowUtxo], EscrowRedeemer.Cancel())
@@ -780,7 +790,7 @@ export class TxBuilder implements ITxBuilder {
         .mintAssets({ [intentTokenUnit]: -1n }, IntentTokenRedeemer.Burn())
         .attach.MintingPolicy(intentPolicyScript)
         .pay.ToAddressWithData(
-          params.senderAddress,
+          ownerAddress,
           { kind: 'inline', value: Data.to(intentId) },
           ownerPayment,
         )
@@ -815,9 +825,21 @@ export class TxBuilder implements ITxBuilder {
       const lucid = await this.getLucid();
       const r = this.getResolved();
 
-      // Parse assets
-      const assetA = AssetId.fromString(params.assetAId);
-      const assetB = AssetId.fromString(params.assetBId);
+      // Parse assets and enforce canonical ordering (asset_a < asset_b)
+      let assetA = AssetId.fromString(params.assetAId);
+      let assetB = AssetId.fromString(params.assetBId);
+      let amountA = params.initialAmountA;
+      let amountB = params.initialAmountB;
+
+      // Factory validator requires asset_class_less_than(asset_a, asset_b)
+      // Compare policy IDs first, then asset names if same policy
+      const needsSwap = assetA.policyId > assetB.policyId ||
+        (assetA.policyId === assetB.policyId && assetA.assetName > assetB.assetName);
+      if (needsSwap) {
+        [assetA, assetB] = [assetB, assetA];
+        [amountA, amountB] = [amountB, amountA];
+        this.logger.info('Swapped asset order to enforce canonical ordering (A < B)');
+      }
 
       // User UTxOs
       const userUtxos = await lucid.utxosAt(params.creatorAddress);
@@ -837,7 +859,7 @@ export class TxBuilder implements ITxBuilder {
       const lpTokenUnit = toUnit(r.lpPolicyId, poolNftNameHex);
 
       // Initial LP tokens: sqrt(a * b) - 1000 (Minimum Liquidity locked)
-      const sqrtAB = bigIntSqrt(params.initialAmountA * params.initialAmountB);
+      const sqrtAB = bigIntSqrt(amountA * amountB);
       const initialLp = sqrtAB - 1000n;
       if (initialLp <= 0n) {
         throw new ChainError('Initial liquidity too low');
@@ -869,22 +891,22 @@ export class TxBuilder implements ITxBuilder {
         ? 'lovelace'
         : toUnit(assetB.policyId, assetB.assetName);
       if (unitA === 'lovelace') {
-        poolAssets.lovelace += params.initialAmountA;
+        poolAssets.lovelace += amountA;
       } else {
-        poolAssets[unitA] = params.initialAmountA;
+        poolAssets[unitA] = amountA;
       }
       if (unitB === 'lovelace') {
-        poolAssets.lovelace += params.initialAmountB;
+        poolAssets.lovelace += amountB;
       } else {
-        poolAssets[unitB] = params.initialAmountB;
+        poolAssets[unitB] = amountB;
       }
 
       // Factory redeemer
       const factoryRedeemer = mkFactoryCreatePoolRedeemer(
         mkAssetClass(assetA.policyId, assetA.assetName),
         mkAssetClass(assetB.policyId, assetB.assetName),
-        params.initialAmountA,
-        params.initialAmountB,
+        amountA,
+        amountB,
         BigInt(params.feeNumerator),
       );
 
@@ -1038,34 +1060,64 @@ export class TxBuilder implements ITxBuilder {
       const activeAIn = physicalAIn - protocolFeesA;
       const activeBIn = physicalBIn - protocolFeesB;
 
+      // For subsequent deposits, enforce proportionality (matches on-chain is_proportional_deposit check).
+      // Adjust deposit amounts down so that: |depositA*reserveB - depositB*reserveA| <= max(reserveA, reserveB)
+      let depositA = params.amountA;
+      let depositB = params.amountB;
+      if (totalLpOld > 0n && activeAIn > 0n && activeBIn > 0n) {
+        // Check cross-multiplication proportionality
+        const crossA = depositA * activeBIn;
+        const crossB = depositB * activeAIn;
+        const diff = crossA >= crossB ? crossA - crossB : crossB - crossA;
+        const maxReserve = activeAIn > activeBIn ? activeAIn : activeBIn;
+        if (diff > maxReserve) {
+          // Not proportional — adjust the larger side down
+          if (crossA > crossB) {
+            // depositA is relatively too large — reduce it
+            depositA = (depositB * activeAIn) / activeBIn;
+          } else {
+            // depositB is relatively too large — reduce it
+            depositB = (depositA * activeBIn) / activeAIn;
+          }
+          this.logger.info(
+            { originalA: params.amountA.toString(), originalB: params.amountB.toString(),
+              adjustedA: depositA.toString(), adjustedB: depositB.toString() },
+            'Adjusted deposit amounts for proportionality',
+          );
+        }
+      }
+      if (depositA <= 0n || depositB <= 0n) {
+        throw new ChainError('Deposit amounts too small after proportionality adjustment');
+      }
+
       // Compute LP tokens from on-chain state (must match pool validator's calculation)
       // CRITICAL: uses ACTIVE reserves, not physical reserves
       let lpToMint: bigint;
       if (totalLpOld === 0n) {
         // Initial deposit: sqrt(depositA * depositB) - 1000
-        const sqrtAB = bigIntSqrt(params.amountA * params.amountB);
+        const sqrtAB = bigIntSqrt(depositA * depositB);
         lpToMint = sqrtAB - 1000n;
       } else {
         // Subsequent deposit: min(totalLp * depositA / activeReserveA, totalLp * depositB / activeReserveB)
-        const lpFromA = (totalLpOld * params.amountA) / activeAIn;
-        const lpFromB = (totalLpOld * params.amountB) / activeBIn;
+        const lpFromA = (totalLpOld * depositA) / activeAIn;
+        const lpFromB = (totalLpOld * depositB) / activeBIn;
         lpToMint = lpFromA < lpFromB ? lpFromA : lpFromB;
       }
       if (lpToMint <= 0n) {
         throw new ChainError('Deposit amounts too small LP tokens to mint would be 0');
       }
 
-      // Build new pool output value: existing + deposits
+      // Build new pool output value: existing + deposits (use adjusted amounts)
       const newPoolAssets: Assets = { ...poolUtxo.assets };
       if (unitA === 'lovelace') {
-        newPoolAssets.lovelace = (newPoolAssets.lovelace || 0n) + params.amountA;
+        newPoolAssets.lovelace = (newPoolAssets.lovelace || 0n) + depositA;
       } else {
-        newPoolAssets[unitA] = (newPoolAssets[unitA] || 0n) + params.amountA;
+        newPoolAssets[unitA] = (newPoolAssets[unitA] || 0n) + depositA;
       }
       if (unitB === 'lovelace') {
-        newPoolAssets.lovelace = (newPoolAssets.lovelace || 0n) + params.amountB;
+        newPoolAssets.lovelace = (newPoolAssets.lovelace || 0n) + depositB;
       } else {
-        newPoolAssets[unitB] = (newPoolAssets[unitB] || 0n) + params.amountB;
+        newPoolAssets[unitB] = (newPoolAssets[unitB] || 0n) + depositB;
       }
 
       // Compute new ACTIVE reserves for root_k
@@ -1813,17 +1865,58 @@ export class TxBuilder implements ITxBuilder {
       const lucid = await this.getLucid();
       const r = this.getResolved();
 
-      const userUtxos = await lucid.utxosAt(params.senderAddress);
-      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
+      // Fetch user + order UTxOs before selecting wallet (avoid race with cron jobs
+      // that may call selectWallet on the shared Lucid singleton during awaits)
+      const [userUtxos, orderUtxos] = await Promise.all([
+        lucid.utxosAt(params.senderAddress),
+        lucid.utxosAt(r.orderAddr),
+      ]);
 
-      // Find order UTxO by txHash + outputIndex
-      const orderUtxos = await lucid.utxosAt(r.orderAddr);
-      const orderUtxo = orderUtxos.find(
+      // Find order UTxO by txHash + outputIndex (primary lookup)
+      let orderUtxo = orderUtxos.find(
         (u) => u.txHash === params.escrowTxHash && u.outputIndex === params.escrowOutputIndex,
       );
 
+      // Fallback: scan by order auth token (UTxO ref may be stale after partial execution)
+      if (!orderUtxo) {
+        orderUtxo = orderUtxos.find((u) =>
+          Object.keys(u.assets).some((unit) => unit.startsWith(r.intentPolicyId)),
+        );
+        if (orderUtxo) {
+          this.logger.warn(
+            { foundTxHash: orderUtxo.txHash, foundIndex: orderUtxo.outputIndex },
+            'Used fallback scan to find order UTxO — escrowTxHash stale after partial execution',
+          );
+        }
+      }
+
       if (!orderUtxo) {
         throw new ChainError('Order UTxO not found on-chain');
+      }
+
+      // Parse order datum to extract owner, asset_in, and remaining_budget
+      // OrderDatum = Constr(0, [order_type, owner, asset_in, asset_out, params, order_token])
+      const orderDatumParsed = Data.from(orderUtxo.datum!) as Constr<Data>;
+      const orderFields = orderDatumParsed.fields;
+      const ownerPlutus = orderFields[1] as Constr<Data>;    // datum.owner (Plutus Address)
+      const assetIn = orderFields[2] as Constr<Data>;         // datum.asset_in (AssetClass)
+      const orderParams = orderFields[4] as Constr<Data>;     // datum.params (OrderParams)
+      const remainingBudget = orderParams.fields[5] as bigint; // params.remaining_budget
+
+      // Validator checks: check_payment_output(tx.outputs, datum.owner, datum.asset_in, datum.params.remaining_budget)
+      // MUST pay to the address from datum, not just change address
+      const ownerAddress = plutusAddressToAddress(ownerPlutus, this.network);
+
+      // Build explicit payment output for owner
+      const assetInPolicyId = assetIn.fields[0] as string;
+      const assetInAssetName = assetIn.fields[1] as string;
+      const assetInUnit = assetInPolicyId === '' ? 'lovelace' : toUnit(assetInPolicyId, assetInAssetName);
+      const ownerPayment: Assets = {};
+      if (assetInUnit === 'lovelace') {
+        ownerPayment.lovelace = remainingBudget;
+      } else {
+        ownerPayment.lovelace = MIN_SCRIPT_LOVELACE;
+        ownerPayment[assetInUnit] = remainingBudget;
       }
 
       // Find and burn order auth token
@@ -1836,10 +1929,16 @@ export class TxBuilder implements ITxBuilder {
         burnAssets[orderTokenUnit] = -1n;
       }
 
+      // Select wallet IMMEDIATELY before complete() — no awaits between here and
+      // tx.complete() to prevent cron jobs from overriding the wallet on the
+      // shared Lucid singleton via selectWallet.fromAddress(adminAddress, ...).
+      lucid.selectWallet.fromAddress(params.senderAddress, userUtxos);
+
       let tx = lucid
         .newTx()
         .collectFrom([orderUtxo], OrderRedeemer.CancelOrder())
         .attach.SpendingValidator(r.orderScript)
+        .pay.ToAddress(ownerAddress, ownerPayment)
         .addSigner(params.senderAddress);
 
       if (Object.keys(burnAssets).length > 0) {
@@ -2855,9 +2954,7 @@ export class TxBuilder implements ITxBuilder {
 
     try {
       const lucid = await this.getLucid();
-      const resolved = this.getResolved();
-
-      const factoryAddr = resolved.factoryAddr;
+      const r = this.getResolved();
 
       // Admin wallet
       const adminUtxos = await lucid.utxosAt(params.adminAddress);
@@ -2867,23 +2964,59 @@ export class TxBuilder implements ITxBuilder {
       lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
 
       // Check no factory UTxO already exists
-      const existingFactory = await lucid.utxosAt(factoryAddr);
+      const existingFactory = await lucid.utxosAt(r.factoryAddr);
       if (existingFactory.length > 0) {
         throw new ChainError('Factory UTxO already exists on-chain');
       }
 
-      // Build a simple factory datum — empty pool list
-      // FactoryDatum { pools: List<AssetClass> }
-      const factoryDatum = Data.to(new Constr(0, [[]]));
+      // Seed UTxO for one-shot factory NFT mint via intent_token_policy
+      const seedUtxo = adminUtxos[0];
+      const outRefDatum = Data.to(
+        new Constr(0, [seedUtxo.txHash, BigInt(seedUtxo.outputIndex)]),
+      );
+      const factoryNftNameHex = datumToHash(outRefDatum);
+      const factoryNftUnit = toUnit(r.intentPolicyId, factoryNftNameHex);
+
+      // Admin VKH for FactoryDatum.admin
+      const adminDetails = getAddressDetails(params.adminAddress);
+      const adminVkh = adminDetails.paymentCredential!.hash;
+
+      // Look up settings UTxO reference for FactoryDatum.settings_utxo
+      const bp = this.getBlueprint();
+      const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
+      const settingsScript = this.resolveSettingsScript(settingsBp);
+      const settingsAddr = validatorToAddress(this.network, settingsScript);
+      const settingsUtxos = await lucid.utxosAt(settingsAddr);
+      const settingsRef = settingsUtxos.length > 0
+        ? new Constr(0, [settingsUtxos[0].txHash, BigInt(settingsUtxos[0].outputIndex)])
+        : new Constr(0, ['', 0n]); // Placeholder if settings not yet deployed
+
+      // Build proper FactoryDatum with 4 fields matching Aiken type:
+      // FactoryDatum { factory_nft: AssetClass, pool_count: Int, admin: VKH, settings_utxo: OutputReference }
+      const factoryDatum = Data.to(
+        new Constr(0, [
+          mkAssetClass(r.intentPolicyId, factoryNftNameHex), // factory_nft
+          0n,                                                 // pool_count (starts at 0)
+          adminVkh,                                           // admin
+          settingsRef,                                        // settings_utxo
+        ]),
+      );
 
       const factoryAssets: Assets = {
         lovelace: MIN_SCRIPT_LOVELACE,
+        [factoryNftUnit]: 1n,
       };
 
       const tx = lucid
         .newTx()
+        .collectFrom([seedUtxo])
+        .mintAssets(
+          { [factoryNftUnit]: 1n },
+          IntentTokenRedeemer.Mint(seedUtxo.txHash, BigInt(seedUtxo.outputIndex)),
+        )
+        .attach.MintingPolicy(r.intentPolicyScript)
         .pay.ToContract(
-          factoryAddr,
+          r.factoryAddr,
           { kind: 'inline', value: factoryDatum },
           factoryAssets,
         )
@@ -2894,8 +3027,8 @@ export class TxBuilder implements ITxBuilder {
       });
 
       this.logger.info(
-        { txHash: completed.toHash(), factoryAddr },
-        'Deploy factory TX built',
+        { txHash: completed.toHash(), factoryAddr: r.factoryAddr, factoryNftUnit },
+        'Deploy factory TX built (with factory NFT thread token)',
       );
 
       return {

@@ -236,3 +236,37 @@ export function calculateMaxAbsorbableAmount(
 
   return bestAmount;
 }
+/**
+ * Tìm lượng input lớn nhất mà tại đó tỷ giá thực tế vẫn thỏa mãn 
+ * điều kiện đầu ra tối thiểu tỷ lệ thuận (pro-rata min output).
+ */
+export function calculateMaxIntentFill(
+  reserveIn: bigint,
+  reserveOut: bigint,
+  remainingInput: bigint,
+  originalInput: bigint,
+  minOutput: bigint,
+  feeNumerator: bigint,
+): bigint {
+  let lo = 0n;
+  let hi = remainingInput;
+  let bestAmount = 0n;
+
+  for (let i = 0; i < 64; i++) {
+    if (lo > hi) break;
+    const mid = (lo + hi) / 2n;
+    if (mid === 0n) { lo = 1n; continue; }
+
+    const output = calculateSwapOutput(reserveIn, reserveOut, mid, feeNumerator);
+    // Điều kiện: output >= (minOutput * mid) / originalInput
+    const proRataMin = (minOutput * mid) / originalInput;
+
+    if (output >= proRataMin) {
+      bestAmount = mid;
+      lo = mid + 1n; // Thử tăng input để khớp nhiều hơn
+    } else {
+      hi = mid - 1n; // Giá tệ quá, phải giảm input xuống
+    }
+  }
+  return bestAmount;
+}
