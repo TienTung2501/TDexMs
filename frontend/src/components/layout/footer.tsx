@@ -67,7 +67,7 @@ export function Footer() {
                 About
               </Link>
               <a
-                href="https://docs.tdexms.vercel.app"
+                href="https://docs-tdexms.vercel.app"
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"

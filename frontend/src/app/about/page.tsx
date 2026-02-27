@@ -335,7 +335,7 @@ export default function AboutPage() {
           </a>
 
           <a
-            href="https://docs.tdexms.vercel.app"
+            href="https://docs-tdexms.vercel.app"
             target="_blank"
             rel="noreferrer"
             className="group flex items-center gap-3 rounded-xl border border-border/50 p-4 hover:border-primary/30 hover:bg-primary/5 transition-colors"
@@ -345,7 +345,7 @@ export default function AboutPage() {
             </div>
             <div>
               <p className="font-semibold text-sm">Documentation</p>
-              <p className="text-xs text-muted-foreground">docs.tdexms.vercel.app</p>
+              <p className="text-xs text-muted-foreground">docs-tdexms.vercel.app</p>
             </div>
             <ExternalLink className="h-4 w-4 ml-auto text-muted-foreground group-hover:text-foreground transition-colors" />
           </a>

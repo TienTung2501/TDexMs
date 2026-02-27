@@ -29,7 +29,7 @@ const NAV_ITEMS = [
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: Shield },
   { href: "/about", label: "About", icon: Info },
-  { href: "https://docs.tdexms.vercel.app", label: "Docs", icon: BookOpen, external: true },
+  { href: "https://docs-tdexms.vercel.app", label: "Docs", icon: BookOpen, external: true },
   { href: "/cv", label: "CV", icon: User },
 ];
 

@@ -241,7 +241,7 @@ const PROJECTS = [
     links: {
       github: "https://github.com/TienTung2501/TDexMs",
       live: "https://tdexms.vercel.app/",
-      docs: "https://docs.tdexms.vercel.app",
+      docs: "https://docs-tdexms.vercel.app",
     },
     solo: true,
   },

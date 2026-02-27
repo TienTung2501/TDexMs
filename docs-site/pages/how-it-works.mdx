@@ -1,0 +1,154 @@
+# How It Works
+
+import { Callout } from 'nextra/components'
+
+A simple guide to understanding how SolverNet DEX processes your trades.
+
+## The Intent-Based Model
+
+Unlike traditional DEXs where you construct and submit a transaction directly, SolverNet DEX uses an **intent-based** approach. This means you express *what* you want to happen, and the system figures out *how* to execute it optimally.
+
+<div className="rounded-2xl bg-gradient-to-r from-gray-50 to-gray-100 dark:from-neutral-900 dark:to-neutral-800 border border-gray-200 dark:border-neutral-700 p-8 my-8">
+  <h3 className="text-xl font-bold mb-6 text-center">Trade Lifecycle</h3>
+  
+  <div className="space-y-6">
+    <div className="flex items-start gap-4">
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">1</div>
+      <div>
+        <h4 className="font-semibold text-lg">Create Intent</h4>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          You connect your wallet, choose the tokens and amounts, then sign an intent. Your tokens are sent to a secure 
+          **escrow smart contract** on the Cardano blockchain — not to any centralized server.
+        </p>
+      </div>
+    </div>
+    
+    <div className="flex items-start gap-4">
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold">2</div>
+      <div>
+        <h4 className="font-semibold text-lg">Intent Collection</h4>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          The backend monitors the blockchain for new intents. When your intent is confirmed on-chain, 
+          it enters the **solver queue** along with other pending intents from other users.
+        </p>
+      </div>
+    </div>
+    
+    <div className="flex items-start gap-4">
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold">3</div>
+      <div>
+        <h4 className="font-semibold text-lg">Netting & Matching</h4>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          The solver engine analyzes all pending intents and tries to **match opposing trades** directly. 
+          For example, if you're swapping ADA → TOKEN and someone else is swapping TOKEN → ADA, 
+          these can be matched with zero slippage for both parties.
+        </p>
+      </div>
+    </div>
+    
+    <div className="flex items-start gap-4">
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-green-600 text-white flex items-center justify-center font-bold">4</div>
+      <div>
+        <h4 className="font-semibold text-lg">AMM Routing</h4>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          Any portion of your intent that cannot be netted directly is routed through the **AMM liquidity pool**. 
+          The solver calculates the optimal split between netting and AMM to give you the best overall price.
+        </p>
+      </div>
+    </div>
+    
+    <div className="flex items-start gap-4">
+      <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold">5</div>
+      <div>
+        <h4 className="font-semibold text-lg">Batch Settlement</h4>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+          All matched and routed trades are bundled into a **single Cardano transaction** (a batch). 
+          The smart contracts verify that every user receives at least their minimum requested output. 
+          Your tokens arrive in your wallet automatically.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+## What Happens If My Intent Can't Be Matched?
+
+<Callout type="info">
+Your funds are always safe. If no matching or routing is possible, your intent simply remains pending until 
+a suitable match is found. You can cancel it at any time to reclaim your tokens.
+</Callout>
+
+There are several possible outcomes:
+
+- **Full netting** — Your entire intent is matched directly with another user (best case)
+- **Partial netting + AMM** — Part is matched directly, the rest goes through the pool
+- **Full AMM** — No matching found, the full amount goes through the liquidity pool
+- **Pending** — No viable execution at current prices; intent waits for better conditions
+- **Cancelled** — You choose to cancel and get your tokens back
+
+## Understanding Fees
+
+| Fee Type | Amount | Description |
+|----------|--------|-------------|
+| **Trade fee** | 0.3% | Standard AMM swap fee (goes to liquidity providers) |
+| **Netting fee** | 0% | Direct matches between users have no additional fee |
+| **Network fee** | ~0.2 ADA | Cardano transaction fee (shared across the batch) |
+
+<Callout type="info">
+Because SolverNet batches multiple trades into a single transaction, the Cardano network fee is split 
+among all participants — making individual trades cheaper.
+</Callout>
+
+## Cancelling an Intent
+
+You can cancel your pending intent at any time before it's settled:
+
+1. Go to the **Orders** page
+2. Find your pending intent
+3. Click **Cancel**
+4. Sign the transaction with your wallet
+5. Your tokens are returned to your wallet
+
+<Callout type="warning">
+Once an intent is included in a batch transaction and submitted to the blockchain, it cannot be cancelled. 
+Make sure to cancel before the solver picks up your intent in a batch.
+</Callout>
+
+## Liquidity Pools Explained
+
+Liquidity pools are the backbone of any DEX. Here's how they work on SolverNet:
+
+### Adding Liquidity
+
+1. Choose a token pair (e.g., ADA/TOKEN)
+2. Deposit both tokens in the required ratio
+3. Receive **LP tokens** representing your share of the pool
+4. Start earning fees from every trade that uses this pool
+
+### Removing Liquidity
+
+1. Go to the **Pools** page and select your position
+2. Choose how much to withdraw
+3. Burn your LP tokens to receive your pool share + accumulated fees
+4. Tokens are returned directly to your wallet
+
+### Earning Fees
+
+Every time a trade goes through the AMM pool, a 0.3% fee is collected and distributed proportionally to all liquidity providers based on their pool share.
+
+## Network & Status
+
+SolverNet DEX currently operates on the **Cardano Preprod Testnet**. This means:
+
+- All tokens are **test tokens** with no real value
+- You can get test ADA from the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/)
+- This is a great environment to explore and test all features risk-free
+
+<div className="flex gap-4 mt-8">
+  <a href="/docs/getting-started/quickstart" className="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors no-underline">
+    Quick Start Guide →
+  </a>
+  <a href="/features" className="px-6 py-3 rounded-lg border border-gray-300 dark:border-neutral-700 hover:border-blue-500 dark:hover:border-blue-400 font-semibold transition-colors no-underline">
+    View All Features →
+  </a>
+</div>

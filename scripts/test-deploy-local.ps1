@@ -426,7 +426,7 @@ function Test-VercelProjects {
     }
 
     Write-Host ""
-    Write-Host "  Project 2 -- Docs Site (docs.tdexms.vercel.app)" -ForegroundColor White
+    Write-Host "  Project 2 -- Docs Site (docs-tdexms.vercel.app)" -ForegroundColor White
     Write-Host "  Dashboard setting: Root Directory = docs-site" -ForegroundColor DarkGray
 
     $dvPath = Join-Path $root "docs-site/vercel.json"

@@ -1,0 +1,102 @@
+# Product Overview
+
+import { Callout, Cards, Card } from 'nextra/components'
+
+<Callout type="info">
+SolverNet DEX is currently live on Cardano **Preprod Testnet**. You can try all features with test ADA — no real funds needed.
+</Callout>
+
+## What is SolverNet DEX?
+
+**SolverNet DEX** is a next-generation decentralized exchange (DEX) built on the Cardano blockchain. Unlike traditional DEXs where you interact directly with liquidity pools, SolverNet uses an **intent-based model** — you simply tell the system what you want, and it finds the best way to execute your trade.
+
+### How It Works — In 3 Simple Steps
+
+<div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8 mb-8">
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 text-center">
+    <div className="text-4xl mb-3">1️⃣</div>
+    <h4 className="font-bold text-lg mb-2">Express Your Intent</h4>
+    <p className="text-sm text-gray-600 dark:text-gray-400">
+      Connect your Cardano wallet and specify what tokens you want to swap and the minimum amount you expect to receive.
+    </p>
+  </div>
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 text-center">
+    <div className="text-4xl mb-3">2️⃣</div>
+    <h4 className="font-bold text-lg mb-2">Solvers Optimize</h4>
+    <p className="text-sm text-gray-600 dark:text-gray-400">
+      Automated solvers collect all pending intents, match opposing trades together, and find the best execution paths.
+    </p>
+  </div>
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 text-center">
+    <div className="text-4xl mb-3">3️⃣</div>
+    <h4 className="font-bold text-lg mb-2">Settlement On-Chain</h4>
+    <p className="text-sm text-gray-600 dark:text-gray-400">
+      Matched trades are bundled into a single on-chain transaction. You receive your tokens automatically — verified by smart contracts.
+    </p>
+  </div>
+</div>
+
+## Why Choose SolverNet DEX?
+
+### Better Prices Through Netting
+
+When two users want to swap in opposite directions (e.g., User A swaps ADA→TOKEN and User B swaps TOKEN→ADA), SolverNet can **match them directly** without going through a liquidity pool. This means:
+
+- **Zero price impact** on netted trades
+- **Lower fees** compared to traditional AMM swaps
+- **Better rates** for everyone
+
+### Your Funds, Your Control
+
+SolverNet DEX is **fully non-custodial**:
+
+- Your tokens are held in smart contract escrows — not in anyone's wallet
+- You can **cancel** your intent and reclaim your funds at any time
+- Every trade is verified by on-chain validators — no one can steal your assets
+
+### Built for Cardano
+
+SolverNet DEX is designed from the ground up for Cardano's unique eUTxO model:
+
+- Smart contracts written in **Aiken** (Plutus V3) — fast and efficient
+- No concurrency bottlenecks — multiple trades can be processed simultaneously
+- Full support for **native Cardano tokens** (no wrapping needed)
+
+## Features at a Glance
+
+| Feature | Description |
+|---------|-------------|
+| **Token Swaps** | Swap any supported Cardano native token pair |
+| **Liquidity Pools** | Provide liquidity and earn trading fees |
+| **Limit Orders** | Set a target price and let the system execute when reached |
+| **Stop-Loss** | Protect your position with automatic exit triggers |
+| **Portfolio View** | Track all your positions, LP tokens, and trade history |
+| **Real-Time Charts** | OHLCV candlestick charts with multiple timeframes |
+| **Order Book** | View all active intents and their status |
+
+## Supported Wallets
+
+SolverNet DEX works with popular Cardano wallets:
+
+- **Nami** — Simple and user-friendly
+- **Eternl** — Full-featured wallet
+- **Flint** — Modern Cardano wallet
+- **Lace** — IOG's official wallet
+- And other CIP-30 compatible wallets
+
+## Try It Now
+
+SolverNet DEX is live on the Cardano Preprod Testnet. Get started in minutes:
+
+1. Get test ADA from the [Cardano Testnet Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/)
+2. Visit the [SolverNet DEX App](https://tdexms.vercel.app/)
+3. Connect your wallet and start swapping!
+
+<div className="flex gap-4 mt-6">
+  <a href="/docs/getting-started" className="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors no-underline">
+    Get Started Guide →
+  </a>
+  <a href="/features" className="px-6 py-3 rounded-lg border border-gray-300 dark:border-neutral-700 hover:border-blue-500 dark:hover:border-blue-400 font-semibold transition-colors no-underline">
+    Explore Features →
+  </a>
+</div>

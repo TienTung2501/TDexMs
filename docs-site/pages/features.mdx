@@ -1,0 +1,149 @@
+# Features
+
+import { Callout } from 'nextra/components'
+
+Explore what makes SolverNet DEX a powerful trading platform on Cardano.
+
+## Token Swapping
+
+<div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 my-6">
+  <div className="flex items-start gap-4">
+    <div className="text-4xl">🔄</div>
+    <div>
+      <h3 className="text-lg font-bold mb-2">Simple & Efficient Swaps</h3>
+      <p className="text-gray-600 dark:text-gray-400">
+        Swap any supported Cardano native token with just a few clicks. Our intent-based system ensures 
+        you get the best possible price by matching your trade with other users before using the AMM pool.
+      </p>
+      <ul className="mt-3 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+        <li>✅ Express how much you want to swap and minimum output</li>
+        <li>✅ Automatic price optimization through netting</li>
+        <li>✅ Transparent fees — you see exactly what you pay</li>
+        <li>✅ Cancel anytime before settlement</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+## Liquidity Provision
+
+<div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 my-6">
+  <div className="flex items-start gap-4">
+    <div className="text-4xl">💧</div>
+    <div>
+      <h3 className="text-lg font-bold mb-2">Earn Fees by Providing Liquidity</h3>
+      <p className="text-gray-600 dark:text-gray-400">
+        Deposit token pairs into liquidity pools and earn a share of every trade that uses your liquidity. 
+        You receive LP tokens as proof of your position, which can be redeemed at any time.
+      </p>
+      <ul className="mt-3 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+        <li>✅ Earn 0.3% fee on every trade through the pool</li>
+        <li>✅ LP tokens represent your pool share</li>
+        <li>✅ Add or remove liquidity at any time</li>
+        <li>✅ Fully on-chain — verified by smart contracts</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+## Advanced Order Types
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-5 my-6">
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6">
+    <div className="text-3xl mb-3">📈</div>
+    <h3 className="text-lg font-bold mb-2">Limit Orders</h3>
+    <p className="text-sm text-gray-600 dark:text-gray-400">
+      Set a target price for your swap. Your intent will only be executed when the market reaches your desired price. 
+      Perfect for buying dips or selling highs without watching the market constantly.
+    </p>
+  </div>
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6">
+    <div className="text-3xl mb-3">🛡️</div>
+    <h3 className="text-lg font-bold mb-2">Stop-Loss Orders</h3>
+    <p className="text-sm text-gray-600 dark:text-gray-400">
+      Protect your investments by setting automatic exit triggers. If the price drops below your threshold, 
+      the system will automatically execute your swap to limit losses.
+    </p>
+  </div>
+</div>
+
+## The Batch Netting Advantage
+
+<div className="rounded-2xl bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 border border-blue-200 dark:border-blue-800 p-8 my-8">
+  <h3 className="text-xl font-bold mb-4 text-center">How Netting Saves You Money</h3>
+  
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-6">
+    <div>
+      <h4 className="font-semibold mb-3 text-red-600 dark:text-red-400">❌ Traditional AMM</h4>
+      <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+        <li>Every trade goes through the pool</li>
+        <li>Each trade causes price impact</li>
+        <li>Large trades suffer significant slippage</li>
+        <li>Traders compete against each other</li>
+      </ul>
+    </div>
+    <div>
+      <h4 className="font-semibold mb-3 text-green-600 dark:text-green-400">✅ SolverNet Netting</h4>
+      <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+        <li>Opposing trades matched directly</li>
+        <li>Zero price impact on netted portions</li>
+        <li>Only the residual goes through the AMM</li>
+        <li>Everyone benefits from better prices</li>
+      </ul>
+    </div>
+  </div>
+  
+  <p className="text-center text-sm text-gray-600 dark:text-gray-400 mt-6">
+    <strong>Example:</strong> If User A swaps 100 ADA → TOKEN at the same time User B swaps TOKEN → 100 ADA, 
+    they can be matched directly with <strong>zero slippage</strong> for both parties.
+  </p>
+</div>
+
+## Portfolio Management
+
+<div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-6 my-6">
+  <div className="flex items-start gap-4">
+    <div className="text-4xl">📊</div>
+    <div>
+      <h3 className="text-lg font-bold mb-2">Track Everything in One Place</h3>
+      <p className="text-gray-600 dark:text-gray-400">
+        Get a complete overview of your DeFi activity on SolverNet DEX:
+      </p>
+      <ul className="mt-3 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+        <li>📋 View all your active intents and orders</li>
+        <li>🏊 Track your liquidity pool positions and LP tokens</li>
+        <li>📜 Browse your complete trade history</li>
+        <li>📈 Real-time candlestick charts (1m, 5m, 15m, 1h, 4h, 1d)</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+## Real-Time Updates
+
+SolverNet DEX provides live updates via WebSocket so you always see the latest data:
+
+- **Price tickers** — Live price feeds for all token pairs
+- **Order updates** — Instant notifications when your intent is matched or settled
+- **Pool changes** — Real-time liquidity and volume changes
+- **Trade feed** — Live stream of all trades happening on the platform
+
+## Security & Safety
+
+<div className="grid grid-cols-1 md:grid-cols-3 gap-5 my-6">
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-5 text-center">
+    <div className="text-3xl mb-2">🔐</div>
+    <h4 className="font-semibold mb-1">Non-Custodial</h4>
+    <p className="text-xs text-gray-600 dark:text-gray-400">Your keys, your tokens. Funds are in smart contracts — not wallets.</p>
+  </div>
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-5 text-center">
+    <div className="text-3xl mb-2">🔍</div>
+    <h4 className="font-semibold mb-1">Open Source</h4>
+    <p className="text-xs text-gray-600 dark:text-gray-400">All code is open source and auditable on GitHub.</p>
+  </div>
+  <div className="rounded-xl border border-gray-200 dark:border-neutral-800 p-5 text-center">
+    <div className="text-3xl mb-2">✅</div>
+    <h4 className="font-semibold mb-1">On-Chain Verified</h4>
+    <p className="text-xs text-gray-600 dark:text-gray-400">Every trade is validated by Plutus V3 smart contracts.</p>
+  </div>
+</div>

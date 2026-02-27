@@ -5,11 +5,23 @@
       "layout": "full"
     }
   },
+  "product": {
+    "title": "Product Overview"
+  },
+  "features": {
+    "title": "Features"
+  },
+  "how-it-works": {
+    "title": "How It Works"
+  },
+  "---": {
+    "type": "separator"
+  },
   "docs": {
     "title": "Documentation",
     "type": "page"
   },
-  "---": {
+  "--- 2": {
     "type": "separator"
   },
   "changelog": {

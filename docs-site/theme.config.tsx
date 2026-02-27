@@ -17,6 +17,10 @@ const config: DocsThemeConfig = {
     link: 'https://github.com/TienTung2501/TDexMs',
   },
   docsRepositoryBase: 'https://github.com/TienTung2501/TDexMs/tree/main/docs-site',
+  darkMode: true,
+  nextThemes: {
+    defaultTheme: 'dark',
+  },
   footer: {
     text: (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', width: '100%' }}>
@@ -25,7 +29,10 @@ const config: DocsThemeConfig = {
           <a href="/docs/api-reference" style={{ color: 'inherit', textDecoration: 'none' }}>API Reference</a>
           <a href="/docs/smart-contracts" style={{ color: 'inherit', textDecoration: 'none' }}>Smart Contracts</a>
         </div>
-        <span style={{ fontSize: '13px', opacity: 0.7 }}>
+        <div style={{ fontSize: '13px', opacity: 0.8, marginTop: '4px' }}>
+          Developed by <strong>Nguyen Tien Tung</strong> — Cardano Blockchain Developer
+        </div>
+        <span style={{ fontSize: '12px', opacity: 0.5 }}>
           © 2025 SolverNet DEX — Built on Cardano
         </span>
       </div>
