@@ -1,0 +1,95 @@
+# Pages
+
+import { Callout } from 'nextra/components'
+
+## Trading Page (`/`)
+
+The main trading interface. This is the default landing page.
+
+### Layout
+
+```
+┌──────────────────────────────────────────────────┐
+│  Header: Pair Selector | Price | 24h Change |    │
+│          Volume | TVL | Fill Rate                │
+├─────────────────────────────┬────────────────────┤
+│                             │                    │
+│     TradingView Chart       │    Swap Card       │
+│     (Candlestick + Volume)  │    ────────        │
+│                             │    Input Asset     │
+│                             │    Amount          │
+│                             │    ↕               │
+│                             │    Output Asset    │
+│                             │    Est. Output     │
+│                             │    [Swap Button]   │
+│                             │                    │
+│                             │    Tabs:           │
+│                             │    Swap|Limit|DCA  │
+├─────────────────────────────┤    |Stop-Loss      │
+│                             │                    │
+│  Pseudo-Orderbook           │    Price Impact    │
+│  Buy side | Sell side       │    Fee             │
+│                             │    Rate            │
+├─────────────────────────────┴────────────────────┤
+│  Trading Footer: Recent trades, open intents     │
+└──────────────────────────────────────────────────┘
+```
+
+## Pools Page (`/pools`)
+
+Lists all available liquidity pools with sorting and filtering.
+
+### Features
+
+- Pool list with TVL, volume, APY metrics
+- Sort by TVL, volume, or APY
+- Click to view pool details
+- Deposit/Withdraw modals
+- Pool creation (admin only)
+
+## Orders Page (`/orders`)
+
+Manage advanced orders.
+
+### Tabs
+
+- **Active Orders** — Currently open limit/DCA/stop-loss orders
+- **Order History** — Filled-and cancelled orders
+- **Create Order** — Form for creating new orders
+
+## Portfolio Page (`/portfolio`)
+
+Wallet portfolio overview.
+
+### Sections
+
+- **Summary** — Total value, PnL, trade count
+- **LP Positions** — Active liquidity positions with pool share %
+- **Open Intents** — Pending swap intents
+- **Open Orders** — Active advanced orders
+- **Trade History** — Complete transaction history
+
+## Analytics Page (`/analytics`)
+
+Protocol-wide analytics dashboard.
+
+### Widgets
+
+- TVL over time (line chart)
+- Volume over time (bar chart)
+- Fee revenue (cumulative)
+- Active traders (unique wallets)
+- Pool distribution (pie chart)
+- Fill rate trend
+
+## Admin Page (`/admin`)
+
+Admin-only management panel. Only accessible when connected with the admin wallet.
+
+### Features
+
+- Protocol settings management
+- Fee collection from pools
+- Pool creation and closure
+- Intent reclaim management
+- System health monitoring

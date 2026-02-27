@@ -1,0 +1,432 @@
+# REST API
+
+import { Callout, Tabs } from 'nextra/components'
+
+Complete reference for all REST endpoints. Base path: `/v1`
+
+---
+
+## Health
+
+### `GET /health`
+
+Check system health status.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "uptime": 3600,
+  "database": "connected",
+  "blockfrost": "connected",
+  "cache": "connected",
+  "chainTip": { "slot": 12345678, "hash": "abc..." }
+}
+```
+
+### `GET /health/ready`
+
+Kubernetes-style readiness probe. Returns `200` when all services are connected.
+
+---
+
+## Quote
+
+### `GET /quote`
+
+Get a swap quote with price impact calculation.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `inputAsset` | string | Yes | Input asset unit (e.g., `lovelace`) |
+| `outputAsset` | string | Yes | Output asset unit |
+| `amount` | string | Yes | Input amount in smallest unit |
+| `slippage` | number | No | Slippage tolerance (default: 0.5%) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "inputAmount": "100000000",
+    "outputAmount": "49251234",
+    "minimumOutput": "48996478",
+    "priceImpact": "0.0050",
+    "fee": "300000",
+    "protocolFee": "50000",
+    "effectivePrice": "0.4925",
+    "route": {
+      "type": "direct",
+      "pools": ["pool_abc123"]
+    }
+  }
+}
+```
+
+---
+
+## Intents
+
+### `POST /intents`
+
+Create a new swap intent. Returns an unsigned transaction for the user to sign.
+
+**Request Body:**
+```json
+{
+  "creatorAddress": "addr_test1qz...",
+  "inputAsset": "lovelace",
+  "outputAsset": "abc123def456.TOKEN",
+  "inputAmount": "100000000",
+  "minimumOutput": "49000000",
+  "expiresInSeconds": 3600
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "intentId": "intent_xyz789",
+    "unsignedTx": "84a400...",
+    "escrowAddress": "addr_test1wz...",
+    "estimatedOutput": "49251234",
+    "expiresAt": "2026-02-27T13:00:00Z"
+  }
+}
+```
+
+### `GET /intents`
+
+List intents with optional filters.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `address` | string | Filter by creator address |
+| `status` | string | Filter by status (ACTIVE, FILLED, etc.) |
+| `limit` | number | Max results (default: 20) |
+| `offset` | number | Pagination offset |
+
+### `GET /intents/:id`
+
+Get a specific intent by ID.
+
+### `DELETE /intents/:id`
+
+Cancel an active intent. Returns unsigned cancel transaction.
+
+**Request Body:**
+```json
+{
+  "creatorAddress": "addr_test1qz..."
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "intentId": "intent_xyz789",
+    "unsignedTx": "84a400...",
+    "status": "CANCELLING"
+  }
+}
+```
+
+---
+
+## Pools
+
+### `GET /pools`
+
+List all liquidity pools.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `sort` | string | Sort by: `tvl`, `volume`, `apy` (default: `tvl`) |
+| `order` | string | `asc` or `desc` (default: `desc`) |
+| `limit` | number | Max results |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "pool_abc123",
+      "assetA": { "unit": "lovelace", "name": "ADA", "decimals": 6 },
+      "assetB": { "unit": "abc...TOKEN", "name": "TOKEN", "decimals": 6 },
+      "reserveA": "1000000000000",
+      "reserveB": "500000000000",
+      "totalLpTokens": "707106781",
+      "fee": 30,
+      "tvl": "2000000",
+      "volume24h": "150000",
+      "apy": "12.5",
+      "state": "ACTIVE"
+    }
+  ]
+}
+```
+
+### `GET /pools/:id`
+
+Get detailed pool information.
+
+### `POST /pools/create`
+
+Create a new liquidity pool. Admin only.
+
+**Request Body:**
+```json
+{
+  "assetA": "lovelace",
+  "assetB": "abc123.TOKEN",
+  "amountA": "1000000000",
+  "amountB": "500000000",
+  "fee": 30,
+  "creatorAddress": "addr_test1qz..."
+}
+```
+
+### `POST /pools/:id/deposit`
+
+Deposit liquidity into an existing pool.
+
+**Request Body:**
+```json
+{
+  "amountA": "100000000",
+  "amountB": "50000000",
+  "depositorAddress": "addr_test1qz...",
+  "slippage": 0.5
+}
+```
+
+### `POST /pools/:id/withdraw`
+
+Withdraw liquidity from a pool.
+
+**Request Body:**
+```json
+{
+  "lpAmount": "70710678",
+  "withdrawerAddress": "addr_test1qz...",
+  "minA": "99000000",
+  "minB": "49000000"
+}
+```
+
+### `GET /pools/:id/history`
+
+Pool history snapshots (hourly).
+
+### `GET /pools/:id/swaps`
+
+Recent swaps for a pool.
+
+---
+
+## Orders
+
+### `POST /orders`
+
+Create an advanced order (Limit, DCA, Stop-Loss).
+
+<Tabs items={['Limit Order', 'DCA Order', 'Stop-Loss Order']}>
+  <Tabs.Tab>
+```json
+{
+  "creatorAddress": "addr_test1qz...",
+  "orderType": "LIMIT",
+  "inputAsset": "lovelace",
+  "outputAsset": "abc123.TOKEN",
+  "totalBudget": "1000000000",
+  "priceNumerator": "500000",
+  "priceDenominator": "1000000",
+  "expiresInSeconds": 86400
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```json
+{
+  "creatorAddress": "addr_test1qz...",
+  "orderType": "DCA",
+  "inputAsset": "lovelace",
+  "outputAsset": "abc123.TOKEN",
+  "totalBudget": "10000000000",
+  "dcaInterval": 3600,
+  "dcaAmountPerInterval": "1000000000",
+  "expiresInSeconds": 604800
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```json
+{
+  "creatorAddress": "addr_test1qz...",
+  "orderType": "STOP_LOSS",
+  "inputAsset": "abc123.TOKEN",
+  "outputAsset": "lovelace",
+  "totalBudget": "500000000",
+  "priceNumerator": "400000",
+  "priceDenominator": "1000000",
+  "expiresInSeconds": 604800
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+### `GET /orders`
+
+List orders with filters.
+
+### `GET /orders/:id`
+
+Get order details.
+
+### `DELETE /orders/:id`
+
+Cancel an order.
+
+---
+
+## Chart / OHLCV
+
+### `GET /chart/config`
+
+TradingView data feed configuration.
+
+### `GET /chart/candles`
+
+Get OHLCV candlestick data.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `poolId` | string | Pool identifier |
+| `interval` | string | `H4`, `D1`, or `W1` |
+| `from` | number | Start timestamp (Unix seconds) |
+| `to` | number | End timestamp |
+| `limit` | number | Max candles (default: 500) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "timestamp": 1740650400,
+      "open": "0.5012",
+      "high": "0.5150",
+      "low": "0.4980",
+      "close": "0.5100",
+      "volume": "15000000"
+    }
+  ]
+}
+```
+
+### `GET /chart/price/:poolId`
+
+Latest price for a pool.
+
+### `GET /chart/history`
+
+TradingView UDF-compatible history endpoint.
+
+---
+
+## Transaction
+
+### `POST /tx/submit`
+
+Submit a signed transaction to the Cardano network.
+
+**Request Body:**
+```json
+{
+  "signedTx": "84a400818258...",
+  "intentId": "intent_xyz789"
+}
+```
+
+### `POST /tx/confirm`
+
+Confirm a transaction and update related entities.
+
+### `GET /tx/status/:txHash`
+
+Check transaction confirmation status.
+
+---
+
+## Analytics
+
+### `GET /analytics/overview`
+
+Protocol-wide analytics.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "totalValueLocked": "5000000",
+    "volume24h": "1200000",
+    "totalVolume": "50000000",
+    "totalFees": "150000",
+    "totalSwaps": 12500,
+    "uniqueTraders": 340,
+    "fillRate": "94.5",
+    "activePools": 8,
+    "activeIntents": 23
+  }
+}
+```
+
+---
+
+## Portfolio
+
+### `GET /portfolio/:address/summary`
+
+Aggregated portfolio summary for a wallet.
+
+### `GET /portfolio/:address/transactions`
+
+Transaction history for a wallet.
+
+---
+
+## Admin
+
+<Callout type="warning">
+Admin endpoints require the request to come from the configured `ADMIN_ADDRESS`. Authentication is verified via wallet signature.
+</Callout>
+
+### `GET /admin/dashboard`
+
+Admin dashboard metrics.
+
+### `POST /admin/collect-fees`
+
+Collect protocol fees from pools.
+
+### `POST /admin/settings/update`
+
+Update protocol-wide settings.
+
+### `POST /admin/pools/:id/close`
+
+Close a pool and burn its NFT.

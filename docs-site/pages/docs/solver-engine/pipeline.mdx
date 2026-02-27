@@ -1,0 +1,240 @@
+# Solver Pipeline
+
+import { Callout } from 'nextra/components'
+
+The solver engine runs as a continuous loop, executing a 6-stage pipeline on each iteration.
+
+## Pipeline Overview
+
+```typescript
+// backend/src/solver/SolverEngine.ts
+class SolverEngine {
+  async runLoop() {
+    while (this.enabled) {
+      try {
+        // Stage 1: Collect on-chain intents
+        const utxos = await this.intentCollector.collect()
+        
+        // Stage 2: Filter and validate
+        const validIntents = await this.filterAndValidate(utxos)
+        
+        if (validIntents.length === 0) {
+          await sleep(this.batchWindowMs)
+          continue
+        }
+        
+        // Stage 3: Find optimal routes
+        const routedIntents = await this.routeOptimizer.findRoutes(validIntents)
+        
+        // Stage 4: Group into batches by pool
+        const batches = this.batchBuilder.groupByPool(routedIntents)
+        
+        // Stage 5: Net opposing intents within each batch
+        const nettedBatches = batches.map(b => this.nettingEngine.net(b))
+        
+        // Stage 6: Build and submit settlement TXs
+        for (const batch of nettedBatches) {
+          await this.txSubmitter.settle(batch)
+        }
+      } catch (error) {
+        logger.error({ error }, 'Solver loop error')
+        await sleep(this.retryDelay)
+      }
+      
+      await sleep(this.batchWindowMs)
+    }
+  }
+}
+```
+
+## Stage 1: Intent Collection
+
+```typescript
+class IntentCollector {
+  async collect(): Promise<ParsedEscrowUtxo[]> {
+    // Query Blockfrost for all UTxOs at the escrow address
+    const utxos = await this.chainProvider.getUtxosAtAddress(
+      this.escrowScriptAddress
+    )
+    
+    // Parse inline datums from each UTxO
+    return utxos
+      .map(utxo => this.parseEscrowDatum(utxo))
+      .filter(parsed => parsed !== null)
+  }
+  
+  private parseEscrowDatum(utxo: UTxO): ParsedEscrowUtxo | null {
+    try {
+      const datum = Data.from(utxo.datum!, EscrowDatum)
+      return {
+        utxoRef: { txHash: utxo.txHash, outputIndex: utxo.outputIndex },
+        owner: datum.owner,
+        inputAsset: datum.input_asset,
+        outputAsset: datum.output_asset,
+        minOutput: datum.min_output,
+        intentToken: datum.intent_token,
+        expiryTime: datum.expiry_time,
+        value: utxo.assets,
+      }
+    } catch {
+      return null // Skip UTxOs with unparseable datums
+    }
+  }
+}
+```
+
+## Stage 2: Filtering & Validation
+
+```typescript
+async filterAndValidate(utxos: ParsedEscrowUtxo[]): Promise<ValidIntent[]> {
+  const validIntents: ValidIntent[] = []
+  
+  for (const utxo of utxos) {
+    // Check if intent exists in database
+    const dbIntent = await this.intentRepo.findByUtxoRef(
+      utxo.utxoRef.txHash, 
+      utxo.utxoRef.outputIndex
+    )
+    
+    // Skip if:
+    if (!dbIntent) continue                           // Not in our DB
+    if (dbIntent.status !== 'ACTIVE') continue        // Not active
+    if (dbIntent.isExpired()) continue                // Expired
+    if (this.inFlightSet.has(dbIntent.id)) continue   // Already being settled
+    
+    validIntents.push({
+      ...utxo,
+      dbIntent,
+    })
+  }
+  
+  return validIntents
+}
+```
+
+## Stage 3: Route Selection
+
+```typescript
+class RouteOptimizer {
+  async findRoutes(intents: ValidIntent[]): Promise<RoutedIntent[]> {
+    return Promise.all(intents.map(async intent => {
+      const route = await this.findBestRoute(intent)
+      return { ...intent, route }
+    }))
+  }
+  
+  private async findBestRoute(intent: ValidIntent): Promise<SwapRoute> {
+    // Try direct pool
+    const directPool = await this.poolRepo.findByAssets(
+      intent.inputAsset, 
+      intent.outputAsset
+    )
+    
+    if (directPool) {
+      const output = directPool.calculateSwapOutput(intent.inputAmount, 'AToB')
+      return { type: 'direct', pools: [directPool], estimatedOutput: output }
+    }
+    
+    // Try multi-hop (e.g., TOKEN → ADA → TOKEN2)
+    // ... multi-hop routing logic
+    
+    throw new Error(`No route found for ${intent.inputAsset} → ${intent.outputAsset}`)
+  }
+}
+```
+
+## Stage 4: Batch Building
+
+```typescript
+class BatchBuilder {
+  groupByPool(intents: RoutedIntent[]): IntentBatch[] {
+    const batches = new Map<string, IntentBatch>()
+    
+    for (const intent of intents) {
+      const poolId = intent.route.pools[0].id
+      
+      if (!batches.has(poolId)) {
+        batches.set(poolId, {
+          pool: intent.route.pools[0],
+          intents: [],
+        })
+      }
+      
+      batches.get(poolId)!.intents.push(intent)
+    }
+    
+    return Array.from(batches.values())
+  }
+}
+```
+
+## Stage 5: Netting
+
+See [Netting Engine](/docs/solver-engine/netting) for the detailed algorithm.
+
+## Stage 6: Settlement
+
+```typescript
+class TxSubmitter {
+  async settle(batch: NettedBatch): Promise<void> {
+    // Build the settlement transaction
+    const tx = await this.txBuilder.buildSettlementTx({
+      pool: batch.pool,
+      escrowUtxos: batch.intents.map(i => i.utxoRef),
+      nettedAmounts: batch.nettedAmounts,
+      outputs: batch.outputs,          // Payments to intent owners
+      residualSwap: batch.residual,    // Amount going through AMM
+    })
+    
+    // Sign with solver wallet
+    const signedTx = await tx.sign.withWallet().complete()
+    const txHash = await signedTx.submit()
+    
+    // Wait for confirmation
+    const confirmed = await this.chainProvider.awaitTx(txHash)
+    
+    if (confirmed) {
+      // Update intent statuses
+      for (const intent of batch.intents) {
+        intent.dbIntent.markFilled(txHash)
+        await this.intentRepo.save(intent.dbIntent)
+      }
+      
+      // Record swaps and price ticks
+      await this.recordSwaps(batch, txHash)
+      
+      // Broadcast WebSocket updates
+      this.wsManager.broadcast('intent', batch.intents.map(i => ({
+        type: 'intentUpdate',
+        data: { id: i.dbIntent.id, status: 'FILLED', settlementTx: txHash }
+      })))
+    }
+  }
+}
+```
+
+## Error Handling & Retries
+
+```typescript
+// Built-in retry logic
+async settleWithRetry(batch: NettedBatch): Promise<void> {
+  for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+    try {
+      await this.settle(batch)
+      return // Success
+    } catch (error) {
+      logger.warn({ attempt, error }, 'Settlement attempt failed')
+      
+      if (error.message.includes('UTxO already consumed')) {
+        // UTxO was consumed by another solver or user cancel
+        // Remove from in-flight set and skip
+        break
+      }
+      
+      if (attempt < this.maxRetries) {
+        await sleep(1000 * attempt) // Exponential backoff
+      }
+    }
+  }
+}
+```

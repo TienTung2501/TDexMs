@@ -1,0 +1,66 @@
+# Frontend
+
+import { Callout } from 'nextra/components'
+
+The SolverNet DEX frontend is a **Next.js 16** application with React 19, providing a professional trading interface with real-time charts, wallet integration, and pool management.
+
+## Tech Stack
+
+| Technology | Version | Purpose |
+|---|---|---|
+| **Next.js** | 16.1.6 | React framework (App Router) |
+| **React** | 19.2.3 | UI library |
+| **TypeScript** | 5.x | Type safety |
+| **Tailwind CSS** | 4.x | Utility-first styling |
+| **Radix UI** | Various | Accessible UI primitives |
+| **lightweight-charts** | 5.1.0 | TradingView-style price charts |
+| **recharts** | 3.7.0 | Analytics charts |
+| **Lucid Evolution** | 0.4.x | Cardano wallet/TX SDK |
+| **next-themes** | — | Dark/light mode |
+
+## Project Structure
+
+```
+frontend/src/
+├── app/                    # Next.js App Router
+│   ├── layout.tsx          # Root layout (providers, navigation)
+│   ├── page.tsx            # Main trading page (/)
+│   ├── providers.tsx       # React context providers
+│   ├── globals.css         # Global styles
+│   ├── admin/              # Admin panel (/admin)
+│   ├── analytics/          # Analytics dashboard (/analytics)
+│   ├── orders/             # Order management (/orders)
+│   ├── pools/              # Liquidity pools (/pools)
+│   └── portfolio/          # Portfolio view (/portfolio)
+├── components/
+│   ├── features/           # Feature-specific components
+│   │   ├── trading/        # SwapCard, OrderEntry, PriceChart
+│   │   ├── wallet/         # Wallet connection
+│   │   ├── liquidity/      # LP management
+│   │   └── admin/          # Admin dashboard
+│   ├── layout/             # App shell, navigation
+│   ├── ui/                 # shadcn/ui base components
+│   └── common/             # Shared components
+├── lib/
+│   ├── api.ts              # Backend API client
+│   └── utils.ts            # Utility functions
+└── providers/              # React context providers
+```
+
+## Pages
+
+| Route | Component | Description |
+|---|---|---|
+| `/` | Trading Page | Main swap interface with TradingView chart, SwapCard, order entry, pseudo-orderbook |
+| `/pools` | Pools Page | List and manage liquidity pools |
+| `/orders` | Orders Page | View and manage limit/DCA/stop-loss orders |
+| `/portfolio` | Portfolio Page | Wallet holdings, LP positions, trade history |
+| `/analytics` | Analytics Page | Protocol metrics, TVL charts, volume analytics |
+| `/admin` | Admin Page | Protocol settings, fee collection, pool management |
+
+### Quick Links
+
+- [Components →](/docs/frontend/components)
+- [Pages →](/docs/frontend/pages)
+- [Wallet Integration →](/docs/frontend/wallet-integration)
+- [API Client →](/docs/frontend/api-client)

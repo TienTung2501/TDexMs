@@ -1,0 +1,277 @@
+# Database
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX uses **PostgreSQL** (via Supabase) with **Prisma ORM** for type-safe database access.
+
+## Schema Overview
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│    Intent    │     │     Pool     │     │    Order     │
+│              │     │              │     │              │
+│ status       │     │ reserveA     │     │ orderType    │
+│ inputAsset   │     │ reserveB     │     │ totalBudget  │
+│ outputAsset  │     │ totalLpTokens│     │ priceTarget  │
+│ inputAmount  │     │ fee          │     │ dcaInterval  │
+│ minOutput    │     │ tvl          │     │              │
+│ escrowTxHash │     │ volume24h    │     │              │
+└──────┬───────┘     └──────┬───────┘     └──────────────┘
+       │                    │
+       │                    │
+       │              ┌─────┴────────┐
+       │              │              │
+       │         ┌────┴────┐  ┌──────┴─────┐
+       │         │  Swap   │  │PoolHistory │
+       │         │         │  │            │
+       │         │direction│  │ snapshot   │
+       │         │ amount  │  │ hourly     │
+       │         │ fee     │  │            │
+       │         └─────────┘  └────────────┘
+       │
+  ┌────┴──────┐    ┌──────────────┐    ┌──────────────┐
+  │ PriceTick │    │   Candle     │    │ProtocolStats │
+  │           │    │              │    │              │
+  │ raw price │    │ OHLCV        │    │ tvl          │
+  │ per swap  │    │ H4/D1/W1    │    │ volume       │
+  └───────────┘    └──────────────┘    │ fees         │
+                                       └──────────────┘
+```
+
+## Models
+
+### Intent
+
+```prisma
+model Intent {
+  id                String       @id @default(cuid())
+  creatorAddress    String
+  inputAsset        String
+  outputAsset       String
+  inputAmount       BigInt
+  minimumOutput     BigInt
+  actualOutput      BigInt?
+  status            IntentStatus @default(CREATED)
+  escrowTxHash      String?
+  escrowTxIndex     Int?
+  settlementTxHash  String?
+  expiresAt         DateTime
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([creatorAddress])
+  @@index([status])
+  @@index([escrowTxHash, escrowTxIndex])
+  @@map("intents")
+}
+```
+
+### Pool
+
+```prisma
+model Pool {
+  id              String    @id @default(cuid())
+  nftPolicyId     String
+  nftAssetName    String
+  assetA          String
+  assetB          String
+  reserveA        BigInt    @default(0)
+  reserveB        BigInt    @default(0)
+  totalLpTokens   BigInt    @default(0)
+  feeNumerator    Int       @default(30)
+  protocolFeeA    BigInt    @default(0)
+  protocolFeeB    BigInt    @default(0)
+  tvl             Float     @default(0)
+  volume24h       Float     @default(0)
+  state           PoolState @default(CREATING)
+  poolTxHash      String?
+  poolTxIndex     Int?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  history         PoolHistory[]
+  swaps           Swap[]
+
+  @@unique([nftPolicyId, nftAssetName])
+  @@unique([assetA, assetB])
+  @@map("pools")
+}
+```
+
+### Swap
+
+```prisma
+model Swap {
+  id            String   @id @default(cuid())
+  poolId        String
+  pool          Pool     @relation(fields: [poolId], references: [id])
+  direction     String   // "AToB" or "BToA"
+  inputAmount   BigInt
+  outputAmount  BigInt
+  feeAmount     BigInt
+  protocolFee   BigInt
+  priceImpact   Float
+  txHash        String
+  traderAddress String
+  createdAt     DateTime @default(now())
+
+  @@index([poolId])
+  @@index([txHash])
+  @@index([traderAddress])
+  @@map("swaps")
+}
+```
+
+### Order
+
+```prisma
+model Order {
+  id                  String      @id @default(cuid())
+  creatorAddress      String
+  orderType           OrderType
+  inputAsset          String
+  outputAsset         String
+  totalBudget         BigInt
+  remainingBudget     BigInt
+  priceNumerator      BigInt
+  priceDenominator    BigInt
+  dcaInterval         Int?
+  dcaAmountPerInterval BigInt?
+  lastExecutedAt      DateTime?
+  status              OrderStatus @default(CREATED)
+  escrowTxHash        String?
+  escrowTxIndex       Int?
+  expiresAt           DateTime
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  @@index([creatorAddress])
+  @@index([status])
+  @@map("orders")
+}
+```
+
+### Candle (OHLCV)
+
+```prisma
+model Candle {
+  id        String         @id @default(cuid())
+  poolId    String
+  interval  CandleInterval
+  timestamp DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  createdAt DateTime       @default(now())
+
+  @@unique([poolId, interval, timestamp])
+  @@index([poolId, interval])
+  @@map("candles")
+}
+```
+
+### PoolHistory
+
+```prisma
+model PoolHistory {
+  id        String   @id @default(cuid())
+  poolId    String
+  pool      Pool     @relation(fields: [poolId], references: [id])
+  reserveA  BigInt
+  reserveB  BigInt
+  tvl       Float
+  volume    Float
+  price     Float
+  timestamp DateTime
+  createdAt DateTime @default(now())
+
+  @@index([poolId, timestamp])
+  @@map("pool_history")
+}
+```
+
+### ProtocolStats
+
+```prisma
+model ProtocolStats {
+  id            String   @id @default(cuid())
+  totalTvl      Float
+  totalVolume   Float
+  totalFees     Float
+  uniqueTraders Int
+  totalSwaps    Int
+  timestamp     DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([timestamp])
+  @@map("protocol_stats")
+}
+```
+
+## Enums
+
+```prisma
+enum IntentStatus {
+  CREATED
+  PENDING
+  ACTIVE
+  FILLING
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLING
+  CANCELLED
+  EXPIRED
+  RECLAIMED
+}
+
+enum OrderType {
+  LIMIT
+  DCA
+  STOP_LOSS
+}
+
+enum OrderStatus {
+  CREATED
+  PENDING
+  ACTIVE
+  PARTIALLY_FILLED
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum PoolState {
+  ACTIVE
+  INACTIVE
+  CREATING
+}
+
+enum CandleInterval {
+  H4
+  D1
+  W1
+}
+```
+
+## Migrations
+
+```bash
+# Create a new migration
+cd backend
+pnpm exec prisma migrate dev --name add_new_field
+
+# Apply migrations in production
+pnpm exec prisma migrate deploy
+
+# Reset database (development only!)
+pnpm exec prisma migrate reset
+
+# Generate Prisma Client
+pnpm exec prisma generate
+```
+
+<Callout type="warning">
+Always use `prisma migrate deploy` in production. Never use `migrate dev` or `migrate reset` on production databases.
+</Callout>

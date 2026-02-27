@@ -1,0 +1,60 @@
+# Getting Started
+
+Welcome to **SolverNet DEX** — the intent-based decentralized exchange built on Cardano.
+
+import { Callout, Steps } from 'nextra/components'
+
+<Callout type="info">
+SolverNet DEX is currently deployed on the **Cardano Preprod Testnet**. All addresses and configurations in this documentation reference the preprod network.
+</Callout>
+
+## What is SolverNet DEX?
+
+SolverNet DEX is a next-generation DEX that replaces the traditional "user vs pool" swap model with an **intent-based architecture**:
+
+1. **Users express intents** — "I want to swap X amount of Token A for at least Y amount of Token B"
+2. **Intents are locked on-chain** — Each intent is a separate UTxO at the escrow validator address
+3. **Solvers aggregate and settle** — Off-chain solver bots collect intents, cross-match opposing trades (netting), and settle them in optimized batched transactions
+
+This design eliminates eUTxO concurrency issues, reduces price impact through netting, and provides MEV protection.
+
+## Key Concepts
+
+| Concept | Description |
+|---|---|
+| **Intent** | A signed swap request locked in an escrow UTxO. Contains: input asset, output asset, minimum output, owner address, expiry |
+| **Solver** | An off-chain bot that collects intents, finds optimal routes, and submits settlement transactions |
+| **Netting** | Cross-matching opposing intents (A→B vs B→A) to reduce the amount that needs to go through the AMM pool |
+| **Escrow** | The on-chain validator that holds user funds until settlement or cancellation |
+| **Pool** | A constant-product AMM pool (x·y=k) that handles the residual after netting |
+| **Settlement** | A batched transaction that consumes multiple escrow UTxOs, interacts with the pool, and delivers outputs |
+
+## Project Structure
+
+```
+decentralize/
+├── smartcontract/        # Aiken validators & minting policies (Plutus V3)
+│   ├── validators/       # Escrow, Pool, Order, Factory, Settings validators
+│   └── lib/              # Shared Aiken types and utilities
+├── backend/              # Express + TypeScript API server
+│   ├── src/
+│   │   ├── domain/       # Entities, value objects, ports (interfaces)
+│   │   ├── application/  # Use cases and services
+│   │   ├── infrastructure/ # DB, chain, cache, cron implementations
+│   │   ├── interface/    # HTTP routes and WebSocket handlers
+│   │   └── solver/       # Solver engine pipeline
+│   └── prisma/           # Database schema
+├── frontend/             # Next.js 16 trading UI
+│   └── src/
+│       ├── app/          # App Router pages
+│       ├── components/   # React components
+│       └── lib/          # API client and utilities
+└── docs-site/            # This documentation (Nextra)
+```
+
+## Next Steps
+
+- [Quick Start →](/docs/getting-started/quickstart)
+- [Installation →](/docs/getting-started/installation)
+- [Configuration →](/docs/getting-started/configuration)
+- [Architecture Overview →](/docs/architecture)

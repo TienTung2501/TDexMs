@@ -1,0 +1,104 @@
+# Script Resolution Order
+
+import { Callout } from 'nextra/components'
+
+## Dependency Graph
+
+Smart contracts in SolverNet DEX have a strict dependency order. Some validators take the hash of other validators as parameters (parameterized scripts). This creates a **DAG (Directed Acyclic Graph)** that must be resolved in order.
+
+```
+Step 1:  escrow_validator (no params)          → escrow_hash
+Step 2:  pool_validator(admin_vkh)             → pool_hash
+Step 3:  intent_token_policy (no params)       → intent_policy_id
+Step 4:  factory_validator(pool_hash)          → factory_hash
+Step 5:  lp_token_policy(pool_hash, factory_hash) → lp_policy_id
+Step 6:  pool_nft_policy(factory_hash, admin_vkh) → nft_policy_id
+Step 7:  order_validator(intent_policy_id)     → order_hash
+```
+
+## Dependency Diagram
+
+```
+                    ┌───────────────┐
+                    │  admin_vkh    │ (external parameter)
+                    └───┬───────┬───┘
+                        │       │
+                        ▼       │
+              ┌──────────────┐  │
+         ┌───►│pool_validator│  │      ┌──────────────────┐
+         │    │  (Step 2)    │  │      │ escrow_validator  │
+         │    └──────┬───────┘  │      │   (Step 1)       │
+         │           │         │      │  No dependencies  │
+         │           ▼         │      └──────────────────┘
+         │  ┌────────────────┐ │
+         │  │factory_validator│ │      ┌──────────────────┐
+         │  │   (Step 4)     │ │      │ intent_token_policy│
+         │  └───┬────────┬───┘ │      │   (Step 3)       │
+         │      │        │     │      │  No dependencies  │
+         │      ▼        ▼     ▼      └────────┬─────────┘
+         │ ┌─────────┐ ┌───────────┐            │
+         │ │lp_token │ │pool_nft   │            ▼
+         │ │ policy  │ │  policy   │   ┌──────────────────┐
+         │ │(Step 5) │ │ (Step 6)  │   │ order_validator  │
+         │ └─────────┘ └───────────┘   │   (Step 7)       │
+         │                             └──────────────────┘
+         │
+    pool_hash flows to:
+    factory_validator, lp_token_policy
+```
+
+## Resolution in Code
+
+The backend resolves scripts at startup:
+
+```typescript
+// backend/src/infrastructure/cardano/ScriptResolver.ts
+
+async function resolveScripts(adminVkh: string) {
+  // Step 1: No-param validators
+  const escrowScript = readPlutusScript('escrow_validator')
+  const escrowHash = lucid.utils.validatorToScriptHash(escrowScript)
+  
+  // Step 2: Pool validator with admin param 
+  const poolScript = applyParams('pool_validator', [adminVkh])
+  const poolHash = lucid.utils.validatorToScriptHash(poolScript)
+  
+  // Step 3: No-param policy
+  const intentTokenPolicy = readPlutusScript('intent_token_policy')
+  const intentPolicyId = lucid.utils.mintingPolicyToId(intentTokenPolicy)
+  
+  // Step 4: Factory with pool hash
+  const factoryScript = applyParams('factory_validator', [poolHash])
+  const factoryHash = lucid.utils.validatorToScriptHash(factoryScript)
+  
+  // Step 5: LP token with pool + factory hashes
+  const lpTokenPolicy = applyParams('lp_token_policy', [poolHash, factoryHash])
+  const lpPolicyId = lucid.utils.mintingPolicyToId(lpTokenPolicy)
+  
+  // Step 6: Pool NFT with factory hash + admin
+  const poolNftPolicy = applyParams('pool_nft_policy', [factoryHash, adminVkh])
+  const nftPolicyId = lucid.utils.mintingPolicyToId(poolNftPolicy)
+  
+  // Step 7: Order with intent policy
+  const orderScript = applyParams('order_validator', [intentPolicyId])
+  const orderHash = lucid.utils.validatorToScriptHash(orderScript)
+  
+  return { escrowHash, poolHash, factoryHash, intentPolicyId, lpPolicyId, nftPolicyId, orderHash }
+}
+```
+
+<Callout type="warning">
+Changing any parameter (e.g., admin address) changes _all downstream script hashes_. This means new addresses for validators, requiring redeployment of all dependent contracts.
+</Callout>
+
+## Address Derivation
+
+Script hashes are combined with a network tag to produce bech32 addresses:
+
+| Script | Preprod Address Pattern |
+|---|---|
+| Escrow | `addr_test1wz...` (same for all networks since no params) |
+| Pool | `addr_test1wr...` (changes with admin_vkh) |
+| Factory | `addr_test1wq...` (changes with pool_hash) |
+| Order | `addr_test1wp...` (changes with intent_policy_id) |
+| Settings | Identified by NFT, not by script address |

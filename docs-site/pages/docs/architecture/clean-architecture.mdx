@@ -1,0 +1,165 @@
+# Clean Architecture
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX backend follows **Clean Architecture** principles, ensuring that business logic is independent of frameworks, databases, and external services.
+
+## Layer Diagram
+
+```
+┌─────────────────────────────────────────────────┐
+│              Interface Layer                      │
+│  HTTP Routes, WebSocket Handlers, Middleware      │
+│  Dependencies: Express, ws                        │
+├─────────────────────────────────────────────────┤
+│              Application Layer                    │
+│  Use Cases, Application Services                  │
+│  Dependencies: Domain only                        │
+├─────────────────────────────────────────────────┤
+│              Domain Layer (Core)                  │
+│  Entities, Value Objects, Ports                   │
+│  Dependencies: NONE                               │
+├─────────────────────────────────────────────────┤
+│              Infrastructure Layer                 │
+│  Database, Chain, Cache, Cron                     │
+│  Dependencies: Everything                         │
+└─────────────────────────────────────────────────┘
+```
+
+## Dependency Rule
+
+> Dependencies point **inward**. The Domain layer has zero external dependencies. The Application layer depends only on Domain. Infrastructure and Interface layers depend on everything above them.
+
+## Domain Layer
+
+The innermost layer contains pure business logic with no framework dependencies.
+
+### Entities
+
+```typescript
+// backend/src/domain/entities/Intent.ts
+class Intent {
+  // Pure business logic
+  isExpired(): boolean
+  canBeFilled(): boolean
+  canBeCancelled(): boolean
+  markPending(): void
+  markActive(): void
+  markPartiallyFilled(filledAmount: bigint): void
+  markFilled(settlementTxHash: string): void
+}
+```
+
+```typescript
+// backend/src/domain/entities/Pool.ts
+class Pool {
+  // AMM calculations
+  calculateSwapOutput(inputAmount: bigint, direction: 'AToB' | 'BToA'): SwapResult
+  calculatePriceImpact(inputAmount: bigint, direction: string): number
+  calculateRequiredDeposit(amountA: bigint): DepositResult
+}
+```
+
+```typescript
+// backend/src/domain/entities/Order.ts
+class Order {
+  // Price condition checks
+  meetsLimitPrice(currentPrice: number): boolean
+  meetsDcaPriceCap(currentPrice: number): boolean
+  triggersStopLoss(currentPrice: number): boolean
+  canExecuteInterval(): boolean
+}
+```
+
+### Ports (Interfaces)
+
+Ports define **what** the domain needs from the outside world, without specifying **how**:
+
+```typescript
+// Ports are interfaces — the domain says WHAT it needs
+interface IChainProvider {
+  getUtxosAtAddress(address: string): Promise<UTxO[]>
+  getChainTip(): Promise<ChainTip>
+  submitTx(cbor: string): Promise<string>
+  awaitTx(txHash: string): Promise<boolean>
+}
+
+interface IIntentRepository {
+  findById(id: string): Promise<Intent | null>
+  findActive(): Promise<Intent[]>
+  findByUtxoRef(txHash: string, index: number): Promise<Intent | null>
+  save(intent: Intent): Promise<void>
+}
+
+interface IPoolRepository {
+  findById(id: string): Promise<Pool | null>
+  findByAssets(assetA: string, assetB: string): Promise<Pool | null>
+  findAll(options?: QueryOptions): Promise<Pool[]>
+  save(pool: Pool): Promise<void>
+}
+
+interface ITxBuilder {
+  buildEscrowTx(params: EscrowParams): Promise<UnsignedTx>
+  buildSettlementTx(batch: IntentBatch): Promise<UnsignedTx>
+  buildCancelTx(intent: Intent): Promise<UnsignedTx>
+  // ... more operations
+}
+```
+
+## Application Layer
+
+Use cases orchestrate domain entities and ports:
+
+```typescript
+// backend/src/application/use-cases/CreateIntent.ts
+class CreateIntentUseCase {
+  constructor(
+    private intentRepo: IIntentRepository,  // Port
+    private poolRepo: IPoolRepository,      // Port
+    private txBuilder: ITxBuilder,          // Port
+  ) {}
+
+  async execute(input: CreateIntentInput): Promise<CreateIntentOutput> {
+    // 1. Validate input
+    // 2. Find pool for trading pair
+    // 3. Calculate quote
+    // 4. Build unsigned escrow TX
+    // 5. Save intent to database
+    // 6. Return unsigned TX for user to sign
+  }
+}
+```
+
+## Infrastructure Layer
+
+Concrete implementations of domain ports:
+
+```typescript
+// backend/src/infrastructure/database/PrismaIntentRepository.ts
+class PrismaIntentRepository implements IIntentRepository {
+  constructor(private prisma: PrismaClient) {}
+
+  async findActive(): Promise<Intent[]> {
+    const records = await this.prisma.intent.findMany({
+      where: { status: 'ACTIVE' }
+    })
+    return records.map(r => Intent.fromPersistence(r))
+  }
+}
+
+// backend/src/infrastructure/cardano/BlockfrostChainProvider.ts
+class BlockfrostChainProvider implements IChainProvider {
+  async getUtxosAtAddress(address: string): Promise<UTxO[]> {
+    // Calls Blockfrost API
+  }
+}
+```
+
+## Benefits
+
+| Benefit | How |
+|---|---|
+| **Testability** | Domain and application layers can be tested with mock implementations of ports |
+| **Flexibility** | Swap Blockfrost for Ogmios/Kupo without touching business logic |
+| **Clarity** | Each layer has a clear responsibility and dependency direction |
+| **Maintainability** | Changes in one layer don't cascade to others |

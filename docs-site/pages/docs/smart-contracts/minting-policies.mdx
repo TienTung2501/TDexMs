@@ -1,0 +1,142 @@
+# Minting Policies
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX uses three minting policies to manage on-chain identity tokens. These are crucial for the security model — they prevent replay attacks, identify pool UTxOs, and track LP shares.
+
+## Intent Token Policy
+
+**File:** `smartcontract/validators/intent_token_policy.ak`  
+**Parameters:** None
+
+### Purpose
+
+Creates **one-shot authentication tokens** for escrow and order UTxOs. Each intent gets a unique NFT that:
+
+1. Proves the escrow UTxO is legitimate (not a spoofed copy)
+2. Must be burned when the intent is filled (prevents double-fill)
+3. Has a unique name derived from the consumed UTxO
+
+### Token Name Derivation
+
+```aiken
+// Token name = hash of the consumed UTxO reference
+// This guarantees uniqueness (each UTxO can only be consumed once)
+let token_name = blake2b_256(
+  serialise(consumed_utxo.transaction_id) 
+  <> serialise(consumed_utxo.output_index)
+)
+```
+
+### Minting Rules
+
+| Action | Conditions |
+|---|---|
+| **Mint (qty = 1)** | Must consume a specific UTxO (the "one-shot" input); token name = hash of that UTxO |
+| **Burn (qty = -1)** | Always allowed (needed for Fill/Cancel/Reclaim) |
+
+### Security Properties
+
+- **Uniqueness:** The token name is derived from a UTxO hash — each UTxO can only be consumed once, so each token name is unique
+- **Anti-replay:** If a solver tries to reuse an old escrow UTxO, the intent token won't match
+- **Provable consumption:** Burning the token proves the escrow was properly consumed
+
+---
+
+## Pool NFT Policy
+
+**File:** `smartcontract/validators/pool_nft_policy.ak`  
+**Parameters:** `factory_hash: ScriptHash`, `admin_vkh: VerificationKeyHash`
+
+### Purpose
+
+Creates exactly **one NFT per pool** using the **thread token pattern**. This NFT:
+
+1. Uniquely identifies the pool UTxO (no two pools share the same NFT)
+2. Must remain at the pool validator address at all times
+3. Can only be burned when closing a pool (admin-only)
+
+### Minting Rules
+
+| Action | Conditions |
+|---|---|
+| **Mint (qty = 1)** | Admin signature required; factory validator referenced (ensuring unique pair); consumed UTxO for unique name |
+| **Burn (qty = -1)** | Admin signature required; pool must be empty (all liquidity withdrawn) |
+
+### Thread Token Pattern
+
+The pool NFT acts as a **thread token** — it threads through the pool's lifetime:
+
+```
+Create Pool TX                 Swap TX                    Close Pool TX
+┌──────────┐                ┌──────────┐                ┌──────────┐
+│ Mint NFT │──► Pool UTxO ──│ Pool UTxO│──► Pool UTxO ──│ Burn NFT │
+│ qty = 1  │    + NFT      │ + NFT    │    + NFT      │ qty = -1 │
+└──────────┘                └──────────┘                └──────────┘
+```
+
+Every transaction that interacts with the pool must:
+1. Consume the pool UTxO containing the NFT
+2. Produce a new pool UTxO containing the same NFT
+
+This ensures pool state continuity and prevents UTxO splitting attacks.
+
+---
+
+## LP Token Policy
+
+**File:** `smartcontract/validators/lp_token_policy.ak`  
+**Parameters:** `pool_hash: ScriptHash`, `factory_hash: ScriptHash`
+
+### Purpose
+
+Manages **LP (Liquidity Provider) tokens** representing proportional ownership of pool reserves.
+
+### Forwarding Mint Pattern
+
+<Callout type="info">
+LP Token Policy uses the **Forwarding Mint** pattern — instead of implementing its own validation logic, it **delegates validation to the pool validator**. This ensures LP minting/burning is always consistent with pool operations.
+</Callout>
+
+```aiken
+// LP Token Policy validation
+validator lp_token_policy(pool_hash, factory_hash) {
+  mint(_redeemer, ctx) {
+    // Verify that the pool validator is being executed in this same TX
+    expect list.any(
+      ctx.transaction.inputs,
+      fn(input) { 
+        payment_credential(input.output.address) == ScriptCredential(pool_hash) 
+      }
+    )
+    // The pool validator handles all LP math validation
+    True
+  }
+}
+```
+
+### LP Token Math
+
+**Initial deposit (pool creation):**
+
+$$
+LP_{\text{initial}} = \sqrt{\text{depositA} \times \text{depositB}} - 1000
+$$
+
+The 1000 tokens are locked forever (minimum liquidity).
+
+**Subsequent deposits:**
+
+$$
+LP_{\text{minted}} = \min\left(\frac{\text{totalLP} \times \text{depositA}}{\text{reserveA}}, \frac{\text{totalLP} \times \text{depositB}}{\text{reserveB}}\right)
+$$
+
+**Withdrawals:**
+
+$$
+\text{amountA} = \frac{\text{reserveA} \times LP_{\text{burned}}}{\text{totalLP}}
+$$
+
+$$
+\text{amountB} = \frac{\text{reserveB} \times LP_{\text{burned}}}{\text{totalLP}}
+$$

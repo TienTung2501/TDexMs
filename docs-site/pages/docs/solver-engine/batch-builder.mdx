@@ -1,0 +1,105 @@
+# Batch Builder
+
+import { Callout } from 'nextra/components'
+
+The **Batch Builder** groups validated intents by their target pool to maximize netting efficiency.
+
+## Algorithm
+
+```typescript
+class BatchBuilder {
+  /**
+   * Groups intents by their target pool.
+   * Each batch will be settled in a single transaction.
+   */
+  groupByPool(intents: RoutedIntent[]): IntentBatch[] {
+    const batchMap = new Map<string, IntentBatch>()
+    
+    for (const intent of intents) {
+      const poolId = intent.route.pools[0].id
+      
+      if (!batchMap.has(poolId)) {
+        batchMap.set(poolId, {
+          pool: intent.route.pools[0],
+          intents: [],
+          totalInputA: 0n,
+          totalInputB: 0n,
+        })
+      }
+      
+      const batch = batchMap.get(poolId)!
+      batch.intents.push(intent)
+      
+      // Track totals for quick netting estimation
+      if (intent.direction === 'AToB') {
+        batch.totalInputA += intent.inputAmount
+      } else {
+        batch.totalInputB += intent.inputAmount
+      }
+    }
+    
+    return Array.from(batchMap.values())
+      .filter(b => b.intents.length > 0)
+      .sort((a, b) => b.intents.length - a.intents.length) // Largest batches first
+  }
+}
+```
+
+## Batch Constraints
+
+Cardano transactions have size and execution unit limits. The batch builder respects these:
+
+| Constraint | Limit | Impact |
+|---|---|---|
+| **TX size** | ~16 KB | Limits number of intents per batch |
+| **Execution units** | CPU: 10B, Mem: 14M | Limits validator computation |
+| **Max inputs** | ~20-30 | Practical limit on consumed UTxOs |
+| **Max outputs** | ~20-30 | One output per intent owner + pool + change |
+
+```typescript
+const MAX_INTENTS_PER_BATCH = 15  // Conservative limit
+
+groupByPool(intents: RoutedIntent[]): IntentBatch[] {
+  // ... group by pool ...
+  
+  // Split oversized batches
+  return batches.flatMap(batch => {
+    if (batch.intents.length <= MAX_INTENTS_PER_BATCH) {
+      return [batch]
+    }
+    
+    // Split into chunks
+    const chunks: IntentBatch[] = []
+    for (let i = 0; i < batch.intents.length; i += MAX_INTENTS_PER_BATCH) {
+      chunks.push({
+        pool: batch.pool,
+        intents: batch.intents.slice(i, i + MAX_INTENTS_PER_BATCH),
+      })
+    }
+    return chunks
+  })
+}
+```
+
+## Priority Ordering
+
+Within each batch, intents are ordered for optimal execution:
+
+1. **Oldest first** — FIFO fairness
+2. **Largest first** — Maximum netting potential (alternative strategy)
+3. **Expiry-aware** — Intents close to expiry get priority
+
+```typescript
+private prioritizeIntents(intents: ValidIntent[]): ValidIntent[] {
+  return intents.sort((a, b) => {
+    // Priority 1: Close to expiry
+    const expiryA = a.dbIntent.expiresAt.getTime()
+    const expiryB = b.dbIntent.expiresAt.getTime()
+    const urgencyDiff = expiryA - expiryB
+    if (Math.abs(urgencyDiff) > 60000) return urgencyDiff
+    
+    // Priority 2: Oldest first (FIFO)
+    return a.dbIntent.createdAt.getTime() - b.dbIntent.createdAt.getTime()
+  })
+}
+```

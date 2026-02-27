@@ -1,0 +1,124 @@
+# Liquidity Provision
+
+import { Callout, Steps } from 'nextra/components'
+
+This guide explains how to provide and manage liquidity in SolverNet DEX pools.
+
+## Understanding LP Tokens
+
+When you deposit liquidity, you receive **LP tokens** representing your proportional share of the pool. These tokens can be burned to withdraw your share at any time.
+
+**Key formulas:**
+
+- Initial deposit: $LP = \sqrt{A \times B} - 1000$
+- Subsequent: $LP = \min\left(\frac{\text{totalLP} \times A}{R_A}, \frac{\text{totalLP} \times B}{R_B}\right)$
+- Withdrawal: $A_{out} = \frac{R_A \times LP_{\text{burned}}}{\text{totalLP}}$
+
+## Adding Liquidity
+
+<Steps>
+
+### Select Pool
+
+Navigate to `/pools` and find the pool you want to provide liquidity for. Click **Deposit**.
+
+### Enter Amounts
+
+Enter the amount for one asset. The other amount auto-calculates to maintain the pool ratio:
+
+```
+Pool ratio: 1 ADA = 0.5 USDT
+You enter: 1000 ADA
+Auto-fill: 500 USDT
+```
+
+<Callout type="info">
+You must deposit both assets in the current pool ratio. Depositing off-ratio means the excess of one asset won't earn LP tokens.
+</Callout>
+
+### Review Details
+
+- **LP tokens to receive** — Your share of the pool
+- **Pool share** — Your percentage of the total pool
+- **Slippage** — Price may move slightly between quote and execution
+
+### Sign & Submit
+
+1. Click **Deposit**
+2. Backend builds a deposit transaction:
+   - Sends both assets to the pool validator
+   - Mints LP tokens to your address
+   - Updates pool datum with new reserves
+3. Sign with your wallet
+4. Wait for on-chain confirmation
+
+</Steps>
+
+## Removing Liquidity
+
+<Steps>
+
+### Select Position
+
+Go to `/portfolio` → **LP Positions** or the pool's detail page. Click **Withdraw**.
+
+### Enter LP Amount
+
+Enter the amount of LP tokens to burn. The UI shows how much of each asset you'll receive:
+
+```
+LP tokens to burn: 50,000
+You receive:
+  500 ADA
+  250 USDT
+```
+
+### Set Minimums
+
+Set minimum amounts for slippage protection. If the pool ratio changes significantly before your TX confirms, the transaction will fail rather than giving you a bad deal.
+
+### Sign & Submit
+
+1. Click **Withdraw**
+2. Backend builds a withdraw transaction:
+   - Burns your LP tokens
+   - Returns proportional reserves to your address
+   - Updates pool datum
+3. Sign with your wallet
+4. Receive your assets
+
+</Steps>
+
+## Impermanent Loss
+
+<Callout type="warning">
+Like all AMM pools, SolverNet DEX pools are subject to **impermanent loss**. If the price ratio of the two assets changes significantly from when you deposited, you may receive less value upon withdrawal than if you had simply held the assets.
+</Callout>
+
+**When is IL minimal?**
+- Stable pairs (e.g., USDT/USDC)
+- When price returns to your entry ratio
+- When trading fees earned exceed IL
+
+**LP fee earnings:**
+- 0.3% fee on every swap through the pool
+- Distributed proportionally to LP holders
+- Earned continuously, compounding with each swap
+- 1/6 of the fee goes to the protocol; 5/6 goes to LPs
+
+## Pool Creation (Admin)
+
+Only the protocol admin can create new pools:
+
+```bash
+curl -X POST http://localhost:3001/v1/pools/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "assetA": "lovelace",
+    "assetB": "abc123def456.TOKEN",
+    "amountA": "1000000000",
+    "amountB": "500000000",
+    "fee": 30,
+    "creatorAddress": "addr_test1qz..."
+  }'
+```

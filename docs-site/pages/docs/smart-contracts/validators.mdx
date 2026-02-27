@@ -1,0 +1,225 @@
+# Validators
+
+import { Callout } from 'nextra/components'
+
+## Escrow Validator
+
+**File:** `smartcontract/validators/escrow_validator.ak`  
+**Parameters:** None  
+**Purpose:** Holds user swap intents as individual UTxOs.
+
+### Datum
+
+```aiken
+type EscrowDatum {
+  owner: Address,              // User who can cancel
+  input_asset: AssetClass,     // What the user is selling
+  output_asset: AssetClass,    // What the user wants to receive
+  min_output: Int,             // Minimum acceptable amount
+  intent_token: AssetClass,    // Auth token for this escrow
+  expiry_time: POSIXTime,      // TTL timestamp
+}
+```
+
+### Redeemers
+
+| Redeemer | Who | Conditions |
+|---|---|---|
+| `Cancel` | Owner only | TX signed by datum's `owner` address |
+| `Fill` | Solver | Output delivered to owner ≥ `min_output`; intent token burned |
+| `Reclaim` | Anyone | Current time > `expiry_time`; funds returned to owner |
+
+### Validation Rules (Fill)
+
+1. The output going to the `owner` address must contain ≥ `min_output` of `output_asset`
+2. The `intent_token` must be burned in the transaction (prevents double-fill)
+3. The escrow UTxO is consumed (spent)
+4. Partial fills create a new escrow UTxO with reduced `min_output`
+
+```aiken
+validator escrow {
+  spend(datum: EscrowDatum, redeemer: EscrowRedeemer, ctx: ScriptContext) {
+    when redeemer is {
+      Cancel -> {
+        // Verify owner signature
+        must_be_signed_by(ctx.transaction, datum.owner)
+      }
+      Fill -> {
+        // Verify output to owner >= min_output
+        let owner_output = get_output_to(ctx.transaction, datum.owner)
+        let received = quantity_of(owner_output.value, datum.output_asset)
+        expect received >= datum.min_output
+        // Verify intent token is burned
+        expect token_burned(ctx.transaction, datum.intent_token)
+      }
+      Reclaim -> {
+        // Verify expired
+        let valid_range = ctx.transaction.validity_range
+        expect after(valid_range, datum.expiry_time)
+        // Verify funds returned to owner
+        expect output_to_owner(ctx.transaction, datum.owner, datum.input_asset)
+      }
+    }
+  }
+}
+```
+
+---
+
+## Pool Validator
+
+**File:** `smartcontract/validators/pool_validator.ak`  
+**Parameters:** `admin_vkh: VerificationKeyHash`  
+**Purpose:** AMM constant-product pool with fee collection.
+
+### Datum
+
+```aiken
+type PoolDatum {
+  asset_a: AssetClass,         // First asset (canonically ordered)
+  asset_b: AssetClass,         // Second asset
+  total_lp_tokens: Int,        // Total LP supply
+  fee_numerator: Int,          // Fee basis points (30 = 0.3%)
+  fee_denominator: Int,        // Always 10000
+  protocol_fee_a: Int,         // Accumulated protocol fees
+  protocol_fee_b: Int,         //   for asset A and B
+  pool_nft: AssetClass,        // Thread token (identity)
+}
+```
+
+### Redeemers
+
+| Redeemer | Who | Conditions |
+|---|---|---|
+| `Swap` | Anyone | Constant-product invariant maintained after fee |
+| `Deposit` | Anyone | LP tokens minted proportionally |
+| `Withdraw` | Anyone | LP tokens burned, proportional reserves returned |
+| `CollectFees` | Admin only | Protocol fees sent to admin address |
+| `ClosePool` | Admin only | All liquidity withdrawn, pool NFT burned |
+
+### Swap Validation (Constant Product)
+
+The core invariant enforced on every swap:
+
+$$
+(R_{\text{in}} + \Delta_{\text{in}} \times (1 - f)) \times (R_{\text{out}} - \Delta_{\text{out}}) \geq R_{\text{in}} \times R_{\text{out}}
+$$
+
+Where:
+- $R_{\text{in}}$ = input reserve before swap
+- $R_{\text{out}}$ = output reserve before swap
+- $\Delta_{\text{in}}$ = input amount
+- $\Delta_{\text{out}}$ = output amount
+- $f$ = fee rate (fee_numerator / fee_denominator)
+
+In integer arithmetic (no floating point):
+
+```aiken
+// Verify constant product invariant
+let new_reserve_in = reserve_in * D + input_amount * (D - fee_numerator)
+let new_reserve_out = reserve_out * D - output_amount * D
+expect new_reserve_in * new_reserve_out >= reserve_in * reserve_out * D * D
+```
+
+---
+
+## Order Validator
+
+**File:** `smartcontract/validators/order_validator.ak`  
+**Parameters:** `intent_token_policy_id: PolicyId`  
+**Purpose:** Advanced order types (Limit, DCA, Stop-Loss).
+
+### Datum
+
+```aiken
+type OrderDatum {
+  creator: Address,
+  order_type: OrderType,       // Limit | DCA | StopLoss
+  input_asset: AssetClass,
+  output_asset: AssetClass,
+  total_budget: Int,
+  remaining_budget: Int,
+  price_numerator: Int,        // Target price
+  price_denominator: Int,
+  // DCA fields
+  dca_interval: Option<Int>,
+  dca_amount: Option<Int>,
+  last_executed: Option<POSIXTime>,
+  // Common
+  intent_token: AssetClass,
+  expiry_time: POSIXTime,
+}
+
+type OrderType {
+  Limit
+  DCA
+  StopLoss
+}
+```
+
+### Redeemers
+
+| Redeemer | Who | Conditions |
+|---|---|---|
+| `CancelOrder` | Creator only | TX signed by creator |
+| `ExecuteOrder` | Solver | Price condition met, correct output delivered |
+| `ReclaimOrder` | Anyone | Expired, funds returned to creator |
+
+### Price Condition Checks
+
+**Limit Order:** Execute when market price reaches target
+```
+output × price_denominator ≥ consumed × price_numerator
+```
+
+**DCA Order:** Execute at interval regardless of price (with optional price cap)
+```
+current_time - last_executed ≥ dca_interval
+execution_amount = min(dca_amount, remaining_budget)
+```
+
+**Stop-Loss:** Execute when price drops below threshold
+```
+current_price ≤ stop_loss_price
+```
+
+---
+
+## Factory Validator
+
+**Parameters:** `pool_validator_hash: ScriptHash`  
+**Purpose:** Registry ensuring no duplicate pools.
+
+### Key Rules
+
+1. **Canonical ordering:** `asset_a < asset_b` (hexadecimal comparison)
+2. **Uniqueness:** No two pools with the same asset pair
+3. **Pool NFT:** Each registered pool must have exactly 1 pool NFT
+
+---
+
+## Settings Validator
+
+**Parameters:** `settings_nft: AssetClass`  
+**Purpose:** Singleton global configuration UTxO.
+
+### Datum
+
+```aiken
+type SettingsDatum {
+  protocol_fee_percent: Int,   // Protocol fee percentage
+  min_liquidity: Int,          // Minimum initial liquidity (1000)
+  admin_address: Address,
+  version: Int,                // Schema version for upgrades
+}
+```
+
+### Redeemers
+
+| Redeemer | Who | Conditions |
+|---|---|---|
+| `UpdateSettings` | Admin only | New datum with incremented version |
+
+<Callout type="info">
+The settings UTxO is identified by a unique NFT. Only one settings UTxO can exist at a time, enforced by the NFT. The admin can update settings by consuming and recreating the UTxO with new parameters.
+</Callout>

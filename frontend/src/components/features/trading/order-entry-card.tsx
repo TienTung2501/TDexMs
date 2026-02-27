@@ -7,6 +7,7 @@ import {
   BarChart3,
   Loader2,
   Info,
+  Lock,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,9 @@ import type { NormalizedPool } from "@/lib/hooks";
 import { createOrder } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
 import { useTransaction } from "@/lib/hooks/use-transaction";
+
+/** Feature flag — set to true when advanced orders are ready for production */
+const ORDER_FEATURE_ENABLED = false;
 
 type OrderTab = "LIMIT" | "DCA" | "STOP_LOSS";
 
@@ -57,6 +61,10 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
   const [stopPrice, setStopPrice] = useState("");
 
   const [txResult, setTxResult] = useState<string | null>(null);
+  const [featureWarning, setFeatureWarning] = useState(false);
+
+  // Feature disabled — all inputs read-only
+  const formDisabled = !ORDER_FEATURE_ENABLED;
 
   // Use policyId for pool matching (tickers can be ambiguous with hex names)
   const pool = useMemo(() => {
@@ -90,6 +98,11 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
   ];
 
   const handleSubmit = async () => {
+    if (!ORDER_FEATURE_ENABLED) {
+      setFeatureWarning(true);
+      setTimeout(() => setFeatureWarning(false), 4000);
+      return;
+    }
     if (!address || !changeAddress || !inputAmount) return;
     setTxResult(null);
 
@@ -157,17 +170,35 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Feature disabled banner */}
+        {formDisabled && (
+          <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-600">
+            <Lock className="h-3.5 w-3.5 shrink-0" />
+            <span>Tính năng chưa sẵn sàng — Advanced orders are coming soon.</span>
+          </div>
+        )}
+
+        {/* Feature warning toast (on submit attempt) */}
+        {featureWarning && (
+          <div className="flex items-center gap-2 rounded-lg bg-destructive/10 border border-destructive/20 px-3 py-2 text-xs text-destructive animate-in fade-in duration-200">
+            <Info className="h-3.5 w-3.5 shrink-0" />
+            <span>Tính năng chưa sẵn sàng — This feature is not available yet.</span>
+          </div>
+        )}
+
         {/* Tab selector */}
         <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
           {tabs.map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+              onClick={() => !formDisabled && setActiveTab(tab.key)}
+              disabled={formDisabled}
               className={cn(
                 "flex-1 flex items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium transition-colors",
                 activeTab === tab.key
                   ? "bg-background shadow-sm text-foreground"
                   : "text-muted-foreground hover:text-foreground",
+                formDisabled && "opacity-50 cursor-not-allowed",
               )}
             >
               <tab.icon className="h-3.5 w-3.5" />
@@ -182,14 +213,14 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
             <label className="text-xs text-muted-foreground mb-1 block">Sell</label>
             <TokenButton
               token={inputToken}
-              onClick={() => setSelectingFor("input")}
+              onClick={() => !formDisabled && setSelectingFor("input")}
             />
           </div>
           <div>
             <label className="text-xs text-muted-foreground mb-1 block">Buy</label>
             <TokenButton
               token={outputToken}
-              onClick={() => setSelectingFor("output")}
+              onClick={() => !formDisabled && setSelectingFor("output")}
             />
           </div>
         </div>
@@ -205,6 +236,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
             value={inputAmount}
             onChange={(e) => setInputAmount(e.target.value)}
             className="text-right"
+            disabled={formDisabled}
           />
         </div>
 
@@ -231,6 +263,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
                   : setTargetPrice(e.target.value)
               }
               className="text-right"
+              disabled={formDisabled}
             />
           </div>
         )}
@@ -248,6 +281,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
                 value={amountPerInterval}
                 onChange={(e) => setAmountPerInterval(e.target.value)}
                 className="text-right"
+                disabled={formDisabled}
               />
             </div>
             <div>
@@ -258,12 +292,14 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
                 {["6", "12", "24", "48"].map((h) => (
                   <button
                     key={h}
-                    onClick={() => setIntervalHours(h)}
+                    onClick={() => !formDisabled && setIntervalHours(h)}
+                    disabled={formDisabled}
                     className={cn(
                       "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors border",
                       intervalHours === h
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border text-muted-foreground hover:border-primary/50",
+                      formDisabled && "opacity-50 cursor-not-allowed",
                     )}
                   >
                     {h}h
@@ -281,6 +317,7 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
                 value={targetPrice}
                 onChange={(e) => setTargetPrice(e.target.value)}
                 className="text-right"
+                disabled={formDisabled}
               />
             </div>
           </>
@@ -295,12 +332,14 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
             {["1", "3", "7"].map((d) => (
               <button
                 key={d}
-                onClick={() => setDeadline(d)}
+                onClick={() => !formDisabled && setDeadline(d)}
+                disabled={formDisabled}
                 className={cn(
                   "flex-1 rounded-md py-1.5 text-xs font-medium transition-colors border",
                   deadline === d
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border text-muted-foreground hover:border-primary/50",
+                  formDisabled && "opacity-50 cursor-not-allowed",
                 )}
               >
                 {d}d
@@ -371,10 +410,15 @@ export function OrderEntryCard({ pools }: OrderEntryCardProps) {
           <Button
             className="w-full"
             size="lg"
-            disabled={!inputAmount || Number(inputAmount) <= 0 || busy}
+            disabled={formDisabled || !inputAmount || Number(inputAmount) <= 0 || busy}
             onClick={handleSubmit}
           >
-            {busy ? (
+            {formDisabled ? (
+              <>
+                <Lock className="h-4 w-4 mr-2" />
+                Feature Not Available
+              </>
+            ) : busy ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
                 Signing...

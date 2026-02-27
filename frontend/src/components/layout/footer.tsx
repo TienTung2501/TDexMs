@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Github, ExternalLink } from "lucide-react";
+import { Github, ExternalLink, BookOpen } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 
 export function Footer() {
@@ -51,7 +51,7 @@ export function Footer() {
             <h4 className="text-sm font-semibold">Resources</h4>
             <nav className="flex flex-col gap-2">
               <a
-                href="https://github.com"
+                href="https://github.com/TienTung2501"
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -59,6 +59,13 @@ export function Footer() {
                 <Github className="h-3.5 w-3.5" />
                 GitHub
               </a>
+              <Link
+                href="/cv"
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <BookOpen className="h-3.5 w-3.5" />
+                About / CV
+              </Link>
               <a
                 href="https://cardano.org"
                 target="_blank"
@@ -76,7 +83,7 @@ export function Footer() {
 
         <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
           <p>Built on Cardano &bull; Open Source</p>
-          <p>SolverNet Protocol &copy; {new Date().getFullYear()}</p>
+          <p>SolverNet Protocol &copy; 2025</p>
         </div>
       </div>
     </footer>

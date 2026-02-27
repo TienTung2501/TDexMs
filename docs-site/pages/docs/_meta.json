@@ -1,0 +1,36 @@
+{
+  "getting-started": {
+    "title": "Getting Started",
+    "type": "doc"
+  },
+  "architecture": {
+    "title": "Architecture"
+  },
+  "smart-contracts": {
+    "title": "Smart Contracts"
+  },
+  "solver-engine": {
+    "title": "Solver Engine"
+  },
+  "api-reference": {
+    "title": "API Reference"
+  },
+  "database": {
+    "title": "Database"
+  },
+  "frontend": {
+    "title": "Frontend"
+  },
+  "guides": {
+    "title": "Guides"
+  },
+  "deployment": {
+    "title": "Deployment"
+  },
+  "security": {
+    "title": "Security"
+  },
+  "contributing": {
+    "title": "Contributing"
+  }
+}

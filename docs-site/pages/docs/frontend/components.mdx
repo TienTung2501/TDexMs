@@ -1,0 +1,172 @@
+# Components
+
+import { Callout } from 'nextra/components'
+
+## Component Architecture
+
+SolverNet DEX follows a layered component architecture:
+
+```
+components/
+├── ui/              # Base components (shadcn/ui)
+│   ├── button.tsx
+│   ├── card.tsx
+│   ├── dialog.tsx
+│   ├── input.tsx
+│   ├── tabs.tsx
+│   ├── select.tsx
+│   ├── toast.tsx
+│   └── ...
+├── common/          # Shared business components
+│   ├── AssetSelector.tsx
+│   ├── AmountInput.tsx
+│   ├── TransactionStatus.tsx
+│   └── ...
+├── features/        # Feature-specific components
+│   ├── trading/
+│   ├── wallet/
+│   ├── liquidity/
+│   └── admin/
+└── layout/          # App shell
+    ├── Header.tsx
+    ├── Sidebar.tsx
+    └── Footer.tsx
+```
+
+## Trading Components
+
+### SwapCard
+
+The primary swap interface component.
+
+```tsx
+// components/features/trading/SwapCard.tsx
+interface SwapCardProps {
+  pools: Pool[]
+  onSwapComplete?: (intent: Intent) => void
+}
+
+function SwapCard({ pools, onSwapComplete }: SwapCardProps) {
+  // State: input/output assets, amounts, quote
+  // 1. User selects input asset and enters amount
+  // 2. Auto-fetches quote from backend
+  // 3. Displays: output amount, price impact, fees, rate
+  // 4. On confirm: creates intent → returns unsigned TX
+  // 5. User signs with wallet → submits to chain
+  // 6. Real-time status updates via WebSocket
+}
+```
+
+**Features:**
+- Asset selector with search
+- Real-time quote updates (debounced)
+- Slippage tolerance settings
+- Price impact warnings (yellow > 1%, red > 5%)
+- Transaction status tracking
+
+### PriceChart
+
+TradingView-style price chart using `lightweight-charts`.
+
+```tsx
+// components/features/trading/PriceChart.tsx
+interface PriceChartProps {
+  poolId: string
+  interval: 'H4' | 'D1' | 'W1'
+}
+```
+
+**Features:**
+- Candlestick chart with OHLCV data
+- Volume overlay
+- Multiple timeframes (4h, 1d, 1w)
+- Real-time price updates via WebSocket
+- Responsive, resizable container
+
+### PseudoOrderbook
+
+Visual display of pending intents as an orderbook-style view.
+
+```tsx
+// components/features/trading/PseudoOrderbook.tsx
+interface PseudoOrderbookProps {
+  poolId: string
+  depth: number
+}
+```
+
+### OrderEntryCard
+
+Advanced order creation (Limit, DCA, Stop-Loss).
+
+```tsx
+// components/features/trading/OrderEntryCard.tsx
+interface OrderEntryCardProps {
+  pools: Pool[]
+  selectedPool?: Pool
+}
+```
+
+## Wallet Components
+
+### WalletConnect
+
+Handles Cardano wallet connection via CIP-30.
+
+```tsx
+// components/features/wallet/WalletConnect.tsx
+function WalletConnect() {
+  // Detect available wallets (Nami, Eternl, Flint, Lace)
+  // Connect and initialize Lucid
+  // Display connected address and balance
+  // Handle disconnection
+}
+```
+
+**Supported wallets:**
+- Nami
+- Eternl
+- Flint
+- Lace
+- GeroWallet
+
+## Liquidity Components
+
+### AddLiquidity
+
+```tsx
+// components/features/liquidity/AddLiquidity.tsx
+interface AddLiquidityProps {
+  pool: Pool
+  onDepositComplete?: () => void
+}
+```
+
+### RemoveLiquidity
+
+```tsx
+// components/features/liquidity/RemoveLiquidity.tsx
+interface RemoveLiquidityProps {
+  pool: Pool
+  lpBalance: bigint
+  onWithdrawComplete?: () => void
+}
+```
+
+## UI Components (shadcn/ui)
+
+Based on Radix UI primitives with Tailwind CSS styling:
+
+| Component | Base | Description |
+|---|---|---|
+| `Button` | Radix | Action buttons with variants (default, destructive, outline, ghost) |
+| `Card` | — | Container with header, content, footer |
+| `Dialog` | Radix Dialog | Modal overlays |
+| `Tabs` | Radix Tabs | Tab navigation (Swap/Limit/DCA/Stop-Loss) |
+| `Select` | Radix Select | Dropdown selection (Asset picker) |
+| `Input` | — | Text/number input fields |
+| `Toast` | Radix Toast | Notification toasts |
+| `Tooltip` | Radix Tooltip | Hover information |
+| `Badge` | — | Status badges (Active, Filled, etc.) |
+| `Table` | — | Data tables (pools list, order history) |
+| `Skeleton` | — | Loading placeholders |

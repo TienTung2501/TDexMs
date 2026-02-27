@@ -1,0 +1,113 @@
+# Wallet Integration
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX integrates with Cardano wallets using **CIP-30** (dApp connector standard) via **Lucid Evolution**.
+
+## Supported Wallets
+
+| Wallet | ID | Status |
+|---|---|---|
+| **Nami** | `nami` | ✅ Supported |
+| **Eternl** | `eternl` | ✅ Supported |
+| **Flint** | `flint` | ✅ Supported |
+| **Lace** | `lace` | ✅ Supported |
+| **GeroWallet** | `gerowallet` | ✅ Supported |
+
+## Connection Flow
+
+```typescript
+import { Lucid, Blockfrost } from '@lucid-evolution/lucid'
+
+// 1. Initialize Lucid with Blockfrost provider
+const lucid = await Lucid.new(
+  new Blockfrost(
+    'https://cardano-preprod.blockfrost.io/api',
+    BLOCKFROST_PROJECT_ID
+  ),
+  'Preprod'
+)
+
+// 2. Detect available wallets
+const availableWallets = Object.keys(window.cardano || {})
+  .filter(key => window.cardano[key]?.enable)
+
+// 3. Connect to selected wallet
+const api = await window.cardano.nami.enable()
+lucid.selectWallet(api)
+
+// 4. Get wallet info
+const address = await lucid.wallet.address()
+const utxos = await lucid.wallet.getUtxos()
+const balance = utxos.reduce((sum, u) => sum + u.assets.lovelace, 0n)
+```
+
+## Transaction Signing
+
+All transactions are built on the backend and signed by the user's wallet:
+
+```typescript
+// 1. Backend returns unsigned TX (CBOR hex)
+const { unsignedTx } = await api.createIntent({
+  creatorAddress: address,
+  inputAsset: 'lovelace',
+  outputAsset: tokenUnit,
+  inputAmount: '100000000',
+  minimumOutput: '49000000',
+})
+
+// 2. Deserialize and sign with wallet
+const tx = lucid.fromTx(unsignedTx)
+const signedTx = await tx.sign.withWallet().complete()
+
+// 3. Submit signed TX
+const txHash = await api.submitTx({
+  signedTx: signedTx.toCBOR(),
+  intentId: intentId,
+})
+
+// 4. Wait for confirmation
+await api.confirmTx({ txHash, intentId })
+```
+
+## React Context
+
+```tsx
+// providers/WalletProvider.tsx
+interface WalletContextValue {
+  connected: boolean
+  address: string | null
+  balance: bigint
+  walletName: string | null
+  connect: (walletId: string) => Promise<void>
+  disconnect: () => void
+  lucid: Lucid | null
+  signTx: (unsignedTx: string) => Promise<string>
+}
+
+const WalletContext = createContext<WalletContextValue>(...)
+
+export function useWallet() {
+  return useContext(WalletContext)
+}
+```
+
+<Callout type="info">
+The wallet connection state persists across page navigations using React Context. Auto-reconnect is attempted on page load if the user previously connected.
+</Callout>
+
+## Network Validation
+
+The frontend validates that the connected wallet is on the correct network:
+
+```typescript
+async function validateNetwork(lucid: Lucid) {
+  const networkId = await lucid.wallet.networkId()
+  
+  if (networkId !== 0) { // 0 = testnet, 1 = mainnet
+    throw new Error(
+      'Please switch your wallet to the Preprod testnet'
+    )
+  }
+}
+```

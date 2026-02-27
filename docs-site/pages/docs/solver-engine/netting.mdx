@@ -1,0 +1,152 @@
+# Netting Engine
+
+import { Callout } from 'nextra/components'
+
+The **Netting Engine** is the core innovation of SolverNet DEX. It cross-matches opposing intents within a batch, reducing the amount that needs to go through the AMM pool. This means better prices for all participants.
+
+## Algorithm
+
+```typescript
+// backend/src/solver/NettingEngine.ts
+
+class NettingEngine {
+  net(batch: IntentBatch): NettedBatch {
+    const { pool, intents } = batch
+    
+    // Step 1: Separate by direction
+    const aToBIntents = intents.filter(i => i.direction === 'AToB')
+    const bToAIntents = intents.filter(i => i.direction === 'BToA')
+    
+    // Step 2: Calculate gross flows
+    const grossAToB = aToBIntents.reduce(
+      (sum, i) => sum + i.inputAmount, 0n
+    )
+    const grossBToA = bToAIntents.reduce(
+      (sum, i) => sum + i.inputAmount, 0n
+    )
+    
+    // Step 3: Convert to common denomination (asset A)
+    const grossBToA_inA = this.convertToAssetA(grossBToA, pool)
+    
+    // Step 4: Net
+    const netFlow = grossAToB > grossBToA_inA
+      ? { direction: 'AToB', amount: grossAToB - grossBToA_inA }
+      : { direction: 'BToA', amount: grossBToA_inA - grossAToB }
+    
+    // Step 5: Calculate AMM output for residual only
+    const ammOutput = pool.calculateSwapOutput(
+      netFlow.amount, 
+      netFlow.direction
+    )
+    
+    // Step 6: Allocate outputs proportionally
+    const outputs = this.allocateOutputs(
+      aToBIntents, bToAIntents,
+      grossAToB, grossBToA,
+      netFlow, ammOutput, pool
+    )
+    
+    return {
+      pool,
+      intents,
+      residual: netFlow,
+      ammOutput,
+      outputs,
+      nettedAmount: grossAToB > grossBToA_inA ? grossBToA_inA : grossAToB,
+    }
+  }
+}
+```
+
+## Detailed Example
+
+### Setup
+
+Pool state: 100,000 ADA / 50,000 USDT (price: 1 ADA = 0.5 USDT)  
+Fee: 0.3%
+
+**Intents:**
+
+| Intent | Direction | Input |
+|---|---|---|
+| Alice | ADA → USDT | 10,000 ADA |
+| Bob | USDT → ADA | 3,000 USDT |
+| Carol | ADA → USDT | 5,000 ADA |
+
+### Step 1: Separate
+
+- **AToB** (ADA → USDT): Alice (10,000), Carol (5,000)
+- **BToA** (USDT → ADA): Bob (3,000 USDT)
+
+### Step 2: Gross Flows
+
+- Gross ADA → USDT: 15,000 ADA
+- Gross USDT → ADA: 3,000 USDT
+
+### Step 3: Convert to Common Denomination
+
+At pool price (0.5 USDT/ADA): 3,000 USDT = 6,000 ADA equivalent
+
+### Step 4: Net
+
+- Net flow: ADA → USDT direction
+- Net amount: 15,000 - 6,000 = **9,000 ADA** (instead of 15,000 + 6,000 = 21,000)
+
+### Step 5: AMM Output
+
+Only 9,000 ADA goes through the AMM:
+
+$$
+\text{output} = \frac{50{,}000 \times 9{,}000 \times 9{,}970}{100{,}000 \times 10{,}000 + 9{,}000 \times 9{,}970} = 4{,}117.5 \text{ USDT}
+$$
+
+### Step 6: Allocate Outputs
+
+**Alice** (10,000/15,000 = 66.7% of AToB flow):
+- Netted portion: 6,000 × 66.7% = 4,000 ADA → gets 2,000 USDT directly from Bob's USDT
+- AMM portion: 4,117.5 × 66.7% = 2,745 USDT
+- **Total: 4,745 USDT** ✅
+
+**Carol** (5,000/15,000 = 33.3% of AToB flow):
+- Netted portion: 6,000 × 33.3% = 2,000 ADA → gets 1,000 USDT directly from Bob's USDT
+- AMM portion: 4,117.5 × 33.3% = 1,372.5 USDT
+- **Total: 2,372.5 USDT** ✅
+
+**Bob** (3,000 USDT):
+- Entirely netted → gets 6,000 ADA directly from Alice/Carol's ADA
+- **Total: 6,000 ADA** (vs ~5,820 ADA through AMM alone) ✅
+
+### Improvement
+
+| Metric | Without Netting | With Netting | Improvement |
+|---|---|---|---|
+| AMM volume | 21,000 ADA | 9,000 ADA | **57% less** |
+| Alice output | 4,660 USDT | 4,745 USDT | **+1.8%** |
+| Carol output | 2,330 USDT | 2,372.5 USDT | **+1.8%** |
+| Bob output | 5,820 ADA | 6,000 ADA | **+3.1%** |
+| Price impact | 8.5% | 4.1% | **52% less** |
+
+<Callout type="info">
+Netting is a **Pareto improvement** — everyone gets a better price compared to individual AMM swaps. The improvement is most dramatic when there are large opposing flows.
+</Callout>
+
+## Edge Cases
+
+### No Opposing Intents
+If all intents are in the same direction, there's nothing to net. The entire flow goes through the AMM as normal. The netting engine gracefully handles this case.
+
+### Exact Match
+If opposing flows exactly cancel out (gross AToB = gross BToA in value), the AMM is not touched at all — pure P2P matching with zero price impact.
+
+### Minimum Output Validation
+After computing allocations, each intent's output is verified against its `minOutput`:
+
+```typescript
+for (const output of outputs) {
+  if (output.amount < output.intent.minOutput) {
+    // This intent cannot be satisfied 
+    // Remove from batch and re-net
+    throw new InsufficientOutputError(output.intent.id)
+  }
+}
+```

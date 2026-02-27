@@ -1,0 +1,164 @@
+# Domain Model
+
+import { Callout } from 'nextra/components'
+
+## Core Entities
+
+### Intent
+
+The `Intent` entity represents a user's swap request. It follows a strict state machine lifecycle.
+
+```typescript
+interface Intent {
+  id: string
+  creatorAddress: string          // User's wallet address
+  inputAsset: string              // Asset being sold (e.g., "lovelace")
+  outputAsset: string             // Asset being bought
+  inputAmount: bigint             // Amount being sold
+  minimumOutput: bigint           // Minimum acceptable output
+  actualOutput?: bigint           // Actual received amount (after fill)
+  status: IntentStatus            // Current lifecycle state
+  escrowTxHash?: string           // On-chain escrow TX hash
+  escrowTxIndex?: number          // UTxO output index
+  settlementTxHash?: string       // Settlement TX hash (when filled)
+  expiresAt: Date                 // TTL expiry
+  createdAt: Date
+  updatedAt: Date
+}
+```
+
+**Business Rules:**
+- An intent can only be filled if it's `ACTIVE` and not expired
+- An intent can be cancelled if it's `ACTIVE` or `PENDING`
+- Partial fills track the remaining amount
+- Expired intents are automatically reclaimed by the keeper cron
+
+### Pool
+
+The `Pool` entity represents an AMM liquidity pool with constant-product invariant.
+
+```typescript
+interface Pool {
+  id: string
+  nftPolicyId: string             // Pool NFT policy ID
+  nftAssetName: string            // Pool NFT asset name
+  assetA: string                  // First asset (always "lovelace" for ADA pairs)
+  assetB: string                  // Second asset (canonical: A < B)
+  reserveA: bigint                // Current reserve of asset A
+  reserveB: bigint                // Current reserve of asset B
+  totalLpTokens: bigint           // Total LP tokens in circulation
+  feeNumerator: number            // Fee in basis points (e.g., 30 = 0.3%)
+  protocolFeeA: bigint            // Accumulated protocol fees (asset A)
+  protocolFeeB: bigint            // Accumulated protocol fees (asset B)
+  tvl: number                     // Total value locked (USD or ADA)
+  volume24h: number               // 24-hour trading volume
+  state: PoolState                // ACTIVE, INACTIVE, CREATING
+  createdAt: Date
+}
+```
+
+**Business Rules:**
+- Assets are canonically ordered: `assetA < assetB` (enforced by factory validator)
+- Active reserves exclude accumulated protocol fees
+- Price = `reserveB / reserveA` (for A→B direction)
+- Minimum liquidity of 1000 LP tokens is locked forever (prevents division by zero)
+
+### Order
+
+The `Order` entity supports advanced order types: Limit, DCA, and Stop-Loss.
+
+```typescript
+interface Order {
+  id: string
+  creatorAddress: string
+  orderType: 'LIMIT' | 'DCA' | 'STOP_LOSS'
+  inputAsset: string
+  outputAsset: string
+  totalBudget: bigint             // Total budget for the order
+  remainingBudget: bigint         // Remaining unexecuted budget
+  priceNumerator: bigint          // Target price (numerator)
+  priceDenominator: bigint        // Target price (denominator)
+  
+  // DCA-specific
+  dcaInterval?: number            // Interval between executions (seconds)
+  dcaAmountPerInterval?: bigint   // Amount per execution
+  lastExecutedAt?: Date           // Last DCA execution time
+  
+  // Stop-Loss specific
+  stopLossPrice?: number          // Trigger price
+  
+  status: OrderStatus
+  escrowTxHash?: string
+  escrowTxIndex?: number
+  expiresAt: Date
+}
+```
+
+## Value Objects
+
+```typescript
+// Immutable value types
+type AssetUnit = string        // "lovelace" or "{policyId}{assetName}"
+type TokenPair = { assetA: AssetUnit; assetB: AssetUnit }
+type SwapDirection = 'AToB' | 'BToA'
+
+interface SwapResult {
+  outputAmount: bigint
+  feeAmount: bigint
+  protocolFee: bigint
+  priceImpact: number
+  effectivePrice: number
+}
+
+interface SwapRoute {
+  type: 'direct' | 'multi-hop'
+  pools: Pool[]
+  estimatedOutput: bigint
+  totalPriceImpact: number
+}
+```
+
+## Enums
+
+```typescript
+enum IntentStatus {
+  CREATED = 'CREATED',
+  PENDING = 'PENDING',
+  ACTIVE = 'ACTIVE',
+  FILLING = 'FILLING',
+  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
+  FILLED = 'FILLED',
+  CANCELLING = 'CANCELLING',
+  CANCELLED = 'CANCELLED',
+  EXPIRED = 'EXPIRED',
+  RECLAIMED = 'RECLAIMED',
+}
+
+enum OrderType {
+  LIMIT = 'LIMIT',
+  DCA = 'DCA',
+  STOP_LOSS = 'STOP_LOSS',
+}
+
+enum OrderStatus {
+  CREATED = 'CREATED',
+  PENDING = 'PENDING',
+  ACTIVE = 'ACTIVE',
+  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
+  FILLED = 'FILLED',
+  CANCELLED = 'CANCELLED',
+  EXPIRED = 'EXPIRED',
+}
+
+enum PoolState {
+  ACTIVE = 'ACTIVE',
+  INACTIVE = 'INACTIVE',
+  CREATING = 'CREATING',
+}
+
+enum CandleInterval {
+  H4 = 'H4',
+  D1 = 'D1',
+  W1 = 'W1',
+}
+```

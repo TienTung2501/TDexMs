@@ -122,7 +122,7 @@ export function RecentTradesTable({ poolId, limit = 10 }: RecentTradesTableProps
                   </span>
                   {trade.escrowTxHash && (
                     <a
-                      href={`https://cardanoscan.io/transaction/${trade.escrowTxHash}`}
+                      href={`https://preprod.cardanoscan.io/transaction/${trade.escrowTxHash}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-muted-foreground hover:text-foreground transition-colors"

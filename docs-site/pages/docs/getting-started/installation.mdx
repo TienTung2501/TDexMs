@@ -1,0 +1,144 @@
+# Installation
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+## System Requirements
+
+| Component | Minimum | Recommended |
+|---|---|---|
+| **Node.js** | 20.0.0 | 20 LTS (latest) |
+| **pnpm** | 9.15.0 | 9.15.0+ |
+| **PostgreSQL** | 15 | 16 (via Supabase or Docker) |
+| **Memory** | 2 GB | 4 GB+ |
+| **Disk** | 1 GB | 5 GB (with Cardano node: 60 GB+) |
+
+## Package Manager Setup
+
+SolverNet DEX uses **pnpm** with workspaces. Enable corepack:
+
+```bash
+corepack enable
+corepack prepare pnpm@9.15.0 --activate
+```
+
+## Monorepo Structure
+
+The project uses a monorepo managed by **Turborepo**:
+
+```
+decentralize/
+├── package.json          # Root workspace config
+├── pnpm-workspace.yaml   # Workspace packages
+├── turbo.json            # Turborepo pipeline
+├── backend/              # Express API + Solver
+├── frontend/             # Next.js UI
+└── docs-site/            # Documentation (Nextra)
+```
+
+## Install Dependencies
+
+```bash
+# From the project root
+pnpm install
+```
+
+This performs a recursive install across all workspace packages.
+
+## Database Setup
+
+<Tabs items={['Supabase (Recommended)', 'Docker PostgreSQL', 'Local PostgreSQL']}>
+  <Tabs.Tab>
+1. Create a project at [supabase.com](https://supabase.com)
+2. Copy the connection strings from **Settings → Database**:
+   - `DATABASE_URL` — Pooled connection (with `?pgbouncer=true&connection_limit=1`)
+   - `DIRECT_URL` — Direct connection (for migrations)
+
+```env
+DATABASE_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+DIRECT_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```bash
+docker run -d \
+  --name solvernet-db \
+  -e POSTGRES_USER=solvernet \
+  -e POSTGRES_PASSWORD=solvernet \
+  -e POSTGRES_DB=solvernet \
+  -p 5432:5432 \
+  postgres:16-alpine
+```
+
+```env
+DATABASE_URL="postgresql://solvernet:solvernet@localhost:5432/solvernet"
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```bash
+createdb solvernet
+```
+
+```env
+DATABASE_URL="postgresql://localhost:5432/solvernet"
+```
+  </Tabs.Tab>
+</Tabs>
+
+After configuring the database URL, run migrations:
+
+```bash
+cd backend
+pnpm exec prisma migrate dev
+pnpm exec prisma generate
+```
+
+## Redis Setup (Optional)
+
+SolverNet DEX uses **Upstash Redis** for caching. It's optional but recommended for performance.
+
+```env
+UPSTASH_REDIS_URL="https://xxxx.upstash.io"
+UPSTASH_REDIS_TOKEN="AXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+Without Redis, the application falls back to in-memory caching.
+
+## Blockfrost Setup
+
+1. Sign up at [blockfrost.io](https://blockfrost.io)
+2. Create a project for **Cardano Preprod**
+3. Copy the Project ID
+
+```env
+BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXXXXXXXXXXXXXX"
+BLOCKFROST_URL="https://cardano-preprod.blockfrost.io/api"
+```
+
+## Smart Contract Compilation (Optional)
+
+If you need to modify smart contracts:
+
+```bash
+# Install Aiken
+curl -sSfL https://install.aiken-lang.org | bash
+
+# Compile validators
+cd smartcontract
+aiken build
+```
+
+<Callout type="warning">
+Smart contract compilation requires **Aiken v1.1.19**. The compiled `plutus.json` is already included in the repository. You only need to recompile if you modify the validator logic.
+</Callout>
+
+## Verify Installation
+
+```bash
+# Backend
+cd backend && pnpm exec tsx src/index.ts
+# Should output: Server listening on port 3001
+
+# Frontend (new terminal)
+cd frontend && pnpm dev
+# Should output: Ready on http://localhost:3000
+```

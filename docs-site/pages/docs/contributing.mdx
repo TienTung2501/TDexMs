@@ -1,0 +1,255 @@
+# Contributing
+
+import { Callout, Steps } from 'nextra/components'
+
+## Welcome
+
+Thank you for your interest in contributing to SolverNet DEX! This guide will help you get set up and understand our development workflow.
+
+## Prerequisites
+
+- **Node.js** ≥ 20
+- **pnpm** ≥ 9.15
+- **PostgreSQL** 16 (or Supabase account)
+- **Aiken** ≥ 1.1.16 (for smart contract work)
+- **Git** with conventional commit knowledge
+
+## Development Setup
+
+<Steps>
+### Fork & Clone
+
+```bash
+git clone https://github.com/your-fork/decentralize.git
+cd decentralize
+```
+
+### Install Dependencies
+
+```bash
+corepack enable
+pnpm install
+```
+
+### Configure Environment
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env with your Blockfrost key and database URL
+```
+
+### Setup Database
+
+```bash
+cd backend
+pnpm exec prisma migrate dev
+pnpm exec prisma generate
+```
+
+### Start Development
+
+```bash
+# From project root — starts both frontend and backend
+pnpm dev
+```
+</Steps>
+
+## Project Structure
+
+| Directory | Description | Language |
+|-----------|-------------|----------|
+| `backend/` | API server + solver engine | TypeScript |
+| `frontend/` | Web application | TypeScript / React |
+| `smartcontract/` | On-chain validators | Aiken |
+| `docs-site/` | Documentation | MDX / Nextra |
+
+## Branching Strategy
+
+```
+main
+ ├── develop          ← integration branch
+ │    ├── feature/*   ← new features
+ │    ├── fix/*        ← bug fixes
+ │    └── refactor/*   ← code improvements
+ └── release/*        ← release candidates
+```
+
+### Branch Naming
+
+- `feature/add-limit-orders` — New functionality
+- `fix/pool-sync-race-condition` — Bug fix
+- `refactor/solver-pipeline` — Code improvement
+- `docs/api-reference` — Documentation
+
+## Commit Convention
+
+We use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+
+[optional body]
+[optional footer]
+```
+
+### Types
+
+| Type | Description |
+|------|-------------|
+| `feat` | New feature |
+| `fix` | Bug fix |
+| `docs` | Documentation only |
+| `style` | Formatting, no code change |
+| `refactor` | Code restructuring |
+| `test` | Adding or fixing tests |
+| `chore` | Build, CI, tooling |
+| `perf` | Performance improvement |
+
+### Scopes
+
+`backend`, `frontend`, `contracts`, `solver`, `api`, `db`, `docs`, `ci`
+
+### Examples
+
+```bash
+feat(solver): add multi-hop routing for cross-pool swaps
+fix(api): handle race condition in concurrent intent submission
+docs(contracts): document escrow validator security properties
+refactor(backend): extract pool sync into dedicated service
+test(solver): add netting engine property-based tests
+```
+
+## Pull Request Process
+
+<Steps>
+### Create a Feature Branch
+
+```bash
+git checkout develop
+git pull origin develop
+git checkout -b feature/my-feature
+```
+
+### Make Changes
+
+- Write clear, documented code
+- Add or update tests for your changes
+- Follow the existing code style (Clean Architecture in backend)
+
+### Self-Review Checklist
+
+- [ ] Code compiles without errors (`pnpm build`)
+- [ ] Tests pass (`pnpm test`)
+- [ ] No console.log / debug statements left
+- [ ] Environment variables documented if added
+- [ ] Database migrations included if schema changed
+- [ ] API changes reflected in documentation
+
+### Submit PR
+
+- Target: `develop` branch
+- Title: Follow commit convention (e.g., `feat(solver): add multi-hop routing`)
+- Description: Explain what, why, and how
+- Link related issues
+
+### Review & Merge
+
+- At least 1 approval required
+- All CI checks must pass
+- Squash merge preferred
+</Steps>
+
+## Code Style
+
+### Backend (TypeScript)
+
+```typescript
+// Clean Architecture layers — respect import boundaries
+// ✅ Correct: domain → domain
+// ✅ Correct: application → domain
+// ✅ Correct: infrastructure → domain
+// ❌ Wrong: domain → infrastructure
+
+// Use dependency injection
+export class SolverEngine {
+  constructor(
+    private readonly intentCollector: IntentCollectorPort,
+    private readonly nettingEngine: NettingEnginePort,
+    private readonly batchBuilder: BatchBuilderPort,
+  ) {}
+}
+
+// Prefer explicit types
+const processIntent = (intent: Intent): Result<ProcessedIntent> => { ... }
+
+// Use Result types for error handling, not exceptions
+type Result<T> = { success: true; data: T } | { success: false; error: DomainError }
+```
+
+### Smart Contracts (Aiken)
+
+```aiken
+// Document all validator functions
+/// Validates that a swap preserves the constant-product invariant
+/// after deducting the protocol fee.
+fn validate_swap(datum: PoolDatum, redeemer: PoolRedeemer, ctx: ScriptContext) -> Bool {
+  // Use descriptive variable names
+  let reserve_in = ...
+  let reserve_out = ...
+  
+  // Validate invariant
+  expect new_reserve_in * new_reserve_out >= reserve_in * reserve_out
+  True
+}
+```
+
+### Frontend (React / TypeScript)
+
+```typescript
+// Functional components with explicit typing
+interface SwapCardProps {
+  pools: Pool[];
+  onSwap: (intent: SwapIntent) => Promise<void>;
+}
+
+export const SwapCard: React.FC<SwapCardProps> = ({ pools, onSwap }) => {
+  // Use hooks for state management
+  const [amount, setAmount] = useState<string>('');
+  // ...
+};
+```
+
+## Testing
+
+### Running Tests
+
+```bash
+# Backend unit tests
+cd backend && pnpm test
+
+# System integration test
+cd backend && pnpm exec tsx scripts/test-system.ts
+
+# Smart contract tests
+cd smartcontract && aiken check
+
+# Frontend (if configured)
+cd frontend && pnpm test
+```
+
+### Writing Tests
+
+- **Unit tests**: Test individual functions and classes in isolation
+- **Integration tests**: Test service interactions with mocked ports
+- **System tests**: End-to-end test of the full pipeline
+- **Property tests**: For mathematical functions (AMM math, netting)
+
+## Getting Help
+
+- **Issues**: Open a GitHub issue for bugs or feature requests
+- **Discussions**: Use GitHub Discussions for questions
+- **Code of Conduct**: Be respectful and constructive
+
+<Callout>
+Not sure where to start? Look for issues labeled `good-first-issue` or `help-wanted`.
+</Callout>

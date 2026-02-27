@@ -1,0 +1,116 @@
+# System Design
+
+import { Callout } from 'nextra/components'
+
+## Intent Lifecycle
+
+The core concept of SolverNet DEX is the **intent lifecycle** — a state machine that tracks each swap request from creation to settlement.
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │                                             │
+  User creates  ───►  CREATED  ──► PENDING ──► ACTIVE            │
+  swap intent      │     │            │          │                │
+                    │     │            │          ├──► FILLING     │
+                    │     │            │          │      │         │
+                    │     │            │          │      ├──► PARTIALLY_FILLED
+                    │     │            │          │      │         │
+                    │     │            │          │      └──► FILLED ──► Done!
+                    │     │            │          │                │
+                    │     ├──► CANCELLING ──► CANCELLED            │
+                    │     │                                       │
+                    │     └──► EXPIRED ──► RECLAIMED              │
+                    └─────────────────────────────────────────────┘
+```
+
+### State Descriptions
+
+| State | Description |
+|---|---|
+| `CREATED` | Intent record created in database, TX not yet submitted |
+| `PENDING` | Escrow TX submitted but not yet confirmed on-chain |
+| `ACTIVE` | Escrow UTxO confirmed on-chain, ready for solver settlement |
+| `FILLING` | Solver has selected this intent for the current batch |
+| `PARTIALLY_FILLED` | Intent partially settled (partial fill), remaining amount still active |
+| `FILLED` | Intent fully settled, user received output tokens |
+| `CANCELLING` | Cancel TX submitted but not yet confirmed |
+| `CANCELLED` | Intent cancelled, funds returned to user |
+| `EXPIRED` | Intent TTL expired, eligible for reclaim |
+| `RECLAIMED` | Expired intent reclaimed, funds returned |
+
+## Transaction Flow
+
+### Swap (Happy Path)
+
+```
+User                    Frontend              Backend                 Cardano
+ │                        │                     │                       │
+ │── Connect Wallet ─────►│                     │                       │
+ │── Enter swap params ──►│                     │                       │
+ │                        │── GET /v1/quote ───►│                       │
+ │                        │◄── quote response ──│                       │
+ │── Confirm swap ───────►│                     │                       │
+ │                        │── POST /v1/intents─►│                       │
+ │                        │                     │── Build escrow TX ───►│
+ │                        │◄── unsigned TX ─────│                       │
+ │◄── Sign TX prompt ────│                     │                       │
+ │── Sign with wallet ──►│                     │                       │
+ │                        │── POST /v1/tx/submit►│                       │
+ │                        │                     │── Submit to chain ───►│
+ │                        │                     │◄── TX hash ──────────│
+ │                        │◄── intent created ──│                       │
+ │                        │                     │                       │
+ │                        │   [Solver Loop]     │                       │
+ │                        │                     │── Collect UTxOs ─────►│
+ │                        │                     │── Net opposing ──────│
+ │                        │                     │── Build batch TX ────►│
+ │                        │                     │◄── Settlement TX ────│
+ │                        │                     │                       │
+ │                        │◄── WS: intentUpdate │                       │
+ │◄── Swap complete ─────│                     │                       │
+```
+
+### Pool Creation
+
+```
+Admin                   Backend                 Cardano
+ │                        │                       │
+ │── POST /v1/pools/create►│                       │
+ │                        │── Validate pair ──────│
+ │                        │── Mint Pool NFT ──────│
+ │                        │── Mint LP tokens ─────│
+ │                        │── Build create TX ───►│
+ │◄── unsigned TX ────────│                       │
+ │── Sign & submit ──────►│                       │
+ │                        │── Submit to chain ───►│
+ │                        │◄── Confirmed ─────────│
+ │◄── Pool created ───────│                       │
+```
+
+## Background Services
+
+Six cron-based services run continuously to maintain system state:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                   Background Services                     │
+│                                                          │
+│  ┌─────────────┐  ┌──────────────────┐  ┌────────────┐  │
+│  │ ChainSync   │  │PriceAggregation  │  │  Reclaim   │  │
+│  │ Every 30s   │  │   Every 60s      │  │ Every 60s  │  │
+│  │             │  │                  │  │            │  │
+│  │ Sync pool   │  │ PriceTick → OHLCV│  │ Expire &   │  │
+│  │ UTxOs from  │  │ candles (H4/D1/  │  │ reclaim    │  │
+│  │ Blockfrost  │  │ W1 intervals)    │  │ intents    │  │
+│  └─────────────┘  └──────────────────┘  └────────────┘  │
+│                                                          │
+│  ┌─────────────┐  ┌──────────────────┐  ┌────────────┐  │
+│  │OrderExecutor│  │  PoolSnapshot    │  │ FaucetBot  │  │
+│  │ Every 60s   │  │   Every 1h       │  │ Every 24h  │  │
+│  │             │  │                  │  │            │  │
+│  │ Execute ripe│  │ Snapshot pool    │  │ Request    │  │
+│  │ limit/DCA/  │  │ state for        │  │ testnet    │  │
+│  │ stop-loss   │  │ analytics        │  │ ADA        │  │
+│  └─────────────┘  └──────────────────┘  └────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```

@@ -1,0 +1,228 @@
+# WebSocket API
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX provides real-time updates via WebSocket at `/v1/ws`.
+
+## Connection
+
+```javascript
+const ws = new WebSocket('wss://tdexms.onrender.com/v1/ws')
+// or for local development:
+// const ws = new WebSocket('ws://localhost:3001/v1/ws')
+
+ws.onopen = () => {
+  console.log('Connected to SolverNet DEX WebSocket')
+}
+```
+
+## Protocol
+
+All messages are JSON-encoded. The protocol uses a simple subscribe/unsubscribe pattern.
+
+### Subscribe
+
+```json
+{
+  "type": "subscribe",
+  "channel": "prices",
+  "params": {
+    "pair": "ADA/USDT"
+  }
+}
+```
+
+### Unsubscribe
+
+```json
+{
+  "type": "unsubscribe",
+  "channel": "prices"
+}
+```
+
+### Heartbeat
+
+The server sends `ping` frames every 30 seconds. The client must respond with `pong`. Connections that miss 3 consecutive heartbeats are terminated.
+
+```json
+// Server → Client
+{ "type": "ping" }
+
+// Client → Server
+{ "type": "pong" }
+```
+
+## Channels
+
+### `prices` — Real-time Price Updates
+
+Subscribe to price changes for specific pairs or all pairs.
+
+**Subscribe:**
+```json
+{
+  "type": "subscribe",
+  "channel": "prices",
+  "params": {
+    "pair": "ADA/USDT"    // or "*" for all pairs
+  }
+}
+```
+
+**Events:**
+```json
+{
+  "type": "price",
+  "data": {
+    "poolId": "pool_abc123",
+    "pair": "ADA/USDT",
+    "price": "0.5100",
+    "previousPrice": "0.5050",
+    "change24h": "+0.99%",
+    "volume24h": "150000",
+    "timestamp": "2026-02-27T12:00:00Z"
+  }
+}
+```
+
+### `intent` — Intent Status Updates
+
+Subscribe to status changes for specific intents or all intents.
+
+**Subscribe:**
+```json
+{
+  "type": "subscribe",
+  "channel": "intent",
+  "params": {
+    "id": "intent_xyz789"    // or "*" for all intents
+  }
+}
+```
+
+**Events:**
+```json
+{
+  "type": "intentUpdate",
+  "data": {
+    "id": "intent_xyz789",
+    "status": "FILLED",
+    "previousStatus": "ACTIVE",
+    "actualOutput": "49251234",
+    "settlementTxHash": "abc123...",
+    "timestamp": "2026-02-27T12:00:00Z"
+  }
+}
+```
+
+**Status change events:**
+
+| Status Change | Trigger |
+|---|---|
+| `CREATED → PENDING` | TX submitted |
+| `PENDING → ACTIVE` | TX confirmed on-chain |
+| `ACTIVE → FILLING` | Solver selecting this intent |
+| `FILLING → FILLED` | Settlement TX confirmed |
+| `ACTIVE → CANCELLING` | Cancel TX submitted |
+| `CANCELLING → CANCELLED` | Cancel TX confirmed |
+| `ACTIVE → EXPIRED` | TTL expired |
+| `EXPIRED → RECLAIMED` | Reclaim TX confirmed |
+
+### `pool` — Pool State Updates
+
+Subscribe to pool reserve and TVL changes.
+
+**Subscribe:**
+```json
+{
+  "type": "subscribe",
+  "channel": "pool",
+  "params": {
+    "id": "pool_abc123"    // or "*" for all pools
+  }
+}
+```
+
+**Events:**
+```json
+{
+  "type": "poolUpdate",
+  "data": {
+    "id": "pool_abc123",
+    "reserveA": "1000500000000",
+    "reserveB": "499750000000",
+    "tvl": "2000250",
+    "price": "0.4995",
+    "totalLpTokens": "707106781",
+    "timestamp": "2026-02-27T12:00:00Z"
+  }
+}
+```
+
+## Client Example
+
+### JavaScript/TypeScript
+
+```typescript
+class SolverNetWSClient {
+  private ws: WebSocket
+  private handlers = new Map<string, Function[]>()
+  
+  connect(url: string) {
+    this.ws = new WebSocket(url)
+    
+    this.ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data)
+      
+      if (msg.type === 'ping') {
+        this.ws.send(JSON.stringify({ type: 'pong' }))
+        return
+      }
+      
+      const handlers = this.handlers.get(msg.type) || []
+      handlers.forEach(fn => fn(msg.data))
+    }
+    
+    this.ws.onclose = () => {
+      // Auto-reconnect after 3 seconds
+      setTimeout(() => this.connect(url), 3000)
+    }
+  }
+  
+  subscribePrices(pair: string = '*') {
+    this.ws.send(JSON.stringify({
+      type: 'subscribe',
+      channel: 'prices',
+      params: { pair }
+    }))
+  }
+  
+  subscribeIntent(intentId: string) {
+    this.ws.send(JSON.stringify({
+      type: 'subscribe',
+      channel: 'intent',
+      params: { id: intentId }
+    }))
+  }
+  
+  on(eventType: string, handler: Function) {
+    if (!this.handlers.has(eventType)) {
+      this.handlers.set(eventType, [])
+    }
+    this.handlers.get(eventType)!.push(handler)
+  }
+}
+
+// Usage
+const client = new SolverNetWSClient()
+client.connect('wss://tdexms.onrender.com/v1/ws')
+client.subscribePrices('ADA/USDT')
+client.on('price', (data) => {
+  console.log(`ADA/USDT price: ${data.price}`)
+})
+```
+
+<Callout type="info">
+The frontend uses a similar WebSocket client in `frontend/src/lib/api.ts` with automatic reconnection and React hook integration.
+</Callout>

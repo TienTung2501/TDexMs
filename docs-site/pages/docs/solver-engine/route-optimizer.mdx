@@ -1,0 +1,122 @@
+# Route Optimizer
+
+import { Callout } from 'nextra/components'
+
+The **Route Optimizer** finds the best execution path for each intent. It currently supports direct pool swaps, with multi-hop routing planned for future releases.
+
+## Route Types
+
+| Type | Description | Example |
+|---|---|---|
+| **Direct** | Single pool swap | ADA → USDT via ADA/USDT pool |
+| **Multi-hop** | Through intermediate pools | TOKEN → ADA → USDT via TOKEN/ADA and ADA/USDT pools |
+
+## Direct Route
+
+```typescript
+class RouteOptimizer {
+  async findBestRoute(intent: ValidIntent): Promise<SwapRoute> {
+    // Try direct pool first
+    const directPool = await this.poolRepo.findByAssets(
+      intent.inputAsset,
+      intent.outputAsset
+    )
+    
+    if (directPool && directPool.state === 'ACTIVE') {
+      const direction = this.getDirection(intent, directPool)
+      const output = directPool.calculateSwapOutput(
+        intent.inputAmount, 
+        direction
+      )
+      const priceImpact = directPool.calculatePriceImpact(
+        intent.inputAmount,
+        direction
+      )
+      
+      return {
+        type: 'direct',
+        pools: [directPool],
+        direction,
+        estimatedOutput: output.outputAmount,
+        totalFee: output.feeAmount,
+        priceImpact,
+      }
+    }
+    
+    // Try multi-hop
+    return this.findMultiHopRoute(intent)
+  }
+}
+```
+
+## Multi-Hop Routing
+
+For pairs without a direct pool, the optimizer searches for intermediate pools:
+
+```typescript
+private async findMultiHopRoute(intent: ValidIntent): Promise<SwapRoute> {
+  // Find all pools containing the input asset
+  const inputPools = await this.poolRepo.findByAsset(intent.inputAsset)
+  
+  // Find all pools containing the output asset  
+  const outputPools = await this.poolRepo.findByAsset(intent.outputAsset)
+  
+  // Find common intermediate assets
+  const routes: MultiHopCandidate[] = []
+  
+  for (const pool1 of inputPools) {
+    const intermediateAsset = pool1.assetA === intent.inputAsset 
+      ? pool1.assetB 
+      : pool1.assetA
+    
+    for (const pool2 of outputPools) {
+      if (pool2.assetA === intermediateAsset || pool2.assetB === intermediateAsset) {
+        // Found a 2-hop route: input → intermediate → output
+        const output1 = pool1.calculateSwapOutput(intent.inputAmount, /*...*/)
+        const output2 = pool2.calculateSwapOutput(output1.outputAmount, /*...*/)
+        
+        routes.push({
+          pools: [pool1, pool2],
+          estimatedOutput: output2.outputAmount,
+          totalPriceImpact: /*...*/,
+        })
+      }
+    }
+  }
+  
+  if (routes.length === 0) {
+    throw new NoRouteError(intent.inputAsset, intent.outputAsset)
+  }
+  
+  // Return route with best output
+  return routes.sort((a, b) => 
+    Number(b.estimatedOutput - a.estimatedOutput)
+  )[0]
+}
+```
+
+## Route Selection Criteria
+
+When multiple routes are available, the optimizer selects based on:
+
+1. **Output amount** — Highest output wins (primary criterion)
+2. **Price impact** — Lower impact preferred for large trades
+3. **Pool liquidity** — Deeper pools provide better execution
+4. **Number of hops** — Fewer hops preferred (less fee accumulation)
+
+<Callout type="warning">
+Multi-hop swaps accumulate fees at each hop. A 2-hop swap through two 0.3% fee pools has an effective fee of ~0.6%. The optimizer accounts for this when comparing routes.
+</Callout>
+
+## Future: Solver Competition
+
+The architecture is designed for future multi-solver competition:
+
+```
+Intent submitted → Multiple solvers compete
+                   Solver A: Direct route → quote 100 USDT
+                   Solver B: Multi-hop → quote 102 USDT  ← Wins!
+                   Solver C: Cross-DEX → quote 101 USDT
+```
+
+Each solver can implement their own proprietary routing algorithms, with the protocol ensuring that users always get at least their `minOutput`.

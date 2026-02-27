@@ -1,0 +1,148 @@
+# Quick Start
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+Get SolverNet DEX running locally in under 5 minutes.
+
+## Prerequisites
+
+- **Node.js** ≥ 20.0.0
+- **pnpm** 9.15.0+ (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
+- **Docker** (optional, for local Cardano node)
+- A **Blockfrost** API key (free at [blockfrost.io](https://blockfrost.io))
+
+<Steps>
+### Clone the repository
+
+```bash
+git clone https://github.com/TienTung2501/decentralize.git
+cd decentralize
+```
+
+### Install dependencies
+
+```bash
+pnpm install
+```
+
+This installs dependencies for all workspace packages (backend, frontend, docs-site) using pnpm workspaces.
+
+### Set up environment variables
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+Edit `backend/.env` with your configuration:
+
+```env
+# Required
+DATABASE_URL="postgresql://user:password@localhost:5432/solvernet"
+BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXXXXXXXXXXXXXX"
+CARDANO_NETWORK="preprod"
+
+# Solver (optional — only if running a solver)
+SOLVER_SEED_PHRASE="your twenty-four word mnemonic phrase ..."
+SOLVER_ENABLED=false
+```
+
+See [Configuration](/docs/getting-started/configuration) for the full list of environment variables.
+
+### Set up the database
+
+```bash
+cd backend
+pnpm exec prisma migrate dev
+pnpm exec prisma generate
+```
+
+### Start the backend
+
+```bash
+pnpm exec tsx src/index.ts
+```
+
+The API server starts on `http://localhost:3001`.
+
+### Start the frontend
+
+In a new terminal:
+
+```bash
+cd frontend
+pnpm dev
+```
+
+The frontend starts on `http://localhost:3000`.
+
+</Steps>
+
+## Verify Installation
+
+<Tabs items={['Health Check', 'Get Pools', 'Get Quote']}>
+  <Tabs.Tab>
+```bash
+curl http://localhost:3001/v1/health
+```
+
+```json
+{
+  "status": "healthy",
+  "uptime": 12.345,
+  "database": "connected",
+  "blockfrost": "connected",
+  "cache": "connected"
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```bash
+curl http://localhost:3001/v1/pools
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "pool_abc123",
+      "assetA": { "unit": "lovelace", "name": "ADA" },
+      "assetB": { "unit": "abc...policy.TOKEN", "name": "TOKEN" },
+      "reserveA": "1000000000",
+      "reserveB": "500000000",
+      "tvl": "2000.00",
+      "fee": 30
+    }
+  ]
+}
+```
+  </Tabs.Tab>
+  <Tabs.Tab>
+```bash
+curl "http://localhost:3001/v1/quote?inputAsset=lovelace&outputAsset=abc...TOKEN&amount=100000000"
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "inputAmount": "100000000",
+    "outputAmount": "49251234",
+    "priceImpact": "0.0050",
+    "fee": "300000",
+    "route": "direct"
+  }
+}
+```
+  </Tabs.Tab>
+</Tabs>
+
+<Callout type="info">
+If you're using the Cardano preprod testnet, you'll need test ADA. The backend includes an automatic faucet bot that requests testnet ADA periodically, or you can use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) directly.
+</Callout>
+
+## Next Steps
+
+- [Configuration Guide](/docs/getting-started/configuration) — Full environment variable reference
+- [Architecture Overview](/docs/architecture) — Understand the system design
+- [Swap Flow Guide](/docs/guides/swap-flow) — Walk through a complete swap

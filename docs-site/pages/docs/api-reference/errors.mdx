@@ -1,0 +1,105 @@
+# Error Codes
+
+import { Callout } from 'nextra/components'
+
+All errors return a consistent JSON structure with an error code, message, and optional details.
+
+## Error Response Format
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human-readable description",
+    "details": { ... }
+  }
+}
+```
+
+## HTTP Status Codes
+
+| Status | Meaning |
+|---|---|
+| `200` | Success |
+| `201` | Created |
+| `400` | Bad Request — invalid input |
+| `401` | Unauthorized — invalid admin auth |
+| `403` | Forbidden — not admin |
+| `404` | Not Found |
+| `409` | Conflict — duplicate resource |
+| `422` | Unprocessable — business rule violation |
+| `429` | Rate Limited |
+| `500` | Internal Server Error |
+| `503` | Service Unavailable — dependency down |
+
+## Error Codes
+
+### Validation Errors (400)
+
+| Code | Description |
+|---|---|
+| `VALIDATION_ERROR` | Request body/query params failed Zod validation |
+| `INVALID_ADDRESS` | Invalid Cardano bech32 address |
+| `INVALID_ASSET` | Invalid asset unit format |
+| `INVALID_AMOUNT` | Amount is not a valid positive integer |
+| `INVALID_SLIPPAGE` | Slippage must be between 0 and 100 |
+
+### Intent Errors (4xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `INTENT_NOT_FOUND` | 404 | Intent ID does not exist |
+| `INTENT_NOT_ACTIVE` | 422 | Intent is not in ACTIVE state |
+| `INTENT_EXPIRED` | 422 | Intent has passed its expiry time |
+| `INTENT_ALREADY_CANCELLED` | 409 | Intent was already cancelled |
+| `INTENT_NOT_CANCELLABLE` | 422 | Intent is in a state that cannot be cancelled (e.g., FILLING) |
+| `INSUFFICIENT_OUTPUT` | 422 | Calculated output is below minimum |
+
+### Pool Errors (4xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `POOL_NOT_FOUND` | 404 | Pool ID does not exist |
+| `POOL_INACTIVE` | 422 | Pool is not in ACTIVE state |
+| `POOL_ALREADY_EXISTS` | 409 | A pool for this asset pair already exists |
+| `INSUFFICIENT_LIQUIDITY` | 422 | Pool has insufficient reserves for this swap |
+| `INVALID_DEPOSIT_RATIO` | 422 | Deposit amounts don't match pool ratio |
+| `BELOW_MIN_LIQUIDITY` | 422 | Initial deposit would produce less than 1000 LP tokens |
+
+### Order Errors (4xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `ORDER_NOT_FOUND` | 404 | Order ID does not exist |
+| `ORDER_NOT_ACTIVE` | 422 | Order is not in ACTIVE state |
+| `INVALID_ORDER_TYPE` | 400 | Order type must be LIMIT, DCA, or STOP_LOSS |
+| `INVALID_PRICE_TARGET` | 400 | Price numerator/denominator invalid |
+| `DCA_INTERVAL_TOO_SHORT` | 400 | DCA interval must be at least 60 seconds |
+
+### Chain Errors (5xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `CHAIN_SUBMIT_FAILED` | 500 | Transaction submission to Cardano failed |
+| `CHAIN_TIMEOUT` | 503 | Blockfrost request timed out |
+| `UTXO_ALREADY_CONSUMED` | 409 | The target UTxO was consumed by another TX |
+| `INSUFFICIENT_FUNDS` | 422 | Wallet has insufficient funds for this TX |
+| `TX_BUILD_FAILED` | 500 | Transaction building failed (Lucid error) |
+
+### Admin Errors (4xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `UNAUTHORIZED` | 401 | Not authenticated |
+| `FORBIDDEN` | 403 | Not admin address |
+| `SETTINGS_NOT_FOUND` | 404 | Protocol settings UTxO not deployed |
+
+### System Errors (5xx)
+
+| Code | Status | Description |
+|---|---|---|
+| `INTERNAL_ERROR` | 500 | Unexpected server error |
+| `DATABASE_ERROR` | 503 | Database connection or query failure |
+| `CACHE_ERROR` | 503 | Redis connection failure (non-fatal, falls back to memory) |
+| `BLOCKFROST_ERROR` | 503 | Blockfrost API unreachable |

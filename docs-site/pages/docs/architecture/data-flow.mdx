@@ -1,0 +1,150 @@
+# Data Flow
+
+import { Callout } from 'nextra/components'
+
+## Complete Swap Data Flow
+
+This page traces the complete path of a swap from user action through to on-chain settlement.
+
+### Phase 1: Quote
+
+```
+User → Frontend → GET /v1/quote → GetQuote UseCase → Pool.calculateSwapOutput() → Response
+```
+
+The quote calculates:
+- Expected output amount
+- LP fee (0.3% default)
+- Protocol fee (1/6 of LP fee)
+- Price impact
+- Best route (direct or multi-hop)
+
+### Phase 2: Intent Creation
+
+```
+User → Frontend → POST /v1/intents
+  → CreateIntent UseCase
+    → Validate input parameters (Zod)
+    → Find pool for trading pair
+    → Calculate minimum output with slippage
+    → ITxBuilder.buildEscrowTx()
+      → Lucid: build TX that locks funds at escrow validator
+      → Include inline datum: { owner, input, output, minOutput, expiry }
+      → Mint intent_token (one-shot auth NFT)
+    → IIntentRepository.save(intent) [status: CREATED]
+    → Return unsigned TX CBOR
+```
+
+### Phase 3: Signing & Submission
+
+```
+Frontend
+  → User signs TX with wallet (Nami, Eternl, etc.)
+  → POST /v1/tx/submit { signedTx: "84..." }
+    → IChainProvider.submitTx(cbor)
+    → Update intent status: CREATED → PENDING
+    → POST /v1/tx/confirm { txHash, intentId }
+      → ChainSync confirms on-chain
+      → Update intent status: PENDING → ACTIVE
+      → WebSocket broadcast: { channel: 'intent', type: 'intentUpdate' }
+```
+
+### Phase 4: Solver Settlement
+
+```
+SolverEngine loop (every 5s):
+  → IntentCollector.collect()
+    → IChainProvider.getUtxosAtAddress(escrowAddress)
+    → Parse inline datums from each UTxO
+    → Cross-reference with database intents
+    → Filter: only ACTIVE, not expired, has matching pool
+
+  → RouteOptimizer.findBestRoute(intent)
+    → Check direct pool
+    → Check multi-hop routes
+    → Select route with best output
+
+  → BatchBuilder.groupByPool(intents)
+    → Group intents by target pool
+    → Create batch per pool
+
+  → NettingEngine.netBatch(batch)
+    → Separate AToB vs BToA intents
+    → Calculate gross flows
+    → Net opposing flows → residual
+    → Only residual goes through AMM
+    → Allocate outputs proportionally
+
+  → Settlement TX building:
+    → Consume escrow UTxOs (Fill redeemer)
+    → Interact with pool UTxO (Swap redeemer)
+    → Deliver outputs to intent owners
+    → Pay solver fee
+    → Sign with solver wallet
+    → Submit to chain
+
+  → Post-settlement:
+    → Update intent status: ACTIVE → FILLED
+    → Record Swap entries in database
+    → Create PriceTick records
+    → Update pool reserves
+    → WebSocket broadcast: intentUpdate, poolUpdate, price
+```
+
+## WebSocket Event Flow
+
+```
+Client                     Server
+  │                          │
+  │── { type: 'subscribe',   │
+  │    channel: 'prices',    │
+  │    params: { pair: '*' }}│
+  │                          │
+  │◄── { type: 'price',     │ ◄── Solver settles a batch
+  │     data: {              │
+  │       poolId: '...',     │
+  │       price: '1.234',    │
+  │       change24h: '+2.5%' │
+  │     }}                   │
+  │                          │
+  │── { type: 'subscribe',   │
+  │    channel: 'intent',    │
+  │    params: { id: '...' }}│
+  │                          │
+  │◄── { type: 'intentUpdate'│ ◄── Intent status changes
+  │     data: {              │
+  │       id: '...',         │
+  │       status: 'FILLED',  │
+  │       actualOutput: '...'│
+  │     }}                   │
+  │                          │
+  │── { type: 'ping' }      │ ◄── Every 30s heartbeat
+  │◄── { type: 'pong' }     │
+```
+
+## Cron Job Data Flow
+
+### ChainSync (Every 30s)
+
+```
+ChainSync
+  → Query Blockfrost for pool UTxOs
+  → Parse inline datums
+  → Compare with database state
+  → Update pool reserves, TVL
+  → Promote PENDING → ACTIVE intents (confirmed on-chain)
+  → Promote PENDING → ACTIVE orders
+  → Detect and mark missing UTxOs (cancelled/consumed)
+```
+
+### Price Aggregation (Every 60s)
+
+```
+PriceAggregation
+  → Query PriceTick table (since last run)
+  → Group by pool + interval (H4/D1/W1)
+  → For each group:
+    → Calculate OHLCV (Open, High, Low, Close, Volume)
+    → Upsert into Candle table
+  → Update Redis cache for recent candles
+```

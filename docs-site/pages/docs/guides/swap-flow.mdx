@@ -1,0 +1,140 @@
+# Swap Flow Guide
+
+import { Callout, Steps } from 'nextra/components'
+
+This guide walks through a complete swap from start to finish.
+
+## Overview
+
+A swap in SolverNet DEX follows these steps:
+
+1. User connects wallet
+2. User enters swap parameters
+3. Backend builds unsigned escrow TX
+4. User signs with their wallet
+5. TX is submitted to Cardano
+6. Solver collects and settles the intent
+7. User receives output tokens
+
+<Steps>
+
+### Connect Your Wallet
+
+Click the **Connect Wallet** button in the top navigation. Select your Cardano wallet (Nami, Eternl, etc.) and approve the connection.
+
+<Callout type="info">
+Make sure your wallet is set to the **Preprod Testnet**. You can get test ADA from the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/).
+</Callout>
+
+### Select Trading Pair
+
+On the trading page (`/`), select your input and output assets:
+
+- **From:** The asset you want to sell (e.g., ADA)
+- **To:** The asset you want to receive (e.g., USDT)
+
+The system will automatically fetch a quote showing:
+- Expected output amount
+- Price impact percentage
+- Trading fee
+- Effective exchange rate
+
+### Enter Amount
+
+Enter the amount you want to swap. The quote updates in real-time (debounced 300ms).
+
+**Check the details:**
+- **Price Impact** — Below 1% (green), 1-5% (yellow), above 5% (red)
+- **Minimum Output** — The least you'll receive (after slippage tolerance)
+- **Network Fee** — Cardano transaction fee (~0.2 ADA)
+
+### Adjust Slippage (Optional)
+
+Click the ⚙️ settings icon to adjust slippage tolerance:
+- **0.1%** — Very tight, may fail if price moves
+- **0.5%** — Default, good for most trades
+- **1.0%** — Recommended for volatile pairs
+- **Custom** — Set your own value
+
+### Confirm Swap
+
+Click **Swap**. The backend builds an unsigned transaction that:
+1. Locks your input tokens at the escrow validator address
+2. Attaches an inline datum with: your address, input/output assets, minimum output, expiry
+3. Mints a one-shot intent token (authentication NFT)
+
+### Sign Transaction
+
+Your wallet will prompt you to sign the transaction. Review the details:
+- Amount being sent to the escrow address
+- Network fee
+- No tokens are being sent to unknown addresses
+
+Click **Sign** in your wallet.
+
+### Wait for Confirmation
+
+After signing, the transaction is submitted to the Cardano network. You'll see:
+
+1. **Submitted** — TX sent to Blockfrost
+2. **Pending** — Waiting for on-chain confirmation (~20-40 seconds)
+3. **Active** — Escrow UTxO confirmed, intent is now active
+
+### Solver Settlement
+
+Once your intent is active, the solver will:
+1. Detect your escrow UTxO on the next batch cycle (every 5 seconds)
+2. Find opposing intents for netting (if available)
+3. Route through the best pool
+4. Build and submit a settlement transaction
+5. Deliver your output tokens directly to your wallet address
+
+You'll receive a WebSocket notification when your intent is filled:
+
+```json
+{
+  "type": "intentUpdate",
+  "data": {
+    "id": "intent_xyz789",
+    "status": "FILLED",
+    "actualOutput": "49251234",
+    "settlementTxHash": "abc123..."
+  }
+}
+```
+
+### Verify Receipt
+
+Check your wallet — the output tokens should appear within 1-2 minutes of settlement confirmation.
+
+</Steps>
+
+## Cancellation
+
+You can cancel an active intent at any time before it's settled:
+
+1. Go to the **Trading Footer** or **Portfolio** page
+2. Find your active intent
+3. Click **Cancel**
+4. Sign the cancel transaction
+5. Your input tokens are returned to your wallet
+
+<Callout type="warning">
+If the solver is in the process of settling your intent (`FILLING` state), cancellation may fail. The intent will either be filled or you can retry cancellation on the next block.
+</Callout>
+
+## Expiry & Reclaim
+
+If your intent is not settled before its expiry time:
+1. The intent status changes to `EXPIRED`
+2. The reclaim keeper cron automatically submits a reclaim transaction
+3. Your funds are returned to your wallet
+4. No action needed from you
+
+You can also manually reclaim via the API:
+
+```bash
+curl -X POST http://localhost:3001/v1/admin/reclaim \
+  -H "Content-Type: application/json" \
+  -d '{"intentId": "intent_xyz789"}'
+```

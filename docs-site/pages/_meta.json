@@ -1,0 +1,19 @@
+{
+  "index": {
+    "title": "Introduction",
+    "theme": {
+      "layout": "full"
+    }
+  },
+  "docs": {
+    "title": "Documentation",
+    "type": "page"
+  },
+  "---": {
+    "type": "separator"
+  },
+  "changelog": {
+    "title": "Changelog",
+    "type": "page"
+  }
+}

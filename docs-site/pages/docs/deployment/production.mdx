@@ -1,0 +1,210 @@
+# Production Deployment
+
+import { Callout, Steps, Tabs } from 'nextra/components'
+
+## Architecture Overview
+
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────┐
+│   Vercel     │────▶│   Render     │────▶│  Supabase  │
+│  (Frontend)  │     │  (Backend)   │     │ (Postgres) │
+└─────────────┘     └──────┬───────┘     └────────────┘
+                           │
+                    ┌──────┴───────┐
+                    │   Upstash    │
+                    │   (Redis)    │
+                    └──────────────┘
+```
+
+The recommended production stack uses managed services for zero-ops:
+
+| Component | Service | Plan |
+|-----------|---------|------|
+| Frontend | **Vercel** | Hobby / Pro |
+| Backend + Solver | **Render** | Starter ($7/mo) |
+| Database | **Supabase** | Free / Pro |
+| Cache | **Upstash** | Free tier |
+| Blockchain API | **Blockfrost** | Free (50k req/day) |
+
+## Backend Deployment (Render)
+
+<Steps>
+### Create Render Service
+
+1. Go to [render.com](https://render.com) → **New Web Service**
+2. Connect your GitHub/GitLab repository
+3. Configure:
+   - **Root Directory**: (leave empty, uses repo root)
+   - **Build Command**: `cd backend && pnpm install && pnpm exec prisma generate && pnpm exec tsc`
+   - **Start Command**: `cd backend && npx prisma migrate deploy && node dist/index.js`
+   - **Instance Type**: Starter ($7/mo minimum for always-on)
+
+### Configure Environment Variables
+
+Add all required environment variables in Render dashboard → **Environment**:
+
+```
+DATABASE_URL=postgresql://...@db.xxx.supabase.co:5432/postgres?sslmode=require
+BLOCKFROST_API_KEY=preprod_xxxxx
+SOLVER_PRIVATE_KEY=5820...
+CARDANO_NETWORK=Preprod
+PORT=3001
+CORS_ORIGIN=https://your-frontend.vercel.app
+LOG_LEVEL=info
+```
+
+### Set Health Check
+
+Under **Health & Alerts**:
+- **Health Check Path**: `/v1/health/ready`
+- **Period**: 30 seconds
+
+### Deploy
+
+Click **Manual Deploy** → **Deploy latest commit**, or push to your deploy branch to trigger auto-deploy.
+</Steps>
+
+<Callout type="warning">
+**Always-on requirement:** The solver must run continuously. Use Render's **Starter** plan or higher — the free tier spins down after inactivity and will stop the solver.
+</Callout>
+
+## Frontend Deployment (Vercel)
+
+<Steps>
+### Import Project
+
+1. Go to [vercel.com](https://vercel.com) → **Add New Project**
+2. Import your repository
+3. Configure:
+   - **Root Directory**: `frontend`
+   - **Framework**: Next.js
+   - **Build Command**: `pnpm build`
+   - **Output Directory**: `.next`
+
+### Environment Variables
+
+```
+NEXT_PUBLIC_API_URL=https://your-backend.onrender.com
+NEXT_PUBLIC_WS_URL=wss://your-backend.onrender.com
+NEXT_PUBLIC_NETWORK=Preprod
+```
+
+### Deploy
+
+Vercel auto-deploys on push to `main`. Preview deployments are created for pull requests.
+</Steps>
+
+## Database (Supabase)
+
+<Steps>
+### Create Project
+
+1. Go to [supabase.com](https://supabase.com) → **New Project**
+2. Choose a region close to your Render instance
+3. Set a strong database password
+
+### Get Connection String
+
+Navigate to **Settings** → **Database** → **Connection string** → **URI**:
+
+```
+postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres
+```
+
+### Run Migrations
+
+From your local machine:
+
+```bash
+cd backend
+DATABASE_URL="postgresql://..." pnpm exec prisma migrate deploy
+```
+</Steps>
+
+## Cache (Upstash Redis)
+
+<Steps>
+### Create Database
+
+1. Go to [upstash.com](https://upstash.com) → **Create Database**
+2. Choose the same region as your backend
+3. Select **REST API** (recommended for serverless)
+
+### Get Credentials
+
+From the Upstash dashboard, copy:
+
+```
+UPSTASH_REDIS_URL=https://your-db.upstash.io
+UPSTASH_REDIS_TOKEN=AXxx...
+```
+</Steps>
+
+## Monitoring & Operations
+
+### Health Checks
+
+The backend exposes two health endpoints:
+
+```
+GET /v1/health/live    → { status: 'ok' }
+GET /v1/health/ready   → { status: 'ok', details: { db, cache, blockchain } }
+```
+
+Use `/v1/health/ready` for load balancer health checks — it verifies database, cache, and blockchain connectivity.
+
+### Logging
+
+Production logs are streamed to stdout/stderr. Render captures these automatically.
+
+| Level | When to use |
+|-------|-------------|
+| `error` | Failed transactions, database errors |
+| `warn` | High slippage, retried operations |
+| `info` | Solve cycles, submitted transactions |
+| `debug` | Individual intent matching, UTxO selection |
+
+### Key Metrics to Monitor
+
+| Metric | Source | Alert Threshold |
+|--------|--------|-----------------|
+| Solve cycle duration | Backend logs | > 30s |
+| Pending intents | `GET /v1/analytics/protocol` | > 100 |
+| TX submission failures | Backend logs | > 3 consecutive |
+| Database connections | Supabase dashboard | > 80% of pool |
+| API response time | Render metrics | p95 > 2s |
+
+### Backup Strategy
+
+| Component | Strategy |
+|-----------|----------|
+| Database | Supabase daily backups (Pro plan: point-in-time recovery) |
+| Solver wallet | Secure mnemonic / key backup offline |
+| Configuration | Version-controlled `.env.example` templates |
+
+## Security Hardening
+
+```typescript
+// helmet.js — already configured in production
+app.use(helmet({
+  contentSecurityPolicy: true,
+  crossOriginEmbedderPolicy: true,
+  hsts: { maxAge: 31536000, includeSubDomains: true }
+}));
+
+// Rate limiting
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100
+}));
+
+// CORS — exact origin only
+app.use(cors({
+  origin: process.env.CORS_ORIGIN,
+  credentials: true
+}));
+```
+
+<Callout type="info">
+For mainnet deployment, additionally consider: WAF (Cloudflare), DDoS protection, HSM for solver key management, multi-sig admin operations, and transaction monitoring alerts.
+</Callout>

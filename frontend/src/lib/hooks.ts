@@ -46,7 +46,10 @@ function useApi<T>(
   const [error, setError] = useState<Error | null>(null);
 
   const fetchData = useCallback(async () => {
-    if (options?.enabled === false) return;
+    if (options?.enabled === false) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const result = await fetcher();

@@ -1,0 +1,179 @@
+# AMM Math
+
+import { Callout } from 'nextra/components'
+
+All AMM formulas in SolverNet DEX are implemented in `backend/src/solver/AmmMath.ts` and **exactly match** the on-chain validation in the pool validator. This ensures off-chain calculations never disagree with on-chain enforcement.
+
+## Constants
+
+```typescript
+const D = 10_000n  // Fee denominator (basis points)
+```
+
+## Swap Formula
+
+Given:
+- $R_{in}$ = input reserve
+- $R_{out}$ = output reserve  
+- $\Delta_{in}$ = input amount
+- $f$ = fee numerator (e.g., 30 for 0.3%)
+
+**Output amount:**
+
+$$
+\Delta_{out} = \frac{R_{out} \times \Delta_{in} \times (D - f)}{R_{in} \times D + \Delta_{in} \times (D - f)}
+$$
+
+```typescript
+static calculateSwapOutput(
+  reserveIn: bigint,
+  reserveOut: bigint,
+  inputAmount: bigint,
+  feeNumerator: bigint
+): bigint {
+  const numerator = reserveOut * inputAmount * (D - feeNumerator)
+  const denominator = reserveIn * D + inputAmount * (D - feeNumerator)
+  return numerator / denominator
+}
+```
+
+<Callout type="info">
+All calculations use **integer arithmetic** (`BigInt`). No floating-point operations. This matches the Aiken validator which also uses integer math. Division truncates toward zero.
+</Callout>
+
+## Protocol Fee
+
+Protocol fee is 1/6 of the LP fee:
+
+$$
+\text{protocolFee} = \frac{\Delta_{in} \times f}{D \times 6}
+$$
+
+```typescript
+static calculateProtocolFee(
+  inputAmount: bigint,
+  feeNumerator: bigint
+): bigint {
+  return (inputAmount * feeNumerator / D) / 6n
+}
+```
+
+## Price Impact
+
+$$
+\text{priceImpact} = 1 - \frac{\Delta_{out} / \Delta_{in}}{R_{out} / R_{in}}
+$$
+
+Simplified:
+
+$$
+\text{priceImpact} = \frac{\Delta_{in}}{R_{in} + \Delta_{in}}
+$$
+
+```typescript
+static calculatePriceImpact(
+  reserveIn: bigint,
+  inputAmount: bigint
+): number {
+  // Returns as decimal (e.g., 0.05 = 5%)
+  return Number(inputAmount) / Number(reserveIn + inputAmount)
+}
+```
+
+## LP Token Calculations
+
+### Initial Liquidity (Pool Creation)
+
+$$
+LP_{\text{initial}} = \sqrt{\text{depositA} \times \text{depositB}} - 1000
+$$
+
+```typescript
+static calculateInitialLp(depositA: bigint, depositB: bigint): bigint {
+  const product = depositA * depositB
+  const sqrtProduct = sqrt(product) // Integer square root
+  return sqrtProduct - 1000n        // Min liquidity lock
+}
+```
+
+The locked 1000 LP tokens prevent division-by-zero attacks and ensure the pool can never be fully drained.
+
+### Subsequent Deposit
+
+$$
+LP_{\text{minted}} = \min\left(\frac{\text{totalLP} \times \text{depositA}}{R_A}, \quad \frac{\text{totalLP} \times \text{depositB}}{R_B}\right)
+$$
+
+```typescript
+static calculateLpTokensForDeposit(
+  totalLp: bigint,
+  reserveA: bigint,
+  reserveB: bigint,
+  depositA: bigint,
+  depositB: bigint
+): bigint {
+  const lpFromA = (totalLp * depositA) / reserveA
+  const lpFromB = (totalLp * depositB) / reserveB
+  return lpFromA < lpFromB ? lpFromA : lpFromB
+}
+```
+
+### Withdrawal
+
+$$
+\text{amountA} = \frac{R_A \times LP_{\text{burned}}}{\text{totalLP}}
+$$
+
+$$
+\text{amountB} = \frac{R_B \times LP_{\text{burned}}}{\text{totalLP}}
+$$
+
+```typescript
+static calculateWithdrawal(
+  totalLp: bigint,
+  reserveA: bigint,
+  reserveB: bigint,
+  lpBurned: bigint
+): { amountA: bigint; amountB: bigint } {
+  return {
+    amountA: (reserveA * lpBurned) / totalLp,
+    amountB: (reserveB * lpBurned) / totalLp,
+  }
+}
+```
+
+## Limit Price Check
+
+For limit orders, the solver verifies that the execution price meets the user's target:
+
+$$
+\Delta_{out} \times \text{priceDen} \geq \Delta_{in\_consumed} \times \text{priceNum}
+$$
+
+```typescript
+static meetsLimitPrice(
+  outputAmount: bigint,
+  inputConsumed: bigint,
+  priceNumerator: bigint,
+  priceDenominator: bigint
+): boolean {
+  return outputAmount * priceDenominator >= inputConsumed * priceNumerator
+}
+```
+
+## Numerical Safety
+
+All formulas follow these rules to match on-chain validators:
+
+1. **Integer only** — No `Number` or `parseFloat` in calculations
+2. **Overflow-safe** — `BigInt` handles arbitrarily large values
+3. **Truncation** — Division always truncates toward zero (matches Plutus behavior)
+4. **Order of operations** — Multiply before divide to preserve precision
+
+```typescript
+// ✅ Correct: multiply first
+const result = (a * b) / c
+
+// ❌ Wrong: divide first loses precision
+const result = (a / c) * b
+```

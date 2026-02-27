@@ -1,0 +1,39 @@
+# Changelog
+
+## v0.1.0 — Initial Release (Preprod)
+
+*Current development version targeting Cardano Preprod testnet*
+
+### Features
+
+- **Intent-based Trading** — Submit swap intents that are matched and settled by the solver
+- **AMM Pools** — Constant-product automated market maker with on-chain validation
+- **Netting Engine** — Off-chain matching of complementary intents to reduce AMM impact
+- **Limit Orders** — Specify exact price targets with on-chain enforcement
+- **DCA Orders** — Dollar-cost averaging with configurable intervals
+- **Liquidity Provision** — Add/remove liquidity with proportional LP token minting
+- **Real-time WebSocket** — Live price feeds, intent status updates, pool change notifications
+- **Portfolio Tracking** — View open orders, transaction history, and PnL
+- **Admin Dashboard** — Pool management, solver operations, and protocol analytics
+
+### Smart Contracts
+
+- Escrow Validator (Plutus V3 / Aiken)
+- Pool Validator with constant-product invariant
+- Order Validator for limit/DCA/stop-loss orders
+- Factory Validator for pool creation
+- Settings Validator for protocol configuration
+- Intent Token, Pool NFT, and LP Token minting policies
+
+### Infrastructure
+
+- Express + TypeScript backend with Clean Architecture
+- Next.js 16 frontend with Tailwind CSS
+- Prisma ORM with PostgreSQL (Supabase)
+- Upstash Redis for caching
+- Blockfrost for chain queries
+- Docker support for development and production
+
+---
+
+> Future releases will be documented here as the project progresses toward mainnet.

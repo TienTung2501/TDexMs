@@ -1,0 +1,213 @@
+# Security
+
+import { Callout, Tabs } from 'nextra/components'
+
+## Security Model
+
+SolverNet DEX is designed with a **non-custodial** security model. Users' funds are always controlled by smart contracts — never by the solver or backend.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Trust Boundaries                       │
+│                                                          │
+│  ┌─────────────┐    ┌──────────────┐    ┌─────────────┐ │
+│  │   User       │    │   Solver     │    │ Smart       │ │
+│  │   Wallet     │───▶│   Backend    │───▶│ Contract    │ │
+│  │ (self-sign)  │    │ (coordinate) │    │ (enforce)   │ │
+│  └─────────────┘    └──────────────┘    └─────────────┘ │
+│                                                          │
+│  Trust:   High        Medium             Trustless       │
+│  Custody: User        Never              On-chain        │
+└──────────────────────────────────────────────────────────┘
+```
+
+## Smart Contract Security
+
+### Non-Custodial Guarantees
+
+The Aiken smart contracts enforce critical invariants on-chain:
+
+| Guarantee | Enforced By | How |
+|-----------|-------------|-----|
+| **User can always reclaim** | Escrow Validator | Owner signature check on `Reclaim` redeemer |
+| **Minimum output enforced** | Escrow Validator | `min_receive` checked against actual output |
+| **Pool reserves conserved** | Pool Validator | Constant-product formula verified: `x' × y' ≥ x × y` |
+| **LP tokens correctly minted** | LP Token Policy | Mint amount = `√(Δx × Δy)` for initial, proportional thereafter |
+| **One Pool NFT per pool** | Pool NFT Policy | Mint quantity exactly 1, only by factory |
+| **Settings immutable w/o authority** | Settings Validator | Admin NFT must be present for updates |
+
+### Validator Security Properties
+
+```aiken
+// Escrow: Only owner can reclaim
+fn validate_reclaim(datum: EscrowDatum, ctx: ScriptContext) -> Bool {
+  // Signer must be the original intent owner
+  list.has(ctx.transaction.extra_signatories, datum.owner_pkh)
+}
+
+// Pool: Constant product invariant
+fn validate_swap(old_x: Int, old_y: Int, new_x: Int, new_y: Int) -> Bool {
+  // After fee deduction, product must not decrease
+  new_x * new_y >= old_x * old_y
+}
+```
+
+<Callout type="info">
+**Audit Status:** Smart contracts are written in Aiken targeting Plutus V3. A formal audit is recommended before mainnet deployment.
+</Callout>
+
+### Known Attack Vectors & Mitigations
+
+| Attack | Mitigation |
+|--------|------------|
+| **Double satisfaction** | Each intent has a unique NFT token; consumed exactly once |
+| **Datum hijacking** | Output datum verified against expected values in validator |
+| **Oracle manipulation** | No external price oracle — prices derived from on-chain pool reserves |
+| **Sandwich attack** | Netting engine matches intents off-chain, reducing MEV exposure |
+| **Unbounded computation** | Batch size capped at `MAX_BATCH_SIZE` (default: 30) |
+| **Token name collision** | Intent tokens use sha3_256 hash of tx input as unique identifier |
+
+## Backend Security
+
+### API Protection
+
+<Tabs items={['Rate Limiting', 'CORS', 'Headers', 'Input Validation']}>
+<Tabs.Tab>
+```typescript
+import rateLimit from 'express-rate-limit';
+
+// Global rate limit
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: 100,                   // 100 requests per window
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
+
+// Stricter limit for transaction endpoints
+app.use('/v1/tx', rateLimit({
+  windowMs: 1 * 60 * 1000,   // 1 minute
+  max: 10,
+}));
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import cors from 'cors';
+
+app.use(cors({
+  origin: process.env.CORS_ORIGIN,  // Exact origin, no wildcards
+  methods: ['GET', 'POST'],
+  credentials: true,
+}));
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+import helmet from 'helmet';
+
+app.use(helmet({
+  contentSecurityPolicy: true,
+  crossOriginEmbedderPolicy: true,
+  crossOriginOpenerPolicy: true,
+  crossOriginResourcePolicy: true,
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+  noSniff: true,
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+// All inputs validated with Zod schemas
+import { z } from 'zod';
+
+const intentSchema = z.object({
+  sender: z.string().regex(/^addr_(test)?1[a-z0-9]+$/),
+  tokenIn: z.string().min(1).max(120),
+  tokenOut: z.string().min(1).max(120),
+  amountIn: z.string().regex(/^\d+$/),
+  minReceive: z.string().regex(/^\d+$/),
+  type: z.enum(['MARKET', 'LIMIT']),
+});
+```
+</Tabs.Tab>
+</Tabs>
+
+### Authentication & Authorization
+
+| Endpoint Category | Auth Required | Method |
+|------------------|---------------|--------|
+| Public (health, quote, pools) | No | — |
+| User actions (intents, orders) | Wallet signature | CIP-30 signing |
+| Admin endpoints | Yes | Bearer token / admin key |
+| WebSocket | No (public channels) | — |
+
+### Database Security
+
+- **Connection encryption**: `sslmode=require` for production PostgreSQL
+- **Parameterized queries**: Prisma ORM prevents SQL injection
+- **Connection pooling**: PgBouncer via Supabase for connection management
+- **No raw SQL**: All queries through Prisma's type-safe query builder
+
+### Solver Key Management
+
+<Callout type="error">
+The solver private key (`SOLVER_PRIVATE_KEY`) has the ability to submit transactions using the solver's own UTxOs for fees. Protect it carefully.
+</Callout>
+
+**Best Practices:**
+1. **Never log the key** — Redact from all log output
+2. **Environment-only** — Store in platform secrets (Render, AWS Secrets Manager)
+3. **Separate wallet** — Use a dedicated wallet with minimal ADA for fees only
+4. **Monitor balance** — Alert if solver wallet balance drops below threshold
+5. **Key rotation** — Implement periodic key rotation procedure
+6. **Mainnet consideration** — Use HSM (Hardware Security Module) for signing
+
+## Frontend Security
+
+### Wallet Connection
+
+```typescript
+// CIP-30 wallet interaction — all signing happens in the user's wallet
+const api = await window.cardano[walletName].enable();
+
+// The frontend NEVER has access to private keys
+// All transaction signing is done by the wallet extension
+const signedTx = await api.signTx(unsignedTxCbor, /* partialSign */ true);
+```
+
+### Network Validation
+
+```typescript
+// Ensure wallet is on the correct network
+const networkId = await api.getNetworkId();
+if (networkId !== expectedNetworkId) {
+  throw new Error('Please switch to Preprod testnet');
+}
+```
+
+### Content Security
+
+- **No `eval()` or `innerHTML`** — React's JSX prevents XSS by default
+- **Strict CSP headers** — Configured via Next.js middleware
+- **No sensitive data in localStorage** — Only non-sensitive preferences stored client-side
+- **API URL validation** — Hardcoded API base URLs, not user-configurable
+
+## Incident Response
+
+### Severity Levels
+
+| Level | Description | Response Time | Example |
+|-------|-------------|---------------|---------|
+| **P0 — Critical** | Funds at risk | Immediate | Smart contract vulnerability |
+| **P1 — High** | Service down | < 1 hour | Database failure, solver crash |
+| **P2 — Medium** | Degraded service | < 4 hours | High latency, cache failure |
+| **P3 — Low** | Minor issue | < 24 hours | UI bug, logging gap |
+
+### Emergency Procedures
+
+1. **Solver Pause** — Stop the solver process to prevent transaction submission
+2. **Contract Reclaim** — Users can always reclaim their escrowed funds via the `Reclaim` redeemer
+3. **Database Backup** — Supabase provides point-in-time recovery (Pro plan)
+4. **Post-mortem** — Document incident, root cause, and preventive measures

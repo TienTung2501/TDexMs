@@ -1,0 +1,162 @@
+# API Client
+
+import { Callout } from 'nextra/components'
+
+The frontend uses a typed API client (`frontend/src/lib/api.ts`) to communicate with the backend.
+
+## Configuration
+
+```typescript
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL 
+  || 'https://tdexms.onrender.com'
+```
+
+## Client Structure
+
+```typescript
+// frontend/src/lib/api.ts
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+    public details?: unknown
+  ) {
+    super(message)
+  }
+}
+
+async function fetchApi<T>(
+  endpoint: string, 
+  options?: RequestInit
+): Promise<T> {
+  const url = `${API_BASE_URL}/v1${endpoint}`
+  const response = await fetch(url, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+    ...options,
+  })
+  
+  const data = await response.json()
+  
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      data.error?.code || 'UNKNOWN',
+      data.error?.message || 'Unknown error',
+      data.error?.details
+    )
+  }
+  
+  return data.data as T
+}
+```
+
+## Available Methods
+
+### Health
+
+```typescript
+api.health.check()        // GET /health
+api.health.ready()        // GET /health/ready
+```
+
+### Quote
+
+```typescript
+api.quote.get({
+  inputAsset: 'lovelace',
+  outputAsset: 'abc...TOKEN',
+  amount: '100000000',
+  slippage: 0.5,
+})
+```
+
+### Intents
+
+```typescript
+api.intents.create({
+  creatorAddress: 'addr_test1qz...',
+  inputAsset: 'lovelace',
+  outputAsset: 'abc...TOKEN',
+  inputAmount: '100000000',
+  minimumOutput: '49000000',
+})
+
+api.intents.list({ address, status, limit, offset })
+api.intents.get(intentId)
+api.intents.cancel(intentId, { creatorAddress })
+```
+
+### Pools
+
+```typescript
+api.pools.list({ sort: 'tvl', order: 'desc' })
+api.pools.get(poolId)
+api.pools.create({ assetA, assetB, amountA, amountB, fee, creatorAddress })
+api.pools.deposit(poolId, { amountA, amountB, depositorAddress })
+api.pools.withdraw(poolId, { lpAmount, withdrawerAddress, minA, minB })
+api.pools.history(poolId)
+api.pools.swaps(poolId)
+```
+
+### Orders
+
+```typescript
+api.orders.create({ 
+  creatorAddress, orderType, inputAsset, outputAsset,
+  totalBudget, priceNumerator, priceDenominator,
+  dcaInterval, dcaAmountPerInterval,
+  expiresInSeconds
+})
+api.orders.list({ creator, status, type })
+api.orders.get(orderId)
+api.orders.cancel(orderId)
+```
+
+### Chart
+
+```typescript
+api.chart.config()
+api.chart.candles({ poolId, interval, from, to, limit })
+api.chart.price(poolId)
+api.chart.info(poolId)
+api.chart.history({ symbol, from, to, resolution })
+```
+
+### Transaction
+
+```typescript
+api.tx.submit({ signedTx, intentId })
+api.tx.confirm({ txHash, intentId })
+api.tx.status(txHash)
+```
+
+### Analytics
+
+```typescript
+api.analytics.overview()
+```
+
+### Portfolio
+
+```typescript
+api.portfolio.summary(address)
+api.portfolio.transactions(address)
+```
+
+### WebSocket
+
+```typescript
+api.ws.connect()
+api.ws.subscribePrices(pair)
+api.ws.subscribeIntent(intentId)
+api.ws.subscribePool(poolId)
+api.ws.on('price', callback)
+api.ws.on('intentUpdate', callback)
+api.ws.on('poolUpdate', callback)
+api.ws.disconnect()
+```

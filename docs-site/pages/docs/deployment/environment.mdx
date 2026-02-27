@@ -1,0 +1,142 @@
+# Environment Variables
+
+import { Callout, Tabs } from 'nextra/components'
+
+## Overview
+
+SolverNet DEX uses environment variables for all sensitive and environment-specific configuration. Never commit `.env` files to version control.
+
+## Production Environment Reference
+
+### Required Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgresql://user:pass@host:5432/db?sslmode=require` |
+| `SOLVER_PRIVATE_KEY` | Solver wallet signing key (Ed25519 hex) | `5820...` |
+| `BLOCKFROST_API_KEY` | Blockfrost project API key | `preprodXXXXX` |
+
+### Network Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CARDANO_NETWORK` | `Preprod` | `Mainnet` \| `Preprod` \| `Preview` |
+| `BLOCKFROST_URL` | `https://cardano-preprod.blockfrost.io/api` | Blockfrost base URL |
+
+### Server Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3001` | HTTP server port |
+| `CORS_ORIGIN` | `http://localhost:3000` | Allowed CORS origins (comma-separated) |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+
+### Solver Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SOLVER_INTERVAL_MS` | `15000` | Solve cycle interval in milliseconds |
+| `MIN_BATCH_SIZE` | `2` | Minimum intents per batch |
+| `MAX_BATCH_SIZE` | `30` | Maximum intents per batch |
+| `MATCH_TOLERANCE_PERCENT` | `2` | Netting match tolerance (%) |
+| `PROTOCOL_FEE_PERCENT` | `0.3` | Protocol fee (%) |
+
+### Cache Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UPSTASH_REDIS_URL` | — | Upstash Redis REST URL |
+| `UPSTASH_REDIS_TOKEN` | — | Upstash Redis REST token |
+| `REDIS_URL` | — | Standard Redis URL (alternative to Upstash) |
+
+### Smart Contract Addresses
+
+| Variable | Description |
+|----------|-------------|
+| `FACTORY_VALIDATOR_ADDRESS` | Factory validator script address |
+| `POOL_VALIDATOR_ADDRESS` | Pool validator script address |
+| `ESCROW_VALIDATOR_ADDRESS` | Escrow validator script address |
+| `ORDER_VALIDATOR_ADDRESS` | Order validator script address |
+| `SETTINGS_VALIDATOR_ADDRESS` | Settings validator script address |
+| `SETTINGS_NFT_POLICY_ID` | Settings NFT minting policy hash |
+
+## Environment Templates
+
+<Tabs items={['Preprod', 'Mainnet']}>
+<Tabs.Tab>
+```bash
+# .env.preprod
+CARDANO_NETWORK=Preprod
+DATABASE_URL=postgresql://solvernet:password@localhost:5432/solvernet
+BLOCKFROST_URL=https://cardano-preprod.blockfrost.io/api
+BLOCKFROST_API_KEY=preprod_your_key_here
+SOLVER_PRIVATE_KEY=your_key_hex
+
+# Server
+PORT=3001
+CORS_ORIGIN=http://localhost:3000
+LOG_LEVEL=debug
+
+# Solver
+SOLVER_INTERVAL_MS=15000
+MIN_BATCH_SIZE=2
+MAX_BATCH_SIZE=30
+PROTOCOL_FEE_PERCENT=0.3
+
+# Cache (optional for local)
+# UPSTASH_REDIS_URL=
+# UPSTASH_REDIS_TOKEN=
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```bash
+# .env.mainnet
+CARDANO_NETWORK=Mainnet
+DATABASE_URL=postgresql://user:pass@db.supabase.co:5432/postgres?sslmode=require
+BLOCKFROST_URL=https://cardano-mainnet.blockfrost.io/api
+BLOCKFROST_API_KEY=mainnet_your_key_here
+SOLVER_PRIVATE_KEY=your_key_hex
+
+# Server
+PORT=3001
+CORS_ORIGIN=https://your-domain.com
+LOG_LEVEL=warn
+
+# Solver
+SOLVER_INTERVAL_MS=10000
+MIN_BATCH_SIZE=3
+MAX_BATCH_SIZE=30
+PROTOCOL_FEE_PERCENT=0.3
+
+# Cache
+UPSTASH_REDIS_URL=https://your-redis.upstash.io
+UPSTASH_REDIS_TOKEN=your_token
+
+# Smart Contract Addresses
+FACTORY_VALIDATOR_ADDRESS=addr1...
+POOL_VALIDATOR_ADDRESS=addr1...
+ESCROW_VALIDATOR_ADDRESS=addr1...
+ORDER_VALIDATOR_ADDRESS=addr1...
+SETTINGS_VALIDATOR_ADDRESS=addr1...
+SETTINGS_NFT_POLICY_ID=...
+```
+</Tabs.Tab>
+</Tabs>
+
+<Callout type="warning">
+**Security Checklist:**
+- Never expose `SOLVER_PRIVATE_KEY` in logs or API responses
+- Use `sslmode=require` for production database connections
+- Set `CORS_ORIGIN` to your exact frontend domain (no wildcards in production)
+- Rotate `BLOCKFROST_API_KEY` regularly
+- Use secret management (e.g., Render secrets, Vercel env, AWS Secrets Manager)
+</Callout>
+
+## Loading Order
+
+Environment variables are resolved in this priority (highest first):
+
+1. **Process environment** — Injected by hosting platform (Render, Vercel)
+2. **`.env.local`** — Local overrides (git-ignored)
+3. **`.env`** — Default values (git-ignored)
+4. **Code defaults** — Hardcoded fallbacks in `backend/src/config/env.ts`

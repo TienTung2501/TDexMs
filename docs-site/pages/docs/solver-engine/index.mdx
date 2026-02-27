@@ -1,0 +1,93 @@
+# Solver Engine
+
+import { Callout } from 'nextra/components'
+
+The **Solver Engine** is the off-chain component that drives the entire DEX. It collects user intents from the blockchain, finds optimal execution paths, nets opposing trades, and submits batched settlement transactions.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        Solver Engine                              │
+│                                                                  │
+│   ┌────────────┐    ┌─────────────┐    ┌────────────────┐       │
+│   │  Intent    │    │   Route     │    │    Batch       │       │
+│   │ Collector  │───►│ Optimizer   │───►│   Builder      │       │
+│   └────────────┘    └─────────────┘    └───────┬────────┘       │
+│         │                                       │                │
+│         │ Query escrow                         │ Group by pool  │
+│         │ UTxOs from chain                      │                │
+│         │                                       ▼                │
+│   ┌─────┴──────┐                       ┌────────────────┐       │
+│   │  Filter &  │                       │   Netting      │       │
+│   │  Validate  │                       │   Engine       │       │
+│   └────────────┘                       └───────┬────────┘       │
+│                                                 │                │
+│                                                 │ Net opposing   │
+│                                                 │ reduce AMM     │
+│                                                 ▼                │
+│                                        ┌────────────────┐       │
+│                                        │ TX Submitter   │       │
+│                                        │ Build, sign,   │       │
+│                                        │ submit batch TX│       │
+│                                        └────────────────┘       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## Pipeline Stages
+
+The solver runs in a continuous loop (default: every 5 seconds):
+
+| Stage | Component | Input | Output |
+|---|---|---|---|
+| 1. **Collect** | IntentCollector | Escrow script address | Raw UTxOs with parsed datums |
+| 2. **Filter** | DB cross-reference | Raw UTxOs + DB intents | Validated active intents |
+| 3. **Route** | RouteOptimizer | Active intents | Intents with optimal pool routes |
+| 4. **Batch** | BatchBuilder | Routed intents | Grouped batches by pool |
+| 5. **Net** | NettingEngine | Pool batches | Netted batches with reduced AMM load |
+| 6. **Settle** | TxSubmitter | Netted batches | Settlement TXs submitted on-chain |
+
+## How Netting Works
+
+The key innovation of SolverNet DEX is **netting** — cross-matching opposing intents before hitting the AMM.
+
+### Example
+
+Consider 3 intents for the ADA/USDT pool:
+
+| Intent | Direction | Amount |
+|---|---|---|
+| Alice | ADA → USDT | 1000 ADA |
+| Bob | USDT → ADA | 800 ADA worth of USDT |
+| Carol | ADA → USDT | 500 ADA |
+
+**Without netting:** All 3 intents go through the AMM separately → 2500 ADA of total impact.
+
+**With netting:**
+- ADA → USDT gross: 1500 ADA (Alice + Carol)
+- USDT → ADA gross: 800 ADA worth
+- **Net residual:** Only 700 ADA worth goes through the AMM
+- Alice and Carol get part of their USDT directly from Bob
+- **53% less price impact!**
+
+<Callout type="info">
+Netting provides **better prices** for all participants. It's a Pareto improvement — no one gets a worse price, and most get a better one. See [Netting Engine](/docs/solver-engine/netting) for the detailed algorithm.
+</Callout>
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `SOLVER_ENABLED` | `false` | Enable/disable the solver loop |
+| `SOLVER_BATCH_WINDOW_MS` | `5000` | Loop interval (ms) |
+| `SOLVER_MAX_RETRIES` | `3` | Max retry attempts per failed batch |
+| `SOLVER_MIN_PROFIT_LOVELACE` | `100000` | Minimum profit threshold |
+| `SOLVER_SEED_PHRASE` | — | 24-word mnemonic for solver wallet |
+
+## Components
+
+- [Solver Pipeline →](/docs/solver-engine/pipeline)
+- [Netting Engine →](/docs/solver-engine/netting)
+- [AMM Math →](/docs/solver-engine/amm-math)
+- [Batch Builder →](/docs/solver-engine/batch-builder)
+- [Route Optimizer →](/docs/solver-engine/route-optimizer)

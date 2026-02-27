@@ -1,0 +1,151 @@
+# Running a Solver
+
+import { Callout, Steps } from 'nextra/components'
+
+This guide explains how to set up and run your own solver bot for SolverNet DEX.
+
+<Callout type="warning">
+Running a solver requires a funded Cardano wallet. The solver wallet must have enough ADA to cover transaction fees for settlement transactions (~0.5-2 ADA per batch, depending on batch size).
+</Callout>
+
+## Prerequisites
+
+- SolverNet DEX backend installed and configured
+- A Cardano wallet with a 24-word seed phrase
+- Sufficient ADA for transaction fees (~50 ADA recommended for preprod)
+- Blockfrost API key
+
+## Setup
+
+<Steps>
+
+### Generate Solver Wallet
+
+Create a new wallet for your solver. **Never reuse a personal wallet.**
+
+```bash
+# Using cardano-cli
+cardano-cli address key-gen \
+  --verification-key-file solver.vkey \
+  --signing-key-file solver.skey
+
+# Or generate a seed phrase
+# Most wallet software can generate 24-word phrases
+```
+
+### Fund the Wallet
+
+On **Preprod testnet**, use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) to get test ADA.
+
+### Configure Environment
+
+Add solver configuration to your `.env`:
+
+```env
+# Enable the solver
+SOLVER_ENABLED=true
+
+# 24-word seed phrase (KEEP SECRET!)
+SOLVER_SEED_PHRASE="word1 word2 word3 ... word24"
+
+# Optional: override derived address
+# SOLVER_ADDRESS=addr_test1qz...
+
+# Batch window (how often to check for intents)
+SOLVER_BATCH_WINDOW_MS=5000
+
+# Max retries for failed settlements
+SOLVER_MAX_RETRIES=3
+
+# Minimum profit per batch (lovelace)
+SOLVER_MIN_PROFIT_LOVELACE=100000
+```
+
+### Start the Backend
+
+```bash
+cd backend
+pnpm exec tsx src/index.ts
+```
+
+The solver loop starts automatically when `SOLVER_ENABLED=true`:
+
+```
+[INFO] Solver engine started
+[INFO] Solver loop running every 5000ms
+[INFO] Solver wallet address: addr_test1qz...
+[INFO] Solver wallet balance: 50000000 lovelace
+```
+
+</Steps>
+
+## Solver Operation
+
+### Loop Cycle
+
+Every `SOLVER_BATCH_WINDOW_MS` milliseconds:
+
+1. **Collect** — Query Blockfrost for escrow UTxOs
+2. **Filter** — Cross-reference with database, skip expired/in-flight
+3. **Route** — Find best pool for each intent
+4. **Batch** — Group intents by pool
+5. **Net** — Cross-match opposing intents
+6. **Settle** — Build and submit settlement TX
+
+### Monitoring
+
+The solver logs detailed information:
+
+```
+[INFO] Solver cycle 42 started
+[INFO] Found 5 escrow UTxOs on-chain
+[INFO] 3 intents matched and validated
+[INFO] Batch 1: Pool ADA/USDT - 3 intents
+[INFO] Netting: 2 AToB + 1 BToA → 45% netted
+[INFO] Settlement TX submitted: abc123...
+[INFO] Settlement confirmed. Batch settled successfully.
+[INFO] Solver cycle 42 completed in 3.2s
+```
+
+### Profit Model
+
+Solvers earn from the residual between what users accept (minimum output) and what they actually receive:
+
+```
+User's minOutput:  49,000,000 (set via slippage tolerance)
+Actual output:     49,251,234
+Solver margin:        251,234 (goes to solver as incentive)
+```
+
+<Callout type="info">
+Currently, the solver is cooperative — it delivers the full calculated output to users and earns from transaction fee rebates. Future versions will implement competitive solver auctions.
+</Callout>
+
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|---|---|---|
+| "Insufficient funds" | Solver wallet low on ADA | Fund the wallet with more ADA |
+| "UTxO already consumed" | Intent was cancelled/filled by another process | Normal — the solver will skip it next cycle |
+| "TX too large" | Too many intents in one batch | Reduce `MAX_INTENTS_PER_BATCH` |
+| "Invalid CBOR" | Script version mismatch | Ensure `plutus.json` matches deployed contracts |
+
+### Health Checks
+
+```bash
+# Check solver status
+curl http://localhost:3001/v1/health | jq '.solver'
+
+# Check solver wallet balance
+curl http://localhost:3001/v1/admin/dashboard | jq '.solverBalance'
+```
+
+## Security Best Practices
+
+1. **Dedicated wallet** — Never use a personal wallet as the solver wallet
+2. **Minimal balance** — Keep only enough ADA for operations (~50 ADA)
+3. **Secrets management** — Use environment variables or a secrets manager, never hardcode seed phrases
+4. **Monitoring** — Set up alerts for low balance and failed settlements
+5. **Rate limiting** — The solver already has built-in rate limiting, but monitor for unusual activity

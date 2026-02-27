@@ -1,0 +1,64 @@
+# API Reference
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX exposes a **REST API** and **WebSocket** interface, both accessible under the `/v1` prefix.
+
+## Base URL
+
+| Environment | URL |
+|---|---|
+| **Production** | `https://tdexms.onrender.com/v1` |
+| **Local Development** | `http://localhost:3001/v1` |
+
+## Authentication
+
+Most endpoints are **public**. Admin endpoints require a wallet signature verification:
+
+```
+Admin-Address: addr_test1qz...
+```
+
+## Rate Limiting
+
+| Default | Value |
+|---|---|
+| Window | 60 seconds |
+| Max requests | 100 per window |
+| Headers | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
+
+## Response Format
+
+All responses follow a consistent format:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "meta": {
+    "timestamp": "2026-02-27T12:00:00Z",
+    "requestId": "req_abc123"
+  }
+}
+```
+
+Error responses:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid input parameters",
+    "details": [
+      { "field": "amount", "message": "Must be a positive integer" }
+    ]
+  }
+}
+```
+
+## Sections
+
+- [REST API →](/docs/api-reference/rest)
+- [WebSocket →](/docs/api-reference/websocket)
+- [Error Codes →](/docs/api-reference/errors)

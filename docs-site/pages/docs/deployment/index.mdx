@@ -1,0 +1,50 @@
+# Deployment
+
+import { Callout } from 'nextra/components'
+
+SolverNet DEX is deployed as a multi-service stack across different hosting providers.
+
+## Production Architecture
+
+```
+┌────────────────────────┐    ┌─────────────────────────┐
+│      Vercel            │    │       Render             │
+│  ┌──────────────────┐  │    │  ┌───────────────────┐  │
+│  │   Next.js 16     │  │───►│  │   Express API     │  │
+│  │   Frontend       │  │    │  │   + Solver Engine  │  │
+│  └──────────────────┘  │    │  └─────────┬─────────┘  │
+└────────────────────────┘    │            │             │
+                              └────────────┼─────────────┘
+                                           │
+            ┌──────────────────────────────┤
+            ▼                              ▼
+  ┌──────────────────┐        ┌──────────────────────┐
+  │    Supabase      │        │    Blockfrost        │
+  │  ┌────────────┐  │        │  ┌────────────────┐  │
+  │  │ PostgreSQL │  │        │  │ Cardano API    │  │
+  │  │ Database   │  │        │  │ UTxO queries   │  │
+  │  └────────────┘  │        │  │ TX submission  │  │
+  └──────────────────┘        │  └────────────────┘  │
+                              └──────────────────────┘
+  ┌──────────────────┐
+  │  Upstash Redis   │
+  │  ┌────────────┐  │
+  │  │ Cache      │  │
+  │  │ Rate limit │  │
+  │  └────────────┘  │
+  └──────────────────┘
+```
+
+| Service | Provider | Purpose |
+|---|---|---|
+| **Frontend** | Vercel | Next.js static export + SSR |
+| **Backend** | Render | Express API + Solver + Cron jobs |
+| **Database** | Supabase | PostgreSQL with connection pooling |
+| **Cache** | Upstash | Serverless Redis |
+| **Chain Data** | Blockfrost | Cardano API |
+
+### Quick Links
+
+- [Docker →](/docs/deployment/docker)
+- [Environment Variables →](/docs/deployment/environment)
+- [Production →](/docs/deployment/production)
