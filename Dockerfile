@@ -20,6 +20,7 @@ RUN pnpm install --frozen-lockfile
 # Copy source
 COPY backend/ ./backend/
 COPY tsconfig.base.json ./
+COPY smartcontract/plutus.json ./smartcontract/plutus.json
 
 # Generate Prisma + compile TypeScript
 RUN cd backend && npx prisma generate && pnpm build
@@ -45,6 +46,7 @@ COPY --from=builder /app/pruned/package.json ./
 COPY --from=builder /app/pruned/node_modules ./node_modules
 COPY --from=builder /app/pruned/dist ./dist
 COPY --from=builder /app/pruned/prisma ./prisma
+COPY --from=builder /app/smartcontract/plutus.json ./smartcontract/plutus.json
 
 USER solvernet
 

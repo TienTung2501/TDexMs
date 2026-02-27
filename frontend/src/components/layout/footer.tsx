@@ -51,7 +51,7 @@ export function Footer() {
             <h4 className="text-sm font-semibold">Resources</h4>
             <nav className="flex flex-col gap-2">
               <a
-                href="https://github.com/TienTung2501"
+                href="https://github.com/TienTung2501/TDexMs"
                 target="_blank"
                 rel="noreferrer"
                 className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -66,6 +66,15 @@ export function Footer() {
                 <BookOpen className="h-3.5 w-3.5" />
                 About
               </Link>
+              <a
+                href="https://docs.tdexms.vercel.app"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Documentation
+              </a>
               <Link
                 href="/cv"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors"

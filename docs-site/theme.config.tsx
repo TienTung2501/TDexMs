@@ -14,9 +14,9 @@ const config: DocsThemeConfig = {
     </span>
   ),
   project: {
-    link: 'https://github.com/TienTung2501',
+    link: 'https://github.com/TienTung2501/TDexMs',
   },
-  docsRepositoryBase: 'https://github.com/TienTung2501/decentralize/tree/main/docs-site',
+  docsRepositoryBase: 'https://github.com/TienTung2501/TDexMs/tree/main/docs-site',
   footer: {
     text: (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', width: '100%' }}>

@@ -118,7 +118,7 @@ export default function AboutPage() {
               </Link>
             </Button>
             <Button variant="outline" size="lg" asChild>
-              <a href="https://github.com/TienTung2501" target="_blank" rel="noreferrer">
+              <a href="https://github.com/TienTung2501/TDexMs" target="_blank" rel="noreferrer">
                 <Github className="h-4 w-4 mr-2" />
                 View Source
               </a>
@@ -301,7 +301,7 @@ export default function AboutPage() {
       {/* ══════ Links ══════ */}
       <section className="space-y-6">
         <h2 className="text-2xl font-bold tracking-tight">Links & Resources</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <a
             href="https://tdexms.vercel.app/"
             target="_blank"
@@ -335,7 +335,23 @@ export default function AboutPage() {
           </a>
 
           <a
-            href="https://github.com/TienTung2501"
+            href="https://docs.tdexms.vercel.app"
+            target="_blank"
+            rel="noreferrer"
+            className="group flex items-center gap-3 rounded-xl border border-border/50 p-4 hover:border-primary/30 hover:bg-primary/5 transition-colors"
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 text-blue-500">
+              <Code2 className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold text-sm">Documentation</p>
+              <p className="text-xs text-muted-foreground">docs.tdexms.vercel.app</p>
+            </div>
+            <ExternalLink className="h-4 w-4 ml-auto text-muted-foreground group-hover:text-foreground transition-colors" />
+          </a>
+
+          <a
+            href="https://github.com/TienTung2501/TDexMs"
             target="_blank"
             rel="noreferrer"
             className="group flex items-center gap-3 rounded-xl border border-border/50 p-4 hover:border-primary/30 hover:bg-primary/5 transition-colors"
@@ -345,7 +361,7 @@ export default function AboutPage() {
             </div>
             <div>
               <p className="font-semibold text-sm">Source Code</p>
-              <p className="text-xs text-muted-foreground">github.com/TienTung2501</p>
+              <p className="text-xs text-muted-foreground">TienTung2501/TDexMs</p>
             </div>
             <ExternalLink className="h-4 w-4 ml-auto text-muted-foreground group-hover:text-foreground transition-colors" />
           </a>

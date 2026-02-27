@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ import {
   FlaskConical,
   Medal,
   Building,
+  FileText,
 } from "lucide-react";
 
 /* ═══════════════════════════════════════════════════════════
@@ -67,7 +68,21 @@ const IPFS = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   Data — from CV.pdf + GitHub README
+   All images for the carousel showcase
+   ═══════════════════════════════════════════════════════════ */
+const ALL_IMAGES = [
+  { src: IPFS.slide_totnghiep, title: "Lễ Tốt nghiệp - Thủ khoa Khoa CNTT" },
+  { src: IPFS.top1_maintrack, title: "Giải Nhất Main Track - Cardano Hackathon 2025" },
+  { src: IPFS.top5_student_01, title: "Top 5 Student Track - Aptos Hackathon" },
+  { src: IPFS.top5_student_02, title: "Certificate - Vietnam Aptos Hackathon" },
+  { src: IPFS.giai3_nckh_nam2, title: "Giải Ba NCKH - Năm 2" },
+  { src: IPFS.giai2_nckh_nam3, title: "Giải Nhì NCKH - Năm 3" },
+  { src: IPFS.anh_luu_niem_01, title: "Ảnh lưu niệm NCKH" },
+  { src: IPFS.anh_luu_niem_02, title: "Ảnh lưu niệm NCKH (2)" },
+];
+
+/* ═══════════════════════════════════════════════════════════
+   Data - from CV.pdf + GitHub README
    ═══════════════════════════════════════════════════════════ */
 
 const CONTACT_INFO = {
@@ -86,7 +101,7 @@ const EDUCATION = {
   school: "Trường Đại học Giao thông Vận tải",
   major: "Công nghệ Thông tin",
   gpa: "3.78 / 4.0",
-  honor: "Tốt nghiệp Thủ khoa xuất sắc — Khoa Công nghệ Thông tin",
+  honor: "Tốt nghiệp Thủ khoa xuất sắc - Khoa Công nghệ Thông tin",
   scholarship: "Học bổng xuất sắc 6/8 kỳ",
   role: "Phó Bí thư lớp",
 };
@@ -149,14 +164,14 @@ const COMPETITIONS = [
   {
     title: "Giải Nhất Main Track",
     event: "Cardano Blockchain Hackathon 2025",
-    org: "Đại học Giao thông Vận tải — Tài trợ bởi Cardano",
+    org: "Đại học Giao thông Vận tải - Tài trợ bởi Cardano",
     image: IPFS.top1_maintrack,
     badge: "🥇",
     color: "text-amber-500 border-amber-500/30 bg-amber-500/5",
   },
   {
     title: "Top 5 Student Track",
-    event: "Vietnam Aptos Hackathon — GMVN 2025",
+    event: "Vietnam Aptos Hackathon - GMVN 2025",
     org: "GMVN 2025",
     image: IPFS.top5_student_01,
     badge: "🏅",
@@ -164,7 +179,7 @@ const COMPETITIONS = [
   },
   {
     title: "Top 5 Student Track (Certificate)",
-    event: "Vietnam Aptos Hackathon — GMVN 2025",
+    event: "Vietnam Aptos Hackathon - GMVN 2025",
     org: "GMVN 2025",
     image: IPFS.top5_student_02,
     badge: "🏅",
@@ -181,13 +196,15 @@ const RESEARCH = [
   },
   {
     title: "Giải Nhì NCKH (Năm 3)",
-    topic: "Xây dựng nền tảng đấu giá trên Cardano — Blockchain & Smart Contract",
+    topic:
+      "Xây dựng nền tảng đấu giá trên Cardano - Blockchain & Smart Contract",
     image: IPFS.giai2_nckh_nam3,
     badge: "🥈",
   },
   {
     title: "Giải Nhì NCKH (Năm 3)",
-    topic: "Phát triển sàn giao dịch tài sản số trên Cardano — Blockchain & Smart Contract",
+    topic:
+      "Phát triển sàn giao dịch tài sản số trên Cardano - Blockchain & Smart Contract",
     image: IPFS.anh_luu_niem_01,
     badge: "🥈",
   },
@@ -206,7 +223,15 @@ const PROJECTS = [
     period: "2024 – Present",
     description:
       "Dự án solo xây dựng từ đầu để chứng minh năng lực full-stack và smart contract. Sàn DEX thế hệ mới sử dụng kiến trúc solver-based intent thay thế AMM truyền thống.",
-    tech: ["Aiken", "Plutus V3", "TypeScript", "Next.js", "Express", "Prisma", "PostgreSQL"],
+    tech: [
+      "Aiken",
+      "Plutus V3",
+      "TypeScript",
+      "Next.js",
+      "Express",
+      "Prisma",
+      "PostgreSQL",
+    ],
     highlights: [
       "7 Plutus V3 validators (Escrow, Pool, Order, Factory, Settings, LP/NFT policies)",
       "Solver engine: NettingEngine → RouteOptimizer → BatchBuilder pipeline",
@@ -214,9 +239,9 @@ const PROJECTS = [
       "Clean Architecture (DDD) với hexagonal backend",
     ],
     links: {
-      github: "https://github.com/TienTung2501",
+      github: "https://github.com/TienTung2501/TDexMs",
       live: "https://tdexms.vercel.app/",
-      api: "https://tdexms.onrender.com",
+      docs: "https://docs.tdexms.vercel.app",
     },
     solo: true,
   },
@@ -225,7 +250,7 @@ const PROJECTS = [
 const CATALYST_PROJECTS = [
   {
     fund: "Fund 14",
-    title: "PyCardano — The Ultimate Course for Python & AI Developers",
+    title: "PyCardano - The Ultimate Course for Python & AI Developers",
     description:
       "Khóa học toàn diện xây dựng Cardano dApps bằng Python/PyCardano, bao gồm off-chain architecture, transaction construction, smart contract interaction.",
     link: "https://projectcatalyst.io/funds/14/cardano-open-ecosystem/pycardano-the-ultimate-course-for-python-and-ai-developers",
@@ -239,9 +264,9 @@ const CATALYST_PROJECTS = [
   },
   {
     fund: "Fund 11",
-    title: "The Complete Aiken Course — Cardano from Zero to Expert",
+    title: "The Complete Aiken Course - Cardano from Zero to Expert",
     description:
-      "Khóa học chuyên sâu để thành thạo Aiken — ngôn ngữ smart contract của Cardano — từ cơ bản đến nâng cao.",
+      "Khóa học chuyên sâu để thành thạo Aiken - ngôn ngữ smart contract của Cardano - từ cơ bản đến nâng cao.",
     link: "https://projectcatalyst.io/funds/11/cardano-open-ecosystem/the-complete-aiken-course-cardano-from-zero-to-expert",
   },
   {
@@ -257,19 +282,19 @@ const ACTIVITIES = [
   {
     title: "Blockchain UTC Club",
     role: "Thành viên Ban Cố vấn Học thuật",
-    org: "CLB Blockchain — Đại học Giao thông Vận tải Hà Nội",
+    org: "CLB Blockchain - Đại học Giao thông Vận tải Hà Nội",
     icon: Building,
   },
   {
     title: "Sinh viên gọi vốn Cardano",
     role: "Thành viên nhóm gọi vốn & triển khai dự án",
-    org: "Cộng đồng Blockchain Cardano — Project Catalyst",
+    org: "Cộng đồng Blockchain Cardano - Project Catalyst",
     icon: Rocket,
   },
   {
     title: "Nghiên cứu Khoa học",
     role: "Sinh viên nghiên cứu (Năm 2 & Năm 3)",
-    org: "Đại học Giao thông Vận tải — Cấp trường",
+    org: "Đại học Giao thông Vận tải - Cấp trường",
     icon: FlaskConical,
   },
 ];
@@ -308,6 +333,75 @@ function ImageLightbox({
           className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
         />
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Auto-cycling image showcase carousel
+   ═══════════════════════════════════════════════════════════ */
+function ImageShowcase({
+  images,
+  onImageClick,
+}: {
+  images: { src: string; title: string }[];
+  onImageClick: (src: string, alt: string) => void;
+}) {
+  const [active, setActive] = useState(0);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setActive((p) => (p + 1) % images.length);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [images.length]);
+
+  return (
+    <div className="flex flex-col items-center gap-3">
+      {/* Main cycling image */}
+      <button
+        onClick={() => {
+          const img = images[active];
+          onImageClick(img.src, img.title);
+        }}
+        className="relative w-full aspect-[4/3] rounded-xl overflow-hidden ring-2 ring-white/20 shadow-2xl cursor-pointer group"
+      >
+        {images.map((img, i) => (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            key={i}
+            src={img.src}
+            alt={img.title}
+            className={cn(
+              "absolute inset-0 w-full h-full object-cover transition-all duration-1000 ease-in-out",
+              i === active ? "opacity-100 scale-100" : "opacity-0 scale-105"
+            )}
+          />
+        ))}
+        <div className="absolute inset-0 bg-black/10 group-hover:bg-black/0 transition-colors duration-300" />
+        <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/60 to-transparent h-12" />
+      </button>
+
+      {/* Animated dots */}
+      <div className="flex gap-1.5 items-center">
+        {images.map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setActive(i)}
+            className={cn(
+              "h-1.5 rounded-full transition-all duration-500",
+              i === active
+                ? "bg-white w-5"
+                : "bg-white/40 w-1.5 hover:bg-white/60"
+            )}
+          />
+        ))}
+      </div>
+
+      {/* Title with fade */}
+      <p className="text-center text-xs text-white/60 h-4 transition-all duration-500">
+        {images[active]?.title}
+      </p>
     </div>
   );
 }
@@ -360,21 +454,32 @@ export default function CVPage() {
 
       <div className="shell py-6 max-w-6xl mx-auto space-y-6">
         {/* ══════════════════════════════════════
-           HERO CARD — Name, Title, Contact
+           HERO - Background graduation photo + image carousel
            ══════════════════════════════════════ */}
-        <section className="relative overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-primary/5 via-background to-primary/10">
-          {/* Decorative blobs */}
-          <div className="absolute -top-20 -right-20 h-40 w-40 rounded-full bg-primary/10 blur-3xl" />
-          <div className="absolute -bottom-20 -left-20 h-40 w-40 rounded-full bg-primary/5 blur-3xl" />
+        <section className="relative min-h-[420px] sm:min-h-[460px] overflow-hidden rounded-2xl border border-border/50">
+          {/* Background: graduation photo */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={IPFS.slide_totnghiep}
+            alt="Graduation"
+            className="absolute inset-0 w-full h-full object-cover"
+          />
 
-          <div className="relative p-6 sm:p-8">
-            <div className="flex flex-col lg:flex-row gap-6">
-              {/* Left: Avatar + Name */}
-              <div className="flex items-start gap-5 flex-1">
-                <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-primary/10 text-primary text-3xl font-black flex-shrink-0 ring-2 ring-primary/20">
-                  TT
-                </div>
-                <div className="space-y-2 flex-1 min-w-0">
+          {/* Dark gradient overlay */}
+          <div className="absolute inset-0 bg-gradient-to-r from-black/90 via-black/75 to-black/50" />
+
+          {/* Subtle animated glow accent */}
+          <div className="absolute top-1/2 right-[25%] -translate-y-1/2 h-72 w-72 rounded-full bg-primary/15 blur-[120px] animate-pulse pointer-events-none" />
+
+          {/* Content */}
+          <div className="relative flex items-center p-6 sm:p-10 min-h-[420px] sm:min-h-[460px]">
+            <div className="flex flex-col lg:flex-row items-start gap-8 w-full">
+              {/* Left: Name + Bio + Contact */}
+              <div className="flex-1 text-white space-y-4 min-w-0">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 text-white text-2xl font-black flex-shrink-0 ring-2 ring-white/20 backdrop-blur-sm">
+                    TT
+                  </div>
                   <div>
                     <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
                       {CONTACT_INFO.name}
@@ -382,41 +487,50 @@ export default function CVPage() {
                     <p className="text-primary font-semibold text-sm">
                       {CONTACT_INFO.role}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+                    <p className="text-xs text-white/50 mt-0.5">
                       {CONTACT_INFO.title}
                     </p>
                   </div>
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    Fullstack & Blockchain Developer chuyên xây dựng ứng dụng
-                    phi tập trung (dApps) trên hệ sinh thái Cardano. Hơn 3 năm
-                    kinh nghiệm, thành thạo Aiken, Lucid, CIP-68, MeshJS,
-                    Blockfrost, Hydra, Midnight và mô hình eUTXO. Được gọi vốn
-                    thành công qua nhiều vòng Project Catalyst (Fund 10, 11, 12,
-                    14). Đang mở rộng sang phát triển dApp đa chuỗi và ứng dụng
-                    AI vào quy trình phát triển phần mềm.
-                  </p>
                 </div>
-              </div>
 
-              {/* Right: Contact info grid */}
-              <div className="lg:w-72 flex-shrink-0 grid grid-cols-1 gap-2 text-sm">
-                {[
-                  { icon: Calendar, label: CONTACT_INFO.dob },
-                  { icon: Phone, label: CONTACT_INFO.phone },
-                  { icon: Mail, label: CONTACT_INFO.email },
-                  { icon: Send, label: `Telegram: ${CONTACT_INFO.telegram}` },
-                  { icon: MapPin, label: CONTACT_INFO.address },
-                ].map((c, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-2 text-muted-foreground"
+                <p className="text-sm text-white/70 leading-relaxed max-w-xl">
+                  Fullstack & Blockchain Developer chuyên xây dựng ứng dụng phi
+                  tập trung (dApps) trên hệ sinh thái Cardano. Hơn 3 năm kinh
+                  nghiệm, thành thạo Aiken, Lucid, CIP-68, MeshJS, Blockfrost,
+                  Hydra, Midnight và mô hình eUTXO. Được gọi vốn thành công qua
+                  nhiều vòng Project Catalyst (Fund 10, 11, 12, 14).
+                </p>
+
+                {/* Contact info grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                  {[
+                    { icon: Calendar, label: CONTACT_INFO.dob },
+                    { icon: Phone, label: CONTACT_INFO.phone },
+                    { icon: Mail, label: CONTACT_INFO.email },
+                    {
+                      icon: Send,
+                      label: `Telegram: ${CONTACT_INFO.telegram}`,
+                    },
+                    { icon: MapPin, label: CONTACT_INFO.address },
+                  ].map((c, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center gap-2 text-white/60"
+                    >
+                      <c.icon className="h-3.5 w-3.5 flex-shrink-0 text-primary/70" />
+                      <span className="text-xs truncate">{c.label}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white"
+                    asChild
                   >
-                    <c.icon className="h-3.5 w-3.5 flex-shrink-0 text-primary/60" />
-                    <span className="text-xs truncate">{c.label}</span>
-                  </div>
-                ))}
-                <div className="flex gap-2 mt-1">
-                  <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
                     <a
                       href="https://github.com/TienTung2501"
                       target="_blank"
@@ -425,12 +539,22 @@ export default function CVPage() {
                       <Github className="h-3 w-3 mr-1" /> GitHub
                     </a>
                   </Button>
-                  <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white"
+                    asChild
+                  >
                     <a href="mailto:tientung03.nttvn@gmail.com">
                       <Mail className="h-3 w-3 mr-1" /> Email
                     </a>
                   </Button>
-                  <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs bg-white/10 border-white/20 text-white hover:bg-white/20 hover:text-white"
+                    asChild
+                  >
                     <a
                       href="https://t.me/TungTM0"
                       target="_blank"
@@ -440,6 +564,14 @@ export default function CVPage() {
                     </a>
                   </Button>
                 </div>
+              </div>
+
+              {/* Right: Image carousel showcase */}
+              <div className="lg:w-64 w-full max-w-[280px] flex-shrink-0 mx-auto lg:mx-0">
+                <ImageShowcase
+                  images={ALL_IMAGES}
+                  onImageClick={(src, alt) => setLightbox({ src, alt })}
+                />
               </div>
             </div>
           </div>
@@ -453,7 +585,7 @@ export default function CVPage() {
                LEFT COLUMN (2/3)
                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
           <div className="lg:col-span-2 space-y-6">
-            {/* ── Technical Skills ── */}
+            {/* - Technical Skills - Colored categories - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle
@@ -461,49 +593,51 @@ export default function CVPage() {
                   title="Kỹ năng Chuyên môn"
                   subtitle="Blockchain, Fullstack & AI-Augmented Development"
                 />
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <Box className="h-3 w-3" /> Blockchain
+                <div className="space-y-3">
+                  {/* Blockchain - amber */}
+                  <div className="rounded-lg border border-amber-500/20 bg-gradient-to-r from-amber-500/5 to-transparent p-3 pl-4 border-l-4 border-l-amber-500">
+                    <h3 className="text-xs font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Box className="h-3 w-3" /> Blockchain & Smart Contracts
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
                       {TECHNICAL_SKILLS.blockchain.map((s) => (
                         <Badge
                           key={s}
-                          variant="secondary"
-                          className="text-xs font-normal"
+                          className="text-xs font-normal bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/20 hover:bg-amber-500/20 transition-colors"
                         >
                           {s}
                         </Badge>
                       ))}
                     </div>
                   </div>
-                  <div>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
+
+                  {/* Fullstack - blue */}
+                  <div className="rounded-lg border border-blue-500/20 bg-gradient-to-r from-blue-500/5 to-transparent p-3 pl-4 border-l-4 border-l-blue-500">
+                    <h3 className="text-xs font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                       <Layers className="h-3 w-3" /> Fullstack Development
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
                       {TECHNICAL_SKILLS.fullstack.map((s) => (
                         <Badge
                           key={s}
-                          variant="secondary"
-                          className="text-xs font-normal"
+                          className="text-xs font-normal bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20 hover:bg-blue-500/20 transition-colors"
                         >
                           {s}
                         </Badge>
                       ))}
                     </div>
                   </div>
-                  <div>
-                    <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <Cpu className="h-3 w-3" /> AI & DevOps
+
+                  {/* AI & DevOps - purple */}
+                  <div className="rounded-lg border border-purple-500/20 bg-gradient-to-r from-purple-500/5 to-transparent p-3 pl-4 border-l-4 border-l-purple-500">
+                    <h3 className="text-xs font-semibold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Cpu className="h-3 w-3" /> AI-Augmented & DevOps
                     </h3>
                     <div className="flex flex-wrap gap-1.5">
                       {TECHNICAL_SKILLS.ai_devops.map((s) => (
                         <Badge
                           key={s}
-                          variant="secondary"
-                          className="text-xs font-normal"
+                          className="text-xs font-normal bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20 hover:bg-purple-500/20 transition-colors"
                         >
                           {s}
                         </Badge>
@@ -514,7 +648,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Solo Project: SolverNet DEX ── */}
+            {/* - Solo Project: SolverNet DEX - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle
@@ -583,12 +717,12 @@ export default function CVPage() {
                         <Globe className="h-3.5 w-3.5" /> Live Demo
                       </a>
                       <a
-                        href={p.links.api}
+                        href={p.links.docs}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <ExternalLink className="h-3.5 w-3.5" /> API
+                        <FileText className="h-3.5 w-3.5" /> Documentation
                       </a>
                     </div>
                   </div>
@@ -596,12 +730,12 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Catalyst Funded Projects ── */}
+            {/* - Catalyst Funded Projects - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle
                   icon={Rocket}
-                  title="Dự án gọi vốn — Project Catalyst"
+                  title="Dự án gọi vốn - Project Catalyst"
                   subtitle="Cardano community-funded projects"
                 />
                 <div className="space-y-4">
@@ -630,7 +764,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Competitions ── */}
+            {/* - Competitions - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle
@@ -665,7 +799,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Scientific Research ── */}
+            {/* - Scientific Research - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle
@@ -698,7 +832,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Gallery ── */}
+            {/* - Gallery - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Award} title="Hình ảnh Hoạt động" />
@@ -732,7 +866,7 @@ export default function CVPage() {
                RIGHT COLUMN / SIDEBAR (1/3)
                ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */}
           <div className="space-y-6">
-            {/* ── Education ── */}
+            {/* - Education - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={GraduationCap} title="Học vấn" />
@@ -769,7 +903,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Strengths ── */}
+            {/* - Strengths - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Sparkles} title="Điểm mạnh" />
@@ -784,7 +918,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Soft Skills ── */}
+            {/* - Soft Skills - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Users} title="Kỹ năng mềm" />
@@ -802,7 +936,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Activities ── */}
+            {/* - Activities - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Building} title="Hoạt động" />
@@ -825,7 +959,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Hobbies ── */}
+            {/* - Hobbies - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Heart} title="Sở thích" />
@@ -843,7 +977,7 @@ export default function CVPage() {
               </CardContent>
             </Card>
 
-            {/* ── Goals ── */}
+            {/* - Goals - */}
             <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-transparent backdrop-blur">
               <CardContent className="pt-5 pb-5">
                 <SectionTitle icon={Target} title="Mục tiêu" />

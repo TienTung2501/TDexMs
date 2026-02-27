@@ -29,6 +29,7 @@ const NAV_ITEMS = [
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: Shield },
   { href: "/about", label: "About", icon: Info },
+  { href: "https://docs.tdexms.vercel.app", label: "Docs", icon: BookOpen, external: true },
   { href: "/cv", label: "CV", icon: User },
 ];
 
@@ -53,20 +54,34 @@ export function Header() {
         {/* Desktop Nav */}
         <nav className="hidden md:flex items-center gap-1">
           {NAV_ITEMS.map((item) => {
+            const isExternal = "external" in item && item.external;
             const isActive =
-              item.href === "/"
+              !isExternal &&
+              (item.href === "/"
                 ? pathname === "/"
-                : pathname.startsWith(item.href);
-            return (
+                : pathname.startsWith(item.href));
+            const cls = cn(
+              "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+              isActive
+                ? "bg-primary/10 text-primary"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+            );
+            return isExternal ? (
+              <a
+                key={item.href}
+                href={item.href}
+                target="_blank"
+                rel="noreferrer"
+                className={cls}
+              >
+                <item.icon className="h-4 w-4" />
+                {item.label}
+              </a>
+            ) : (
               <Link
                 key={item.href}
                 href={item.href}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                )}
+                className={cls}
               >
                 <item.icon className="h-4 w-4" />
                 {item.label}
@@ -113,21 +128,36 @@ export function Header() {
         <div className="md:hidden border-t border-border/50 bg-background/95 backdrop-blur-xl">
           <nav className="shell flex flex-col gap-1 py-3">
             {NAV_ITEMS.map((item) => {
+              const isExternal = "external" in item && item.external;
               const isActive =
-                item.href === "/"
+                !isExternal &&
+                (item.href === "/"
                   ? pathname === "/"
-                  : pathname.startsWith(item.href);
-              return (
+                  : pathname.startsWith(item.href));
+              const cls = cn(
+                "flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+                isActive
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+              );
+              return isExternal ? (
+                <a
+                  key={item.href}
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setMobileOpen(false)}
+                  className={cls}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.label}
+                </a>
+              ) : (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileOpen(false)}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
-                  )}
+                  className={cls}
                 >
                   <item.icon className="h-4 w-4" />
                   {item.label}
