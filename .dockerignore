@@ -12,5 +12,6 @@ kupo-data
 frontend/
 !frontend/package.json
 smartcontract/
+!smartcontract/plutus.json
 .github/
 .turbo/
