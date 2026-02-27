@@ -14,6 +14,7 @@ import {
   X,
   BookOpen,
   User,
+  Info,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
@@ -27,6 +28,7 @@ const NAV_ITEMS = [
   { href: "/portfolio", label: "Portfolio", icon: Wallet },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/admin", label: "Admin", icon: Shield },
+  { href: "/about", label: "About", icon: Info },
   { href: "/cv", label: "CV", icon: User },
 ];
 

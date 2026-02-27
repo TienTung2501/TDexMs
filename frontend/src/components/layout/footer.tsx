@@ -60,11 +60,17 @@ export function Footer() {
                 GitHub
               </a>
               <Link
-                href="/cv"
+                href="/about"
                 className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 <BookOpen className="h-3.5 w-3.5" />
-                About / CV
+                About
+              </Link>
+              <Link
+                href="/cv"
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Developer CV
               </Link>
               <a
                 href="https://cardano.org"
