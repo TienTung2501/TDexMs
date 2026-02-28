@@ -35,6 +35,7 @@ import { buildPortfolioAction } from "@/lib/api";
 import { useTransaction } from "@/lib/hooks/use-transaction";
 import { TOKENS } from "@/lib/mock-data";
 import { formatCompact, cn } from "@/lib/utils";
+import { Progress } from "@/components/ui/progress";
 
 // ─── Helpers ────────────────────────────────
 function formatCountdown(deadline: number): string {
