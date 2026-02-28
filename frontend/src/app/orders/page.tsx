@@ -189,7 +189,7 @@ export default function OrdersPage() {
             >
               <div className="text-xs text-muted-foreground">{s.label}</div>
               <div className={cn("text-xl font-bold mt-1", s.color)}>
-                {loading ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
+                {loading && intents.length === 0 ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
               </div>
             </div>
           ))}
@@ -226,7 +226,7 @@ export default function OrdersPage() {
             >
               <div className="text-xs text-muted-foreground">{s.label}</div>
               <div className={cn("text-xl font-bold mt-1", s.color)}>
-                {ordersLoading ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
+                {ordersLoading && orders.length === 0 ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
               </div>
             </div>
           ))}
@@ -245,7 +245,7 @@ export default function OrdersPage() {
         <TabsContent value={tab} className="mt-4 space-y-3">
           {section === "intents" ? (
             /* ─── Intents List ─── */
-            loading ? (
+            loading && intents.length === 0 ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>
@@ -315,7 +315,7 @@ export default function OrdersPage() {
             )
           ) : (
             /* ─── Advanced Orders List ─── */
-            ordersLoading ? (
+            ordersLoading && orders.length === 0 ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
               </div>

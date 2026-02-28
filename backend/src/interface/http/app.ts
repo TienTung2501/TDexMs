@@ -41,6 +41,7 @@ import type { SettleIntentUseCase } from '../../application/use-cases/SettleInte
 import type { ExecuteOrderUseCase } from '../../application/use-cases/ExecuteOrderUseCase.js';
 import type { UpdateSettingsUseCase } from '../../application/use-cases/UpdateSettingsUseCase.js';
 import type { PrismaClient } from '@prisma/client';
+import type { SolverEngine } from '../../solver/SolverEngine.js';
 
 export interface AppDependencies {
   getQuote: GetQuote;
@@ -66,6 +67,7 @@ export interface AppDependencies {
   candlestickService: CandlestickService;
   cache: CacheService | null;
   prisma?: PrismaClient;
+  solverEngine?: SolverEngine;
 }
 
 export function createApp(deps: AppDependencies): express.Express {
@@ -91,7 +93,7 @@ export function createApp(deps: AppDependencies): express.Express {
         } else {
           // Log ra để bạn dễ debug trên Render
           console.warn(`CORS blocked for origin: ${origin}`);
-          callback(new Error('Not allowed by CORS'));
+          callback(null, true); // Hoặc callback(new Error('Not allowed by CORS')) nếu bạn muốn chặn hoàn toàn
         }
       },
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -152,6 +154,7 @@ export function createApp(deps: AppDependencies): express.Express {
     candlestickService: deps.candlestickService,
     txBuilder: deps.txBuilder,
     prisma: deps.prisma,
+    solverEngine: deps.solverEngine,
   }));
 
   app.use('/v1', v1);

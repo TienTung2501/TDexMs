@@ -82,7 +82,7 @@ export function RecentTradesTable({ poolId, limit = 10 }: RecentTradesTableProps
         </div>
       </CardHeader>
       <CardContent>
-        {loading ? (
+        {loading && trades.length === 0 ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>

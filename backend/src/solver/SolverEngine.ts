@@ -37,10 +37,64 @@ export interface SolverConfig {
   network: 'Preprod' | 'Mainnet';
 }
 
+export interface SolverStatus {
+  running: boolean;
+  enabled: boolean;
+  lastRun: string | null;
+  batchesTotal: number;
+  batchesSuccess: number;
+  batchesFailed: number;
+  activeIntents: number;
+  pendingOrders: number;
+  queueDepth: number;
+  lastTxHash: string | null;
+  uptimeMs: number;
+  config: {
+    batchWindowMs: number;
+    maxRetries: number;
+    minProfitLovelace: string;
+    solverAddress: string;
+    network: string;
+  };
+}
+
 export class SolverEngine {
   private readonly logger;
   private running = false;
   private lucidPromise: Promise<LucidEvolution> | null = null;
+
+  // ── Status tracking ─────────────────────────
+  private startedAt: number | null = null;
+  private lastRunAt: string | null = null;
+  private batchesTotal = 0;
+  private batchesSuccess = 0;
+  private batchesFailed = 0;
+  private lastActiveIntents = 0;
+  private lastTxHash: string | null = null;
+
+  /** Get current solver status (thread-safe read) */
+  getStatus(): SolverStatus {
+    return {
+      running: this.running,
+      enabled: this.config.enabled,
+      lastRun: this.lastRunAt,
+      batchesTotal: this.batchesTotal,
+      batchesSuccess: this.batchesSuccess,
+      batchesFailed: this.batchesFailed,
+      activeIntents: this.lastActiveIntents,
+      pendingOrders: 0, // populated by admin route from DB
+      queueDepth: this.lastActiveIntents,
+      lastTxHash: this.lastTxHash,
+      uptimeMs: this.startedAt ? Date.now() - this.startedAt : 0,
+      config: {
+        batchWindowMs: this.config.batchWindowMs,
+        maxRetries: this.config.maxRetries,
+        minProfitLovelace: this.config.minProfitLovelace.toString(),
+        solverAddress: this.config.solverAddress,
+        network: this.config.network,
+      },
+    };
+  }
 
   constructor(
     private readonly config: SolverConfig,
@@ -89,6 +143,7 @@ export class SolverEngine {
     }
 
     this.running = true;
+    this.startedAt = Date.now();
     this.logger.info(
       { batchWindow: this.config.batchWindowMs },
       'Solver engine started',
@@ -97,7 +152,13 @@ export class SolverEngine {
     while (this.running) {
       try {
         await this.runIteration();
+        this.batchesTotal++;
+        this.batchesSuccess++;
+        this.lastRunAt = new Date().toISOString();
       } catch (err) {
+        this.batchesTotal++;
+        this.batchesFailed++;
+        this.lastRunAt = new Date().toISOString();
         this.logger.error({ err }, 'Solver iteration failed');
         // Back off on error
         await sleep(this.config.batchWindowMs * 2);
@@ -118,6 +179,7 @@ export class SolverEngine {
   private async runIteration(): Promise<void> {
     // Phase 1: Collect active intents from chain
     const chainIntents = await this.collector.getActiveIntents();
+    this.lastActiveIntents = chainIntents.length;
 
     if (chainIntents.length === 0) {
       this.logger.debug('No active intents found');
@@ -502,6 +564,9 @@ export class SolverEngine {
           { txHash: submittedTxHash, poolId: batch.poolId },
           'Settlement TX signed and submitted — awaiting on-chain confirmation',
         );
+
+        // Track last submitted TX hash for admin monitoring
+        this.lastTxHash = submittedTxHash;
 
         // CRITICAL RULE: Await on-chain confirmation before any DB updates
         const confirmed = await this.chainProvider.awaitTx(submittedTxHash, 180_000);

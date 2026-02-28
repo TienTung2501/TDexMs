@@ -154,36 +154,8 @@ async function main(): Promise<void> {
   const depositLiquidity = new DepositLiquidity(poolRepo, txBuilder, wsServer);
   const withdrawLiquidity = new WithdrawLiquidity(poolRepo, txBuilder, wsServer);
 
-  const app = createApp({
-    getQuote,
-    createIntent,
-    cancelIntent,
-    getPoolInfo,
-    createPool,
-    depositLiquidity,
-    withdrawLiquidity,
-    createOrder,
-    cancelOrder,
-    listOrders,
-    getPortfolio,
-    settleIntent,
-    executeOrder,
-    updateSettings,
-    intentRepo,
-    orderRepo,
-    poolRepo,
-    txBuilder,
-    blockfrost,
-    candlestickService,
-    cache,
-    prisma,
-  });
-
-  const httpServer = createServer(app);
-  wsServer.attach(httpServer);
-
   // ──────────────────────────────────────────────
-  // 4. Solver Engine
+  // 4. Solver Engine (created before app so admin routes can reference it)
   // ──────────────────────────────────────────────
   // Use TxBuilder's resolved escrow address (computed from blueprint) instead of env var
   // to ensure consistency between TX building and intent collection.
@@ -221,6 +193,35 @@ async function main(): Promise<void> {
     poolRepo,
     candlestickService,
   );
+
+  const app = createApp({
+    getQuote,
+    createIntent,
+    cancelIntent,
+    getPoolInfo,
+    createPool,
+    depositLiquidity,
+    withdrawLiquidity,
+    createOrder,
+    cancelOrder,
+    listOrders,
+    getPortfolio,
+    settleIntent,
+    executeOrder,
+    updateSettings,
+    intentRepo,
+    orderRepo,
+    poolRepo,
+    txBuilder,
+    blockfrost,
+    candlestickService,
+    cache,
+    prisma,
+    solverEngine,
+  });
+
+  const httpServer = createServer(app);
+  wsServer.attach(httpServer);
 
   // ──────────────────────────────────────────────
   // 5. Background Services

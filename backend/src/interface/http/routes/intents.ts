@@ -131,7 +131,11 @@ export function createIntentRouter(
             inputAmount: i.inputAmount.toString(),
             outputAsset: `${i.outputPolicyId}.${i.outputAssetName}`,
             minOutput: i.minOutput.toString(),
+            actualOutput: i.actualOutput?.toString() ?? null,
             deadline: Number(i.deadline),
+            partialFill: i.partialFill,
+            escrowTxHash: i.escrowTxHash ?? null,
+            settlementTxHash: i.settlementTxHash ?? null,
             createdAt: i.createdAt.toISOString(),
           })),
           pagination: {

@@ -174,7 +174,11 @@ export interface IntentListResponse {
     inputAmount: string;
     outputAsset: string;
     minOutput: string;
+    actualOutput?: string;
     deadline: string;
+    partialFill?: boolean;
+    escrowTxHash?: string;
+    settlementTxHash?: string;
     createdAt: string;
   }>;
   pagination: {
@@ -867,6 +871,7 @@ export async function buildBurnPoolNFT(body: {
 
 export interface SolverStatusResponse {
   running: boolean;
+  enabled: boolean;
   lastRun: string | null;
   batchesTotal: number;
   batchesSuccess: number;
@@ -875,6 +880,14 @@ export interface SolverStatusResponse {
   pendingOrders: number;
   queueDepth: number;
   lastTxHash: string | null;
+  uptimeMs: number;
+  config: {
+    batchWindowMs: number;
+    maxRetries: number;
+    minProfitLovelace: string;
+    solverAddress: string;
+    network: string;
+  };
 }
 
 export async function getSolverStatus(): Promise<SolverStatusResponse> {
@@ -885,6 +898,82 @@ export async function triggerSolver(): Promise<{ triggered: boolean; message: st
   return apiFetch("/admin/solver/trigger", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+}
+
+// ─── Admin Protocol Info ──────────────────────────────────
+
+export interface ProtocolInfo {
+  network: string;
+  contracts: {
+    escrow_script_address: string;
+    pool_script_address: string;
+    settings_nft_policy_id: string;
+    settings_nft_asset_name: string;
+  };
+  admin: {
+    admin_address: string;
+    solver_address: string;
+  };
+  services: {
+    solver_enabled: boolean;
+    order_executor_enabled: boolean;
+    order_routes_enabled: boolean;
+    chain_sync_interval_ms: number;
+    chart_snapshot_interval_ms: number;
+  };
+  blockfrost: {
+    url: string;
+    project_id_masked: string;
+  };
+  database: {
+    pool_count: number;
+    intent_count: number;
+    order_count: number;
+  };
+}
+
+export async function getProtocolInfo(): Promise<ProtocolInfo> {
+  return apiFetch("/admin/protocol/info");
+}
+
+// ─── Admin Pools (Admin view) ─────────────────────────────
+
+export interface AdminPoolEntry {
+  id: string;
+  asset_a: { policy_id: string; asset_name: string };
+  asset_b: { policy_id: string; asset_name: string };
+  reserve_a: string;
+  reserve_b: string;
+  tvl_ada: string;
+  volume_24h: string;
+  fee_numerator: number;
+  created_at: string | null;
+  utxo_ref: string | null;
+}
+
+export async function getAdminPoolList(): Promise<{ pools: AdminPoolEntry[]; count: number }> {
+  return apiFetch("/admin/pools/list");
+}
+
+// ─── Admin Danger Zone ────────────────────────────────────
+
+export async function buildDeployFactory(body: {
+  admin_address: string;
+}): Promise<{ unsignedTx: string; txHash: string; estimatedFee: string }> {
+  return apiFetch("/admin/factory/build-deploy", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function resetDatabase(body: {
+  admin_address: string;
+  confirm: string;
+}): Promise<{ success: boolean; message: string; deleted: Record<string, number> }> {
+  return apiFetch("/admin/reset-db", {
+    method: "POST",
+    body: JSON.stringify(body),
   });
 }
 

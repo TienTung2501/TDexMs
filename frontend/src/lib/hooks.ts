@@ -36,29 +36,41 @@ import {
 import { TOKENS, type Token } from "@/lib/mock-data";
 
 // ─── Generic fetch hook ─────────────────────
+// Implements stale-while-revalidate: shows cached data while background
+// fetching, never unmounts content for periodic refreshes.
 function useApi<T>(
   fetcher: () => Promise<T>,
   deps: unknown[] = [],
   options?: { enabled?: boolean; fallback?: T; refetchInterval?: number }
 ) {
   const [data, setData] = useState<T | undefined>(options?.fallback);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  // `initialLoading` is true ONLY until the first successful fetch completes.
+  // Background refetches never flip this back to true → no spinner flicker.
+  const [initialLoading, setInitialLoading] = useState(true);
+  // `isRefetching` signals a background refetch is in progress (optional UI indicator).
+  const [isRefetching, setIsRefetching] = useState(false);
+  const hasFetchedRef = useRef(false);
 
   const fetchData = useCallback(async () => {
     if (options?.enabled === false) {
-      setLoading(false);
+      setInitialLoading(false);
       return;
     }
+    // Only mark as background refetch if we already have data
+    if (hasFetchedRef.current) {
+      setIsRefetching(true);
+    }
     try {
-      setLoading(true);
       const result = await fetcher();
       setData(result);
       setError(null);
+      hasFetchedRef.current = true;
     } catch (err) {
       setError(err as Error);
     } finally {
-      setLoading(false);
+      setInitialLoading(false);
+      setIsRefetching(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
@@ -74,7 +86,10 @@ function useApi<T>(
     return () => clearInterval(id);
   }, [fetchData, options?.refetchInterval]);
 
-  return { data, loading, error, refetch: fetchData };
+  // `loading` is now only true on the very first fetch (before any data arrives).
+  // Components should use `loading` for skeleton/spinner guards, and `isRefetching`
+  // for subtle background indicators (e.g. a small spinner in a corner).
+  return { data, loading: initialLoading, isRefetching, error, refetch: fetchData };
 }
 
 // ─── Pool Helpers ───────────────────────────
@@ -154,6 +169,7 @@ function normalizePool(p: PoolResponse): NormalizedPool {
       ? p.feeNumerator * 0.1
       : 0.3;
 
+  // tvlAda, volume24h, fees24h come from backend as lovelace strings → divide by 10^6
   return {
     id: p.poolId,
     assetA: resolveToken(p.assetA.policyId, p.assetA.assetName, p.assetA.ticker, p.assetA.decimals),
@@ -162,9 +178,9 @@ function normalizePool(p: PoolResponse): NormalizedPool {
     reserveB: Number(p.reserveB),
     totalLpTokens: Number(p.totalLpTokens),
     feePercent,
-    tvlAda: Number(p.tvlAda),
-    volume24h: Number(p.volume24h),
-    fees24h: Number(p.fees24h),
+    tvlAda: Number(p.tvlAda) / 1_000_000,
+    volume24h: Number(p.volume24h) / 1_000_000,
+    fees24h: Number(p.fees24h) / 1_000_000,
     apy: p.apy ?? 0,
     priceChange24h: 0,
     state: p.state === "ACTIVE" ? "ACTIVE" : "INACTIVE",
@@ -178,7 +194,7 @@ export function usePools(params?: {
   search?: string;
   state?: string;
 }) {
-  const { data, loading, error, refetch } = useApi<PoolListResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<PoolListResponse>(
     () =>
       listPools({
         sortBy: params?.sortBy,
@@ -193,19 +209,19 @@ export function usePools(params?: {
 
   const pools: NormalizedPool[] = (data?.data || []).map(normalizePool);
 
-  return { pools, total: data?.pagination?.total ?? pools.length, loading, error, refetch };
+  return { pools, total: data?.pagination?.total ?? pools.length, loading, isRefetching, error, refetch };
 }
 
 // ─── Single Pool Hook ───────────────────────
 export function usePool(poolId: string | undefined) {
-  const { data, loading, error, refetch } = useApi<PoolResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<PoolResponse>(
     () => getPool(poolId!),
     [poolId],
     { enabled: !!poolId, refetchInterval: 15_000 }
   );
 
   const pool = data ? normalizePool(data) : undefined;
-  return { pool, loading, error, refetch };
+  return { pool, loading, isRefetching, error, refetch };
 }
 
 // ─── Analytics Hook ─────────────────────────
@@ -222,7 +238,7 @@ export interface NormalizedAnalytics {
 }
 
 export function useAnalytics() {
-  const { data, loading, error, refetch } = useApi<AnalyticsOverview>(
+  const { data, loading, isRefetching, error, refetch } = useApi<AnalyticsOverview>(
     () => getAnalyticsOverview(),
     [],
     { refetchInterval: 30_000 }
@@ -230,10 +246,11 @@ export function useAnalytics() {
 
   const analytics: NormalizedAnalytics | undefined = data
     ? {
-        tvl: Number(data.tvl),
-        volume24h: Number(data.volume24h),
-        volume7d: Number(data.volume7d),
-        fees24h: Number(data.fees24h),
+        // Backend returns tvl/volume/fees as lovelace strings → divide by 10^6 to get ADA
+        tvl: Number(data.tvl) / 1_000_000,
+        volume24h: Number(data.volume24h) / 1_000_000,
+        volume7d: Number(data.volume7d) / 1_000_000,
+        fees24h: Number(data.fees24h) / 1_000_000,
         totalPools: data.totalPools,
         totalIntents: data.totalIntents,
         intentsFilled: data.intentsFilled,
@@ -242,7 +259,7 @@ export function useAnalytics() {
       }
     : undefined;
 
-  return { analytics, loading, error, refetch };
+  return { analytics, loading, isRefetching, error, refetch };
 }
 
 // ─── Intents Hook ───────────────────────────
@@ -250,11 +267,16 @@ export interface NormalizedIntent {
   id: string;
   status: string;
   creator: string;
+  inputAsset: string;
+  outputAsset: string;
   inputTicker: string;
   outputTicker: string;
-  inputAmount: number;
-  minOutput: number;
-  actualOutput?: number;
+  inputDecimals: number;
+  outputDecimals: number;
+  inputAmount: number;      // base units
+  minOutput: number;        // base units
+  actualOutput?: number;    // base units
+  partialFill: boolean;
   deadline: string;
   createdAt: string;
   escrowTxHash?: string;
@@ -262,22 +284,32 @@ export interface NormalizedIntent {
 }
 
 function assetToTicker(asset: string): string {
-  if (!asset || asset === "" || asset === "lovelace") return "ADA";
+  return assetToToken(asset).ticker;
+}
+
+/** Resolve an on-chain asset identifier to a Token with full metadata. */
+function assetToToken(asset: string): Token {
+  if (!asset || asset === "" || asset === "lovelace") return TOKENS.ADA;
   const dotIdx = asset.indexOf(".");
   const policyId = dotIdx >= 0 ? asset.slice(0, dotIdx) : asset;
   const assetName = dotIdx >= 0 ? asset.slice(dotIdx + 1) : "";
-  // Look up in TOKENS registry first
   const found = Object.values(TOKENS).find(
     (t) => `${t.policyId}.${t.assetName}` === asset || t.policyId === policyId
   );
-  if (found) return found.ticker;
-  // Decode hex assetName for display
+  if (found) return found;
   const decoded = hexToUtf8(assetName);
-  return decoded.slice(0, 10) || policyId.slice(0, 8);
+  return {
+    policyId,
+    assetName,
+    ticker: decoded.slice(0, 10) || policyId.slice(0, 8),
+    name: decoded || policyId.slice(0, 12),
+    decimals: 0,
+    logo: "🪙",
+  };
 }
 
 export function useIntents(params?: { address?: string; status?: string }) {
-  const { data, loading, error, refetch } = useApi<IntentListResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<IntentListResponse>(
     () =>
       listIntents({
         address: params?.address,
@@ -288,24 +320,48 @@ export function useIntents(params?: { address?: string; status?: string }) {
     { enabled: true, refetchInterval: 15_000 }
   );
 
-  const intents: NormalizedIntent[] = (data?.data || []).map((i) => ({
-    id: i.intentId,
-    status: i.status,
-    creator: i.creator,
-    inputTicker: assetToTicker(i.inputAsset),
-    outputTicker: assetToTicker(i.outputAsset),
-    inputAmount: Number(i.inputAmount),
-    minOutput: Number(i.minOutput),
-    deadline: i.deadline,
-    createdAt: i.createdAt,
-  }));
+  const intents: NormalizedIntent[] = (data?.data || []).map((i) => {
+    const inToken = assetToToken(i.inputAsset);
+    const outToken = assetToToken(i.outputAsset);
+    return {
+      id: i.intentId,
+      status: i.status,
+      creator: i.creator,
+      inputAsset: i.inputAsset,
+      outputAsset: i.outputAsset,
+      inputTicker: inToken.ticker,
+      outputTicker: outToken.ticker,
+      inputDecimals: inToken.decimals,
+      outputDecimals: outToken.decimals,
+      inputAmount: Number(i.inputAmount),
+      minOutput: Number(i.minOutput),
+      actualOutput: i.actualOutput ? Number(i.actualOutput) : undefined,
+      partialFill: i.partialFill ?? false,
+      deadline: i.deadline,
+      createdAt: i.createdAt,
+      escrowTxHash: i.escrowTxHash ?? undefined,
+      settlementTxHash: i.settlementTxHash ?? undefined,
+    };
+  });
 
-  return { intents, total: data?.pagination.total ?? 0, loading, error, refetch };
+  return { intents, total: data?.pagination.total ?? 0, loading, isRefetching, error, refetch };
 }
 
 // ─── Candles Hook ───────────────────────────
-export function useCandles(poolId: string | undefined, interval: string = "4h") {
-  const { data, loading, error, refetch } = useApi<CandleData[]>(
+/**
+ * Fetch OHLCV candles for a pool.
+ * @param decimalsA — assetA token decimals (e.g. 6 for ADA) used to normalise prices.
+ * @param decimalsB — assetB token decimals (e.g. 8 for tBTC).
+ * Raw candle prices are reserveB_base / reserveA_base.
+ * Human price = rawPrice * 10^(decimalsA - decimalsB).
+ */
+export function useCandles(
+  poolId: string | undefined,
+  interval: string = "4h",
+  decimalsA: number = 0,
+  decimalsB: number = 0,
+) {
+  const { data, loading, isRefetching, error, refetch } = useApi<CandleData[]>(
     async () => {
       if (!poolId) return [];
       const res = await getChartCandles({
@@ -313,25 +369,27 @@ export function useCandles(poolId: string | undefined, interval: string = "4h") 
         interval,
         limit: "200",
       });
+      const priceFactor = Math.pow(10, decimalsA - decimalsB);
+      const volFactor = Math.pow(10, decimalsA || 6);
       return (res.candles || []).map((c) => ({
         time: Math.floor(new Date(c.openTime).getTime() / 1000),
-        open: Number(c.open),
-        high: Number(c.high),
-        low: Number(c.low),
-        close: Number(c.close),
-        volume: Number(c.volume),
+        open: Number(c.open) * priceFactor,
+        high: Number(c.high) * priceFactor,
+        low: Number(c.low) * priceFactor,
+        close: Number(c.close) * priceFactor,
+        volume: Number(c.volume) / volFactor,
       }));
     },
-    [poolId, interval],
+    [poolId, interval, decimalsA, decimalsB],
     { enabled: !!poolId, fallback: [] }
   );
 
-  return { candles: data || [], loading, error, refetch };
+  return { candles: data || [], loading, isRefetching, error, refetch };
 }
 
 // ─── Price Hook ─────────────────────────────
 export function usePrice(poolId: string | undefined) {
-  const { data, loading, error } = useApi<string>(
+  const { data, loading, isRefetching, error } = useApi<string>(
     async () => {
       if (!poolId) return "0";
       const res = await getChartPrice(poolId);
@@ -341,7 +399,7 @@ export function usePrice(poolId: string | undefined) {
     { enabled: !!poolId, refetchInterval: 10_000, fallback: "0" }
   );
 
-  return { price: data || "0", loading, error };
+  return { price: data || "0", loading, isRefetching, error };
 }
 
 // ─── WebSocket Hook ─────────────────────────
@@ -431,7 +489,7 @@ export function useOrders(params?: {
   status?: string;
   type?: string;
 }) {
-  const { data, loading, error, refetch } = useApi<OrderListResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<OrderListResponse>(
     () =>
       listOrders({
         creator: params?.creator,
@@ -445,40 +503,40 @@ export function useOrders(params?: {
 
   const orders: NormalizedOrder[] = (data?.items || []).map(normalizeOrder);
 
-  return { orders, total: data?.total ?? 0, loading, error, refetch };
+  return { orders, total: data?.total ?? 0, loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio Hook ─────────────────────────
 export function usePortfolio(address: string | undefined) {
-  const { data, loading, error, refetch } = useApi<PortfolioResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioResponse>(
     () => getPortfolio(address!),
     [address],
     { enabled: !!address, refetchInterval: 30_000 }
   );
 
-  return { portfolio: data, loading, error, refetch };
+  return { portfolio: data, loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio Summary Hook ─────────────────
 export function usePortfolioSummary(address: string | undefined) {
-  const { data, loading, error, refetch } = useApi<PortfolioSummary>(
+  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioSummary>(
     () => getPortfolioSummary(address!),
     [address],
     { enabled: !!address, refetchInterval: 30_000 }
   );
 
-  return { summary: data, loading, error, refetch };
+  return { summary: data, loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio Open Orders Hook ─────────────
 export function usePortfolioOpenOrders(address: string | undefined) {
-  const { data, loading, error, refetch } = useApi<OpenOrderEntry[]>(
+  const { data, loading, isRefetching, error, refetch } = useApi<OpenOrderEntry[]>(
     () => getPortfolioOpenOrders(address!),
     [address],
     { enabled: !!address, refetchInterval: 15_000, fallback: [] }
   );
 
-  return { openOrders: data || [], loading, error, refetch };
+  return { openOrders: data || [], loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio History Hook ─────────────────
@@ -486,36 +544,36 @@ export function usePortfolioHistory(
   address: string | undefined,
   statusFilter?: string
 ) {
-  const { data, loading, error, refetch } = useApi<OrderHistoryEntry[]>(
+  const { data, loading, isRefetching, error, refetch } = useApi<OrderHistoryEntry[]>(
     () => getPortfolioHistory(address!, { status: statusFilter }),
     [address, statusFilter],
     { enabled: !!address, refetchInterval: 30_000, fallback: [] }
   );
 
-  return { history: data || [], loading, error, refetch };
+  return { history: data || [], loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio LP Positions Hook ────────────
 export function usePortfolioLiquidity(address: string | undefined) {
-  const { data, loading, error, refetch } = useApi<LpPositionEntry[]>(
+  const { data, loading, isRefetching, error, refetch } = useApi<LpPositionEntry[]>(
     () => getPortfolioLiquidity(address!),
     [address],
     { enabled: !!address, refetchInterval: 30_000, fallback: [] }
   );
 
-  return { positions: data || [], loading, error, refetch };
+  return { positions: data || [], loading, isRefetching, error, refetch };
 }
 /**
  * Fetches REAL on-chain LP token positions from the upgraded
  * GET /portfolio/:address endpoint (which uses IChainProvider to scan UTxOs).
  */
 export function usePortfolioLpPositions(address: string | undefined) {
-  const { data, loading, error, refetch } = useApi<PortfolioResponse>(
+  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioResponse>(
     () => getPortfolio(address!),
     [address],
     { enabled: !!address, refetchInterval: 30_000 }
   );
 
   const lpPositions: LpPosition[] = data?.lpPositions ?? [];
-  return { lpPositions, loading, error, refetch };
+  return { lpPositions, loading, isRefetching, error, refetch };
 }

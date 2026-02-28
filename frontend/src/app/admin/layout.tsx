@@ -10,8 +10,10 @@ import {
   AlertTriangle,
   ShieldCheck,
   Loader2,
-  Rocket,
+  Globe,
   Cpu,
+  Layers,
+  Terminal,
 } from "lucide-react";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
@@ -20,11 +22,12 @@ import { cn } from "@/lib/utils";
 
 const ADMIN_NAV = [
   { href: "/admin", label: "Dashboard", icon: BarChart3 },
-  { href: "/admin/deploy", label: "Deploy Settings", icon: Rocket },
+  { href: "/admin/protocol", label: "Protocol", icon: Globe },
   { href: "/admin/solver", label: "Solver Engine", icon: Cpu },
+  { href: "/admin/pools", label: "Pool Management", icon: Layers },
   { href: "/admin/revenue", label: "Revenue & Fees", icon: DollarSign },
-  { href: "/admin/settings", label: "Protocol Settings", icon: Settings },
-  { href: "/admin/danger", label: "Danger Zone", icon: AlertTriangle },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
+  { href: "/admin/system", label: "System", icon: Terminal, danger: true },
 ];
 
 export default function AdminLayout({
@@ -131,7 +134,8 @@ export default function AdminLayout({
                 isActive
                   ? "bg-primary/10 text-primary"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent",
-                item.href === "/admin/danger" &&
+                "danger" in item &&
+                  item.danger &&
                   isActive &&
                   "bg-destructive/10 text-destructive"
               )}

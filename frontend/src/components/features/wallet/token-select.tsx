@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Search, X, Loader2, ArrowDownUp } from "lucide-react";
 import {
   Dialog,
@@ -21,6 +21,10 @@ interface TokenSelectProps {
   onSelect: (token: Token) => void;
   excludeTicker?: string;
   balances?: Record<string, number>;
+  /** When set, only show tokens that have a pool pairing with this token */
+  pairedWith?: Token;
+  /** Pool list for pair-aware filtering */
+  availablePools?: Array<{ assetA: { policyId: string; ticker?: string }; assetB: { policyId: string; ticker?: string } }>;
 }
 
 /** Decode a Cardano hex-encoded asset name to UTF-8. Returns hex if not valid UTF-8. */
@@ -76,20 +80,34 @@ function resolvePoolToken(
   };
 }
 
+// ─── Module-level token cache ───────────────
+// Avoids re-fetching pool tokens every time the dialog opens.
+// Cache is valid for 60 seconds — subsequent opens reuse cached tokens instantly.
+let _cachedTokens: Token[] | null = null;
+let _cacheTimestamp = 0;
+const TOKEN_CACHE_TTL = 60_000; // 60s
+
 export function TokenSelectDialog({
   open,
   onOpenChange,
   onSelect,
   excludeTicker,
   balances = {},
+  pairedWith,
+  availablePools,
 }: TokenSelectProps) {
   const [search, setSearch] = useState("");
-  const [dynamicTokens, setDynamicTokens] = useState<Token[]>([TOKENS.ADA]);
+  const [dynamicTokens, setDynamicTokens] = useState<Token[]>(_cachedTokens ?? [TOKENS.ADA]);
   const [fetching, setFetching] = useState(false);
 
-  // Fetch tokens from active pools whenever the dialog opens
+  // Fetch tokens from active pools — uses module-level cache to avoid redundant calls
   useEffect(() => {
     if (!open) return;
+    // If cache is fresh, use it immediately
+    if (_cachedTokens && Date.now() - _cacheTimestamp < TOKEN_CACHE_TTL) {
+      setDynamicTokens(_cachedTokens);
+      return;
+    }
     setFetching(true);
     listPools({ state: "ACTIVE", limit: "100" })
       .then((res) => {
@@ -113,7 +131,10 @@ export function TokenSelectDialog({
           }
         }
         // If no pools returned, fall back to static list so UI is never empty
-        setDynamicTokens(merged.length > 1 ? merged : TOKEN_LIST);
+        const result = merged.length > 1 ? merged : TOKEN_LIST;
+        _cachedTokens = result;
+        _cacheTimestamp = Date.now();
+        setDynamicTokens(result);
       })
       .catch(() => {
         // Silently fall back to static list on error
@@ -122,16 +143,35 @@ export function TokenSelectDialog({
       .finally(() => setFetching(false));
   }, [open]);
 
+  // Build set of tickers that have pool pairings with the paired token
+  const pairedTickers = useMemo(() => {
+    if (!pairedWith || !availablePools || availablePools.length === 0) return null;
+    const matchesPaired = (asset: { policyId: string; ticker?: string }) =>
+      asset.policyId === pairedWith.policyId ||
+      (asset.ticker && pairedWith.ticker && asset.ticker.toUpperCase() === pairedWith.ticker.toUpperCase());
+    const tickers = new Set<string>();
+    for (const pool of availablePools) {
+      if (matchesPaired(pool.assetA)) {
+        tickers.add((pool.assetB.ticker ?? "").toUpperCase());
+      } else if (matchesPaired(pool.assetB)) {
+        tickers.add((pool.assetA.ticker ?? "").toUpperCase());
+      }
+    }
+    return tickers;
+  }, [pairedWith, availablePools]);
+
   const filtered = useMemo(() => {
     return dynamicTokens.filter((t) => {
       if (t.ticker === excludeTicker) return false;
+      // Pair-aware filtering: only show tokens with existing pool pairing
+      if (pairedTickers && !pairedTickers.has(t.ticker.toUpperCase())) return false;
       if (!search) return true;
       return (
         t.ticker.toLowerCase().includes(search.toLowerCase()) ||
         t.name.toLowerCase().includes(search.toLowerCase())
       );
     });
-  }, [search, excludeTicker, dynamicTokens]);
+  }, [search, excludeTicker, dynamicTokens, pairedTickers]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

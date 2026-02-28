@@ -123,8 +123,12 @@ export function SwapCard({
   }, [pool, inputAmount, inputToken, outputToken]);
 
   // B8 fix: Fetch server-side quote with debounce (uses RouteOptimizer for multi-hop)
+  // Clear quote only when tokens or amount change, NOT on slippage-only change
   useEffect(() => {
     setServerQuote(null);
+  }, [inputAmount, inputToken, outputToken]);
+
+  useEffect(() => {
     if (!inputAmount || parseFloat(inputAmount) <= 0) return;
 
     const inputAsset =
@@ -136,12 +140,16 @@ export function SwapCard({
         ? "lovelace"
         : `${outputToken.policyId}.${outputToken.assetName}`;
 
+    // Backend expects base units (lovelace for ADA, satoshis for tBTC, etc.)
+    const inDecimals = inputToken.decimals ?? 0;
+    const inputAmountBase = String(Math.round(parseFloat(inputAmount) * Math.pow(10, inDecimals)));
+
     setQuoteLoading(true);
     const timer = setTimeout(() => {
       getQuote({
         inputAsset,
         outputAsset,
-        inputAmount,
+        inputAmount: inputAmountBase,
         slippage: String(Math.round(slippage * 100)),   // Convert % → basis points (0.5% → 50 BPS)
       })
         .then((q) => setServerQuote(q))
@@ -156,15 +164,18 @@ export function SwapCard({
   }, [inputAmount, inputToken, outputToken, slippage]);
 
   // Use server quote when available, fall back to local calculation
+  // Server quote returns BASE units — convert to human-readable for display
+  const outDecimals = outputToken.decimals ?? 0;
   const effectiveOutput = serverQuote
-    ? parseFloat(serverQuote.outputAmount)
+    ? parseFloat(serverQuote.outputAmount) / Math.pow(10, outDecimals)
     : quote.output;
   const effectivePriceImpact = serverQuote
     ? serverQuote.priceImpact
     : quote.priceImpact;
+  // For display: human-readable. For handleSwap submission: use serverQuote.minOutput directly (base units).
   const effectiveMinOutput = serverQuote
-    ? serverQuote.minOutput
-    : String(Math.floor(quote.output * (1 - slippage / 100)));
+    ? String(parseFloat(serverQuote.minOutput) / Math.pow(10, outDecimals))
+    : String(quote.output * (1 - slippage / 100));
 
   // Flip tokens
   const handleFlip = useCallback(() => {
@@ -449,6 +460,8 @@ export function SwapCard({
           selectingFor === "input" ? outputToken.ticker : inputToken.ticker
         }
         balances={balances}
+        pairedWith={selectingFor === "input" ? outputToken : inputToken}
+        availablePools={externalPools}
       />
       <TxToastContainer />
     </>

@@ -2,7 +2,7 @@
  * Admin Controller
  * Protected endpoints for factory admin operations:
  * auth check, dashboard metrics, revenue collection,
- * settings management, and danger-zone operations.
+ * settings management, solver monitoring, protocol info, and danger-zone operations.
  */
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
@@ -15,6 +15,7 @@ import type { IOrderRepository } from '../../../domain/ports/IOrderRepository.js
 import type { ITxBuilder } from '../../../domain/ports/index.js';
 import type { CandlestickService } from '../../../application/services/CandlestickService.js';
 import { UpdateSettingsUseCase } from '../../../application/use-cases/UpdateSettingsUseCase.js';
+import type { SolverEngine } from '../../../solver/SolverEngine.js';
 
 export interface AdminDependencies {
   poolRepo: IPoolRepository;
@@ -23,6 +24,7 @@ export interface AdminDependencies {
   candlestickService: CandlestickService;
   txBuilder?: ITxBuilder;
   prisma?: PrismaClient;
+  solverEngine?: SolverEngine;
 }
 
 export function createAdminRouter(deps: AdminDependencies): Router {
@@ -306,6 +308,191 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           txHash: result.txHash,
           estimatedFee: result.estimatedFee.toString(),
         });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Solver: Status ──────────────────────────
+  router.get(
+    '/admin/solver/status',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!deps.solverEngine) {
+          res.json({
+            running: false,
+            enabled: env.SOLVER_ENABLED,
+            lastRun: null,
+            batchesTotal: 0,
+            batchesSuccess: 0,
+            batchesFailed: 0,
+            activeIntents: 0,
+            pendingOrders: 0,
+            queueDepth: 0,
+            lastTxHash: null,
+            uptimeMs: 0,
+            config: {
+              batchWindowMs: env.SOLVER_BATCH_WINDOW_MS,
+              maxRetries: env.SOLVER_MAX_RETRIES,
+              minProfitLovelace: String(env.SOLVER_MIN_PROFIT_LOVELACE),
+              solverAddress: env.SOLVER_ADDRESS,
+              network: env.CARDANO_NETWORK,
+            },
+          });
+          return;
+        }
+
+        const status = deps.solverEngine.getStatus();
+
+        // Enrich with pending orders count from DB
+        if (deps.prisma) {
+          try {
+            const pendingOrders = await deps.prisma.intent.count({
+              where: { status: 'ACTIVE' },
+            });
+            status.pendingOrders = pendingOrders;
+          } catch {
+            // Ignore — DB may not be available
+          }
+        }
+
+        res.json(status);
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Solver: Manual Trigger ──────────────────
+  router.post(
+    '/admin/solver/trigger',
+    writeLimiter,
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!deps.solverEngine) {
+          res.status(503).json({
+            triggered: false,
+            message: 'Solver engine not available',
+          });
+          return;
+        }
+
+        const status = deps.solverEngine.getStatus();
+        if (!status.enabled) {
+          res.json({
+            triggered: false,
+            message: 'Solver is disabled (SOLVER_ENABLED=false). Enable it in env to start.',
+          });
+          return;
+        }
+
+        if (status.running) {
+          res.json({
+            triggered: true,
+            message: 'Solver is already running. The next batch will process pending intents.',
+          });
+          return;
+        }
+
+        // If not running, try to start it
+        deps.solverEngine.start().catch(() => {});
+        res.json({
+          triggered: true,
+          message: 'Solver engine triggered. It will begin processing shortly.',
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Protocol Info ───────────────────────────
+  router.get(
+    '/admin/protocol/info',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        // Pool and intent counts from DB
+        let poolCount = 0;
+        let intentCount = 0;
+        let orderCount = 0;
+        if (deps.prisma) {
+          try {
+            [poolCount, intentCount, orderCount] = await Promise.all([
+              deps.prisma.pool.count(),
+              deps.prisma.intent.count(),
+              deps.prisma.order.count(),
+            ]);
+          } catch {
+            // DB may not be available
+          }
+        }
+
+        res.json({
+          network: env.CARDANO_NETWORK,
+          contracts: {
+            escrow_script_address: env.ESCROW_SCRIPT_ADDRESS,
+            pool_script_address: env.POOL_SCRIPT_ADDRESS,
+            settings_nft_policy_id: env.SETTINGS_NFT_POLICY_ID,
+            settings_nft_asset_name: env.SETTINGS_NFT_ASSET_NAME,
+          },
+          admin: {
+            admin_address: env.ADMIN_ADDRESS,
+            solver_address: env.SOLVER_ADDRESS,
+          },
+          services: {
+            solver_enabled: env.SOLVER_ENABLED,
+            order_executor_enabled: env.ORDER_EXECUTOR_ENABLED,
+            order_routes_enabled: env.ORDER_ROUTES_ENABLED,
+            chain_sync_interval_ms: env.CHAIN_SYNC_INTERVAL_MS,
+            chart_snapshot_interval_ms: env.CHART_SNAPSHOT_INTERVAL_MS,
+          },
+          blockfrost: {
+            url: env.BLOCKFROST_URL,
+            // Mask project ID for security — show first 8 chars only
+            project_id_masked: env.BLOCKFROST_PROJECT_ID
+              ? env.BLOCKFROST_PROJECT_ID.slice(0, 8) + '...'
+              : '',
+          },
+          database: {
+            pool_count: poolCount,
+            intent_count: intentCount,
+            order_count: orderCount,
+          },
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Pools: List All (Admin view) ────────────
+  router.get(
+    '/admin/pools/list',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const pools = await deps.poolRepo.findAllActive();
+
+        const poolList = pools.map((pool) => ({
+          id: pool.id,
+          asset_a: {
+            policy_id: pool.assetAPolicyId,
+            asset_name: pool.assetAAssetName || 'ADA',
+          },
+          asset_b: {
+            policy_id: pool.assetBPolicyId,
+            asset_name: pool.assetBAssetName || 'ADA',
+          },
+          reserve_a: pool.reserveA.toString(),
+          reserve_b: pool.reserveB.toString(),
+          tvl_ada: pool.tvlAda.toString(),
+          volume_24h: pool.volume24h.toString(),
+          fee_numerator: pool.feeNumerator,
+          created_at: pool.createdAt?.toISOString() ?? null,
+          utxo_ref: `${pool.txHash}#${pool.outputIndex}`,
+        }));
+
+        res.json({ pools: poolList, count: poolList.length });
       } catch (err) {
         next(err);
       }

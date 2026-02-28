@@ -199,7 +199,7 @@ export default function PortfolioPage() {
           <CardContent className="pt-6 space-y-4">
             <div>
               <p className="text-xs text-muted-foreground">Total Balance</p>
-              {summaryLoading ? (
+              {summaryLoading && !summary ? (
                 <Skeleton className="h-9 w-40 mt-1" />
               ) : (
                 <>
@@ -262,7 +262,7 @@ export default function PortfolioPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {summaryLoading ? (
+            {summaryLoading && !summary ? (
               <div className="space-y-3">
                 {[1, 2, 3].map((i) => (
                   <Skeleton key={i} className="h-10 w-full" />
@@ -341,7 +341,7 @@ export default function PortfolioPage() {
         <TabsContent value="open-orders" className="mt-4">
           <Card>
             <CardContent className="p-0">
-              {ordersLoading ? (
+              {ordersLoading && openOrders.length === 0 ? (
                 <div className="p-6 space-y-3">
                   {[1, 2, 3].map((i) => (
                     <Skeleton key={i} className="h-16 w-full" />
@@ -539,7 +539,7 @@ export default function PortfolioPage() {
 
           <Card>
             <CardContent className="p-0">
-              {historyLoading ? (
+              {historyLoading && history.length === 0 ? (
                 <div className="p-6 space-y-3">
                   {[1, 2, 3].map((i) => (
                     <Skeleton key={i} className="h-14 w-full" />
@@ -636,7 +636,7 @@ export default function PortfolioPage() {
           )}
           <Card>
             <CardContent className="p-0">
-              {lpTabLoading ? (
+              {lpTabLoading && lpTabCount === 0 ? (
                 <div className="p-6 space-y-3">
                   {[1, 2].map((i) => (
                     <Skeleton key={i} className="h-20 w-full" />
@@ -718,6 +718,7 @@ export default function PortfolioPage() {
                     const [tickerA, tickerB] = pos.pair.split("_");
                     const tokenA = TOKENS[tickerA];
                     const tokenB = TOKENS[tickerB];
+                    const cv = pos.current_value ?? { asset_a_amount: 0, asset_b_amount: 0, total_value_usd: 0 };
                     return (
                       <div
                         key={pos.pool_id}
@@ -733,7 +734,7 @@ export default function PortfolioPage() {
                               {pos.pair.replace("_", "/")}
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              {pos.share_percent.toFixed(2)}% pool share
+                              {(pos.share_percent ?? 0).toFixed(2)}% pool share
                             </div>
                           </div>
                         </div>
@@ -748,20 +749,20 @@ export default function PortfolioPage() {
                           <div>
                             <p className="text-[10px] text-muted-foreground">{tickerA || "Asset A"}</p>
                             <p className="font-mono text-sm">
-                              {formatCompact(pos.current_value.asset_a_amount)}
+                              {formatCompact(cv.asset_a_amount)}
                             </p>
                           </div>
                           <div>
                             <p className="text-[10px] text-muted-foreground">{tickerB || "Asset B"}</p>
                             <p className="font-mono text-sm">
-                              {formatCompact(pos.current_value.asset_b_amount)}
+                              {formatCompact(cv.asset_b_amount)}
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-semibold text-primary">
-                            ≈ ${formatCompact(pos.current_value.total_value_usd)}
+                            ≈ ${formatCompact(cv.total_value_usd)}
                           </span>
                           <Link href={`/pools/${pos.pool_id}`}>
                             <Button size="sm" variant="outline" className="h-7 text-xs">

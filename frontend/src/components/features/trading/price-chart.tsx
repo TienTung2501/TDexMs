@@ -5,16 +5,22 @@ import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
+  LineSeries,
   type IChartApi,
   ColorType,
   type Time,
 } from "lightweight-charts";
 import { cn } from "@/lib/utils";
+import { BarChart3, TrendingUp, BarChart2 } from "lucide-react";
 
-export type ChartTimeframe = "1H" | "4H" | "1D" | "1W";
+export type ChartTimeframe = "1m" | "5m" | "15m" | "1H" | "4H" | "1D" | "1W";
+export type ChartMode = "candle" | "line";
 
 /** Maps UI labels to API interval values */
 export const TIMEFRAME_TO_INTERVAL: Record<ChartTimeframe, string> = {
+  "1m": "1m",
+  "5m": "5m",
+  "15m": "15m",
   "1H": "1h",
   "4H": "4h",
   "1D": "1d",
@@ -26,21 +32,43 @@ interface PriceChartProps {
   className?: string;
   timeframe?: ChartTimeframe;
   onTimeframeChange?: (tf: ChartTimeframe) => void;
+  chartMode?: ChartMode;
+  onChartModeChange?: (mode: ChartMode) => void;
 }
 
-export function PriceChart({ data, className, timeframe: controlledTf, onTimeframeChange }: PriceChartProps) {
+export function PriceChart({
+  data,
+  className,
+  timeframe: controlledTf,
+  onTimeframeChange,
+  chartMode: controlledMode,
+  onChartModeChange,
+}: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const lineSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const volumeSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const [internalTf, setInternalTf] = useState<ChartTimeframe>("4H");
+  const [internalMode, setInternalMode] = useState<ChartMode>("candle");
 
   const timeframe = controlledTf ?? internalTf;
+  const chartMode = controlledMode ?? internalMode;
   const handleTfChange = (tf: ChartTimeframe) => {
     setInternalTf(tf);
     onTimeframeChange?.(tf);
   };
+  const handleModeChange = (mode: ChartMode) => {
+    setInternalMode(mode);
+    onChartModeChange?.(mode);
+  };
 
+  // Determine time-visible based on timeframe (hide time for daily/weekly)
+  const showTime = !["1D", "1W"].includes(timeframe);
+
+  // Create chart once
   useEffect(() => {
-    if (!containerRef.current || data.length === 0) return;
+    if (!containerRef.current) return;
 
     const chart = createChart(containerRef.current, {
       layout: {
@@ -62,7 +90,7 @@ export function PriceChart({ data, className, timeframe: controlledTf, onTimefra
       },
       timeScale: {
         borderColor: "hsl(0 0% 18%)",
-        timeVisible: true,
+        timeVisible: showTime,
         secondsVisible: false,
       },
       handleScroll: { vertTouchDrag: false },
@@ -75,6 +103,14 @@ export function PriceChart({ data, className, timeframe: controlledTf, onTimefra
       borderUpColor: "hsl(158 64% 52%)",
       wickDownColor: "hsl(0 62% 40%)",
       wickUpColor: "hsl(158 64% 40%)",
+      visible: chartMode === "candle",
+    });
+
+    const lineSeries = chart.addSeries(LineSeries, {
+      color: "hsl(158 64% 52%)",
+      lineWidth: 2,
+      crosshairMarkerRadius: 4,
+      visible: chartMode === "line",
     });
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
@@ -87,29 +123,10 @@ export function PriceChart({ data, className, timeframe: controlledTf, onTimefra
       scaleMargins: { top: 0.85, bottom: 0 },
     });
 
-    candleSeries.setData(
-      data.map((d) => ({
-        time: d.time as Time,
-        open: d.open,
-        high: d.high,
-        low: d.low,
-        close: d.close,
-      }))
-    );
-
-    volumeSeries.setData(
-      data.map((d) => ({
-        time: d.time as Time,
-        value: d.volume,
-        color:
-          d.close >= d.open
-            ? "hsl(158 64% 52% / 0.2)"
-            : "hsl(0 62% 56% / 0.2)",
-      }))
-    );
-
-    chart.timeScale().fitContent();
     chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+    lineSeriesRef.current = lineSeries;
+    volumeSeriesRef.current = volumeSeries;
 
     const handleResize = () => {
       if (containerRef.current) {
@@ -127,29 +144,137 @@ export function PriceChart({ data, className, timeframe: controlledTf, onTimefra
       observer.disconnect();
       chart.remove();
       chartRef.current = null;
+      candleSeriesRef.current = null;
+      lineSeriesRef.current = null;
+      volumeSeriesRef.current = null;
     };
+  }, []); // Only run once — chart is created and never destroyed
+
+  // Toggle series visibility when chart mode changes
+  useEffect(() => {
+    candleSeriesRef.current?.applyOptions({ visible: chartMode === "candle" });
+    lineSeriesRef.current?.applyOptions({ visible: chartMode === "line" });
+  }, [chartMode]);
+
+  // Update timeScale visibility when timeframe changes
+  useEffect(() => {
+    chartRef.current?.applyOptions({
+      timeScale: { timeVisible: showTime, secondsVisible: false },
+    });
+  }, [showTime]);
+
+  // Update data in-place — no chart destruction/recreation
+  useEffect(() => {
+    if (!candleSeriesRef.current || !lineSeriesRef.current || !volumeSeriesRef.current) return;
+
+    // Filter out invalid timestamps (NaN, 0, negative)
+    const validData = data.filter((d) => d.time > 0 && !isNaN(d.time) && isFinite(d.open) && isFinite(d.close));
+
+    if (validData.length === 0) {
+      // Clear all series when no valid data
+      candleSeriesRef.current.setData([]);
+      lineSeriesRef.current.setData([]);
+      volumeSeriesRef.current.setData([]);
+      return;
+    }
+
+    candleSeriesRef.current.setData(
+      validData.map((d) => ({
+        time: d.time as Time,
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+      }))
+    );
+
+    lineSeriesRef.current.setData(
+      validData.map((d) => ({
+        time: d.time as Time,
+        value: d.close,
+      }))
+    );
+
+    volumeSeriesRef.current.setData(
+      validData.map((d) => ({
+        time: d.time as Time,
+        value: d.volume,
+        color:
+          d.close >= d.open
+            ? "hsl(158 64% 52% / 0.2)"
+            : "hsl(0 62% 56% / 0.2)",
+      }))
+    );
+
+    chartRef.current?.timeScale().fitContent();
   }, [data]);
+
+  const allTf: ChartTimeframe[] = ["1m", "5m", "15m", "1H", "4H", "1D", "1W"];
+
+  const hasValidData = data.some((d) => d.time > 0 && !isNaN(d.time) && isFinite(d.open));
 
   return (
     <div className={cn("space-y-2", className)}>
-      {/* Timeframe selector */}
-      <div className="flex gap-1">
-        {(["1H", "4H", "1D", "1W"] as ChartTimeframe[]).map((tf) => (
+      {/* Toolbar: timeframe selector + chart mode toggle */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex gap-1">
+          {allTf.map((tf) => (
+            <button
+              key={tf}
+              onClick={() => handleTfChange(tf)}
+              className={cn(
+                "px-2 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer",
+                timeframe === tf
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+
+        {/* Chart mode toggle */}
+        <div className="flex gap-0.5 bg-muted/50 rounded-lg p-0.5">
           <button
-            key={tf}
-            onClick={() => handleTfChange(tf)}
+            onClick={() => handleModeChange("candle")}
             className={cn(
-              "px-2.5 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer",
-              timeframe === tf
-                ? "bg-primary/10 text-primary"
+              "p-1.5 rounded-md transition-colors cursor-pointer",
+              chartMode === "candle"
+                ? "bg-background shadow-sm text-foreground"
                 : "text-muted-foreground hover:text-foreground"
             )}
+            title="Candlestick"
           >
-            {tf}
+            <BarChart3 className="h-3.5 w-3.5" />
           </button>
-        ))}
+          <button
+            onClick={() => handleModeChange("line")}
+            className={cn(
+              "p-1.5 rounded-md transition-colors cursor-pointer",
+              chartMode === "line"
+                ? "bg-background shadow-sm text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title="Line"
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
-      <div ref={containerRef} className="w-full h-[400px] rounded-xl overflow-hidden" />
+      <div className="relative">
+        <div ref={containerRef} className="w-full h-[400px] rounded-xl overflow-hidden" />
+        {/* No data overlay */}
+        {!hasValidData && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/60 backdrop-blur-sm rounded-xl">
+            <BarChart2 className="h-10 w-10 text-muted-foreground/30 mb-2" />
+            <p className="text-sm font-medium text-muted-foreground">No Trading Activity</p>
+            <p className="text-xs text-muted-foreground/60 mt-1">
+              This pair has no trade history for the selected timeframe
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

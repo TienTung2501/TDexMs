@@ -15,8 +15,8 @@ export default function PoolsPage() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"tvl" | "volume" | "apy">("tvl");
 
-  const { pools: allPools, loading: poolsLoading, error: poolsError } = usePools();
-  const { analytics, loading: analyticsLoading } = useAnalytics();
+  const { pools: allPools, loading: poolsLoading, isRefetching: poolsRefetching, error: poolsError } = usePools();
+  const { analytics, loading: analyticsLoading, isRefetching: analyticsRefetching } = useAnalytics();
 
   const filteredPools = useMemo(() => {
     let pools = [...allPools];
@@ -74,7 +74,7 @@ export default function PoolsPage() {
           >
             <div className="text-xs text-muted-foreground">{s.label}</div>
             <div className="text-lg font-bold mt-1">
-              {analyticsLoading ? (
+              {analyticsLoading && !analytics ? (
                 <Loader2 className="h-4 w-4 animate-spin mx-auto" />
               ) : (
                 s.value
@@ -122,11 +122,18 @@ export default function PoolsPage() {
       )}
 
       {/* Pool grid */}
-      {poolsLoading ? (
+      {poolsLoading && allPools.length === 0 ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
       ) : (
+        <div className="relative">
+          {/* Subtle background refetch indicator */}
+          {poolsRefetching && (
+            <div className="absolute top-2 right-2 z-10">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/50" />
+            </div>
+          )}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredPools.map((pool) => (
             <Link key={pool.id} href={`/pools/${pool.id}`}>
@@ -200,6 +207,7 @@ export default function PoolsPage() {
               </Card>
             </Link>
           ))}
+        </div>
         </div>
       )}
 

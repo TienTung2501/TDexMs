@@ -17,11 +17,25 @@ import {
   ListTodo,
   Hash,
   TrendingUp,
+  Settings,
+  Timer,
 } from "lucide-react";
 import { getSolverStatus, triggerSolver, type SolverStatusResponse } from "@/lib/api";
 import { truncateAddress, formatCompact } from "@/lib/utils";
 
-const REFRESH_INTERVAL = 10_000; // 10 seconds auto-refresh
+const REFRESH_INTERVAL = 10_000;
+
+function formatUptime(ms: number): string {
+  if (ms <= 0) return "—";
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d}d ${h % 24}h ${m % 60}m`;
+  if (h > 0) return `${h}h ${m % 60}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
 
 export default function AdminSolverDashboardPage() {
   const [status, setStatus] = useState<SolverStatusResponse | null>(null);
@@ -36,7 +50,6 @@ export default function AdminSolverDashboardPage() {
       setStatus(data);
       setLastRefresh(new Date());
     } catch {
-      // Backend may not have this endpoint yet — show degraded state
       setStatus(null);
     } finally {
       setLoading(false);
@@ -55,7 +68,6 @@ export default function AdminSolverDashboardPage() {
     try {
       const res = await triggerSolver();
       setTriggerMsg(res.message || "Solver triggered successfully");
-      // Refresh status after a short delay
       setTimeout(fetchStatus, 2000);
     } catch (err) {
       setTriggerMsg(
@@ -148,11 +160,21 @@ export default function AdminSolverDashboardPage() {
               <div>
                 <p className="text-sm font-semibold">Status unavailable</p>
                 <p className="text-xs mt-0.5">
-                  Solver status endpoint not responding — engine may still be
-                  running.
+                  Solver status endpoint not responding.
                 </p>
               </div>
               <Badge variant="secondary" className="ml-auto">UNKNOWN</Badge>
+            </div>
+          ) : !status.enabled ? (
+            <div className="flex items-center gap-3 text-muted-foreground">
+              <XCircle className="h-5 w-5" />
+              <div>
+                <p className="text-sm font-semibold">Solver Disabled</p>
+                <p className="text-xs mt-0.5">
+                  Set SOLVER_ENABLED=true in environment to activate.
+                </p>
+              </div>
+              <Badge variant="secondary" className="ml-auto">DISABLED</Badge>
             </div>
           ) : status.running ? (
             <div className="flex items-center gap-3 text-emerald-600">
@@ -162,11 +184,10 @@ export default function AdminSolverDashboardPage() {
               </div>
               <div>
                 <p className="text-sm font-semibold">Solver Engine Running</p>
-                {status.lastRun && (
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Last run: {new Date(status.lastRun).toLocaleString()}
-                  </p>
-                )}
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Uptime: {formatUptime(status.uptimeMs)}
+                  {status.lastRun && ` · Last run: ${new Date(status.lastRun).toLocaleString()}`}
+                </p>
               </div>
               <Badge variant="success" className="ml-auto">ACTIVE</Badge>
             </div>
@@ -216,8 +237,8 @@ export default function AdminSolverDashboardPage() {
             ))}
       </div>
 
-      {/* Batch History */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Batch History + Manual Trigger + Config */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
@@ -264,7 +285,7 @@ export default function AdminSolverDashboardPage() {
                   <div className="pt-2">
                     <p className="text-[10px] text-muted-foreground mb-1">Last TX Hash</p>
                     <a
-                      href={`https://preprod.cardanoscan.io/transaction/${status.lastTxHash}`}
+                      href={`https://${status.config.network === "Mainnet" ? "" : "preprod."}cardanoscan.io/transaction/${status.lastTxHash}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs font-mono text-primary hover:underline"
@@ -291,8 +312,6 @@ export default function AdminSolverDashboardPage() {
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
               Force the solver engine to run a settlement cycle immediately.
-              Use this when the automatic cron is disabled or you need to
-              process pending intents right away.
             </p>
 
             {triggerMsg && (
@@ -326,9 +345,55 @@ export default function AdminSolverDashboardPage() {
             </Button>
 
             <p className="text-[11px] text-muted-foreground text-center">
-              The solver will process all ACTIVE intents in the queue.
               Auto-refresh every 10 seconds.
             </p>
+          </CardContent>
+        </Card>
+
+        {/* Engine Config */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              Engine Configuration
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {loading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => <Skeleton key={i} className="h-6 w-full" />)}
+              </div>
+            ) : status?.config ? (
+              <div className="space-y-3">
+                {[
+                  { label: "Batch Window", value: `${status.config.batchWindowMs}ms`, icon: Timer },
+                  { label: "Max Retries", value: String(status.config.maxRetries), icon: RefreshCw },
+                  { label: "Min Profit", value: `${Number(status.config.minProfitLovelace).toLocaleString()} lovelace`, icon: TrendingUp },
+                  { label: "Network", value: status.config.network, icon: Activity },
+                ].map((row) => (
+                  <div
+                    key={row.label}
+                    className="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                  >
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <row.icon className="h-3.5 w-3.5" />
+                      {row.label}
+                    </div>
+                    <span className="text-sm font-mono">{row.value}</span>
+                  </div>
+                ))}
+                {status.config.solverAddress && (
+                  <div className="pt-2">
+                    <p className="text-[10px] text-muted-foreground mb-1">Solver Address</p>
+                    <span className="text-xs font-mono truncate block">
+                      {status.config.solverAddress.slice(0, 20)}...{status.config.solverAddress.slice(-8)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Configuration unavailable</p>
+            )}
           </CardContent>
         </Card>
       </div>
