@@ -4,6 +4,12 @@
  * Uses Blockfrost HTTP API as the sole chain data provider.
  * Compatible with Blockfrost Free Tier (50k requests/day).
  *
+ * Optimization strategy (free tier):
+ * - Aggressive caching via Upstash Redis (UTxOs 60s, tips 30s, params 10m)
+ * - Daily API call budget tracking to prevent overuse
+ * - TX confirmation caching (confirmed TXs never change)
+ * - Asset UTxO caching (90s) for expensive multi-step queries
+ *
  * Memory-optimized: no WebSocket connections, no persistent state.
  */
 import { getLogger } from '../../config/logger.js';
@@ -43,6 +49,12 @@ export class BlockfrostClient implements IChainProvider {
   private readonly logger;
   private cache: CacheService | null = null;
 
+  /** Daily API call counter (in-memory fallback if no Redis) */
+  private dailyCallCount = 0;
+  private dailyResetDate = new Date().toDateString();
+  private static readonly DAILY_BUDGET = 45_000; // Leave 5k headroom from 50k limit
+  private static readonly BUDGET_WARNING_THRESHOLD = 35_000;
+
   constructor(baseUrl: string, projectId: string) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.projectId = projectId;
@@ -52,6 +64,43 @@ export class BlockfrostClient implements IChainProvider {
   /** Attach a cache service (optional — graceful degradation) */
   setCache(cache: CacheService): void {
     this.cache = cache;
+  }
+
+  /** Check if we're within the daily API budget */
+  private checkBudget(): boolean {
+    const today = new Date().toDateString();
+    if (today !== this.dailyResetDate) {
+      this.dailyCallCount = 0;
+      this.dailyResetDate = today;
+    }
+    return this.dailyCallCount < BlockfrostClient.DAILY_BUDGET;
+  }
+
+  /** Track an API call and log warnings if approaching limits */
+  private trackApiCall(): void {
+    this.dailyCallCount++;
+    if (this.dailyCallCount === BlockfrostClient.BUDGET_WARNING_THRESHOLD) {
+      this.logger.warn(
+        { callCount: this.dailyCallCount, budget: BlockfrostClient.DAILY_BUDGET },
+        '⚠️ Blockfrost daily API budget: 70% consumed',
+      );
+    }
+    if (this.dailyCallCount === BlockfrostClient.DAILY_BUDGET) {
+      this.logger.error(
+        { callCount: this.dailyCallCount },
+        '🚨 Blockfrost daily API budget EXHAUSTED — requests will be throttled',
+      );
+    }
+  }
+
+  /** Get current API usage stats */
+  getDailyUsage(): { callCount: number; budget: number; remaining: number; percent: number } {
+    return {
+      callCount: this.dailyCallCount,
+      budget: BlockfrostClient.DAILY_BUDGET,
+      remaining: Math.max(0, BlockfrostClient.DAILY_BUDGET - this.dailyCallCount),
+      percent: Math.round((this.dailyCallCount / BlockfrostClient.DAILY_BUDGET) * 100),
+    };
   }
 
   // ── IChainProvider implementation ──────────────
@@ -80,9 +129,23 @@ export class BlockfrostClient implements IChainProvider {
     assetName: string,
   ): Promise<UTxO[]> {
     const unit = assetName ? `${policyId}${assetName}` : policyId;
+
+    // Cache asset UTxOs for 90s (expensive query for pool syncs)
+    const cacheKey = CacheKeys.ASSET_UTXOS(`${address}:${unit}`);
+    if (this.cache) {
+      const cached = await this.cache.get<UTxO[]>(cacheKey);
+      if (cached) return cached;
+    }
+
     const data = await this.get<BfUtxo[]>(`/addresses/${address}/utxos/${unit}`);
     if (!data) return [];
-    return data.map((u) => this.toUtxo(u));
+    const utxos = data.map((u) => this.toUtxo(u));
+
+    if (this.cache && utxos.length > 0) {
+      await this.cache.set(cacheKey, utxos, CacheTTL.BLOCKFROST_ASSET);
+    }
+
+    return utxos;
   }
 
   async getChainTip(): Promise<ChainTip> {
@@ -137,12 +200,24 @@ export class BlockfrostClient implements IChainProvider {
   }
 
   async awaitTx(txHash: string, maxWaitMs = 120_000): Promise<boolean> {
+    // Check if this TX was already confirmed (cached)
+    if (this.cache) {
+      const cached = await this.cache.get<boolean>(CacheKeys.TX_CONFIRMED(txHash));
+      if (cached === true) return true;
+    }
+
     const start = Date.now();
-    const pollInterval = 5_000;
+    const pollInterval = 10_000; // 10s (was 5s — saves 50% of polling calls)
 
     while (Date.now() - start < maxWaitMs) {
       const tx = await this.get<{ hash: string }>(`/txs/${txHash}`);
-      if (tx) return true;
+      if (tx) {
+        // Cache the confirmation so we don't re-check
+        if (this.cache) {
+          await this.cache.set(CacheKeys.TX_CONFIRMED(txHash), true, CacheTTL.TX_CONFIRMED);
+        }
+        return true;
+      }
       await new Promise((r) => setTimeout(r, pollInterval));
     }
 
@@ -236,7 +311,14 @@ export class BlockfrostClient implements IChainProvider {
   // ── Private helpers ────────────────────────────
 
   private async get<T>(path: string): Promise<T | null> {
+    // Budget protection — skip non-critical requests when budget exhausted
+    if (!this.checkBudget()) {
+      this.logger.debug({ path }, 'Blockfrost API budget exhausted — skipping request');
+      return null;
+    }
+
     try {
+      this.trackApiCall();
       const resp = await fetch(`${this.baseUrl}${path}`, {
         headers: { project_id: this.projectId },
       });

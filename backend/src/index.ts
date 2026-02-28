@@ -235,7 +235,7 @@ async function main(): Promise<void> {
       'POOL_SCRIPT_ADDRESS mismatch — using resolved address from blueprint',
     );
   }
-  const chainSync = new ChainSync(blockfrost, prisma, resolvedPoolAddr, 30_000);
+  const chainSync = new ChainSync(blockfrost, prisma, resolvedPoolAddr, env.CHAIN_SYNC_INTERVAL_MS, env.ORDER_ROUTES_ENABLED);
 
   // Price aggregation cron — aggregates ticks → candles
   const priceCron = new PriceAggregationCron(
@@ -253,6 +253,7 @@ async function main(): Promise<void> {
     env.BLOCKFROST_PROJECT_ID,
     env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod',
     60_000,
+    env.ORDER_ROUTES_ENABLED, // Only process orders if enabled
   );
 
   // DCA order executor — fires ripe DCA interval executions

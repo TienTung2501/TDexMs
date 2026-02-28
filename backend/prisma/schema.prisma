@@ -224,9 +224,13 @@ model Candle {
 }
 
 enum CandleInterval {
-  H4     // 4 hours  (smallest stored interval — free tier storage optimization)
-  D1     // 1 day
-  W1     // 1 week
+  M1     // 1 minute  — retention: 2 days
+  M5     // 5 minutes — retention: 7 days
+  M15    // 15 minutes — retention: 14 days
+  H1     // 1 hour    — retention: 30 days
+  H4     // 4 hours   — retention: 90 days
+  D1     // 1 day     — retention: 365 days
+  W1     // 1 week    — retention: forever
 }
 
 // ─── Price Tick (raw trade prices) ───────────

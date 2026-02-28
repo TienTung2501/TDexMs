@@ -33,6 +33,9 @@ export function createHealthRouter(
 
     const allHealthy = dbOk && blockfrostOk;
 
+    // Include Blockfrost API usage stats for monitoring free tier limits
+    const bfUsage = blockfrost.getDailyUsage();
+
     res.status(allHealthy ? 200 : 503).json({
       status: allHealthy ? 'healthy' : 'degraded',
       version: '0.1.0',
@@ -41,6 +44,12 @@ export function createHealthRouter(
         database: dbOk ? 'healthy' : 'unhealthy',
         blockfrost: blockfrostOk ? 'healthy' : 'unhealthy',
         cache: cacheOk,
+      },
+      blockfrostUsage: {
+        callsToday: bfUsage.callCount,
+        dailyBudget: bfUsage.budget,
+        remaining: bfUsage.remaining,
+        percentUsed: bfUsage.percent,
       },
     });
   });

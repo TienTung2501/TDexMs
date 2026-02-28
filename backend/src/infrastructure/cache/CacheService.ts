@@ -78,28 +78,41 @@ export const CacheKeys = {
 
   /** Health check result: `sys:health` */
   HEALTH: 'sys:health',
+
+  /** TX confirmation cache: `bf:tx:{hash}` */
+  TX_CONFIRMED: (hash: string) => `bf:tx:${hash}`,
+
+  /** Blockfrost asset UTxOs: `bf:asset-utxos:{unit}` */
+  ASSET_UTXOS: (unit: string) => `bf:asset-utxos:${unit}`,
+
+  /** Blockfrost daily budget tracker: `bf:budget` */
+  BF_BUDGET: 'bf:budget',
 } as const;
 
-/** Default TTLs in seconds */
+/** Default TTLs in seconds — optimized for Blockfrost free tier (50k req/day) */
 export const CacheTTL = {
-  /** Blockfrost queries — 30s (reduce 50k/day API usage) */
-  BLOCKFROST: 30,
-  /** Chain tip — 15s (need relatively fresh) */
-  CHAIN_TIP: 15,
-  /** Protocol parameters — 5 min (rarely change) */
-  PROTOCOL_PARAMS: 300,
+  /** Blockfrost UTxO queries — 60s (was 30s; halves API calls) */
+  BLOCKFROST: 60,
+  /** Blockfrost asset UTxO queries — 90s (expensive; multi-call) */
+  BLOCKFROST_ASSET: 90,
+  /** Chain tip — 30s (was 15s; Cardano block time ~20s, 30s is safe) */
+  CHAIN_TIP: 30,
+  /** Protocol parameters — 10 min (rarely change within an epoch) */
+  PROTOCOL_PARAMS: 600,
   /** Chart candles — 5 min (historical data is static) */
   CANDLES: 300,
-  /** Latest price — 15s (needs to be fresh) */
-  LATEST_PRICE: 15,
-  /** Pool chart info — 30s */
-  POOL_CHART_INFO: 30,
-  /** Pool data — 30s */
-  POOL: 30,
-  /** Active pools list — 60s */
-  ACTIVE_POOLS: 60,
-  /** Health check — 10s */
-  HEALTH: 10,
+  /** Latest price — 30s (was 15s; acceptable delay for charts) */
+  LATEST_PRICE: 30,
+  /** Pool chart info — 60s (was 30s) */
+  POOL_CHART_INFO: 60,
+  /** Pool data — 60s (was 30s) */
+  POOL: 60,
+  /** Active pools list — 120s (was 60s) */
+  ACTIVE_POOLS: 120,
+  /** Health check — 30s (was 10s) */
+  HEALTH: 30,
+  /** TX confirmation — 60s (cache confirmed TXs to avoid re-checking) */
+  TX_CONFIRMED: 60,
 } as const;
 
 export class CacheService {

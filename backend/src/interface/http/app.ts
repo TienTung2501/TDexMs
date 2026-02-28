@@ -122,7 +122,23 @@ export function createApp(deps: AppDependencies): express.Express {
   v1.use(createAnalyticsRouter());
   v1.use(createChartRouter(deps.candlestickService));
   v1.use(createTxRouter(deps.blockfrost, deps.intentRepo, deps.poolRepo, deps.orderRepo));
-  v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
+
+  // Order routes — conditionally enabled via ORDER_ROUTES_ENABLED
+  // When disabled, returns 503 for all order endpoints to save server resources
+  if (env.ORDER_ROUTES_ENABLED) {
+    v1.use(createOrderRouter(deps.createOrder, deps.cancelOrder, deps.listOrders, deps.orderRepo));
+  } else {
+    const orderDisabledRouter = express.Router();
+    orderDisabledRouter.all('/orders*', (_req, res) => {
+      res.status(503).json({
+        status: 'error',
+        code: 'SERVICE_DISABLED',
+        message: 'Order functionality is currently disabled. Set ORDER_ROUTES_ENABLED=true to enable.',
+      });
+    });
+    v1.use(orderDisabledRouter);
+  }
+
   v1.use(createPortfolioRouter(deps.getPortfolio, deps.intentRepo, deps.orderRepo, deps.poolRepo, deps.txBuilder));
   v1.use(createSwapRouter({
     settleIntent: deps.settleIntent,

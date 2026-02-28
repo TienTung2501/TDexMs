@@ -43,6 +43,7 @@ export class ReclaimKeeperCron {
    * @param blockfrostProjectId  Blockfrost project ID
    * @param network           Cardano network
    * @param intervalMs        How often to check for expired items (default: 60s)
+   * @param ordersEnabled     Whether to process orders (saves Blockfrost calls when disabled)
    */
   constructor(
     private readonly intentRepo: IIntentRepository,
@@ -53,6 +54,7 @@ export class ReclaimKeeperCron {
     private readonly blockfrostProjectId: string,
     private readonly network: 'Preprod' | 'Preview' | 'Mainnet' = 'Preprod',
     private readonly intervalMs: number = 60_000,
+    private readonly ordersEnabled: boolean = false,
   ) {
     this.logger = getLogger().child({ service: 'reclaim-keeper' });
   }
@@ -117,9 +119,12 @@ export class ReclaimKeeperCron {
       this.logger.info({ count: expiredIntents }, 'Marked intents as expired');
     }
 
-    const expiredOrders = await this.orderRepo.markExpired(now);
-    if (expiredOrders > 0) {
-      this.logger.info({ count: expiredOrders }, 'Marked orders as expired');
+    // Only process orders if enabled
+    if (this.ordersEnabled) {
+      const expiredOrders = await this.orderRepo.markExpired(now);
+      if (expiredOrders > 0) {
+        this.logger.info({ count: expiredOrders }, 'Marked orders as expired');
+      }
     }
 
     // ─── Step 2: On-chain reclaim for expired intents ───
@@ -134,11 +139,13 @@ export class ReclaimKeeperCron {
       this.logger.error({ err }, 'On-chain intent reclaim batch failed');
     }
 
-    // B7 fix: also reclaim expired orders on-chain
-    try {
-      await this.reclaimExpiredOrders();
-    } catch (err) {
-      this.logger.error({ err }, 'On-chain order reclaim batch failed');
+    // B7 fix: also reclaim expired orders on-chain (only if orders enabled)
+    if (this.ordersEnabled) {
+      try {
+        await this.reclaimExpiredOrders();
+      } catch (err) {
+        this.logger.error({ err }, 'On-chain order reclaim batch failed');
+      }
     }
   }
 

@@ -3,14 +3,22 @@
  *
  * Responsibilities:
  * 1. Record price ticks from swaps
- * 2. Aggregate ticks into OHLCV candles at 4H / 1D / 1W intervals
+ * 2. Aggregate ticks into OHLCV candles at 7 intervals: 1m, 5m, 15m, 1h, 4h, 1d, 1w
  * 3. Serve candle data for frontend charts (TradingView Lightweight Charts)
  * 4. Use Upstash Redis cache for read-heavy chart queries
+ * 5. Auto-cleanup old candles per retention policy to optimize Supabase Free 500MB
  *
  * Storage optimization (Supabase Free 500MB):
- * - Only H4, D1, W1 candles are persisted to PostgreSQL
- * - PriceTicks are kept for 2 days then cleaned
- * - Smaller intervals (1m–1h) can be enabled later when upgrading
+ * Each interval has a retention limit to cap storage growth:
+ *   M1  (1 min)  → 2 days    (~2880 candles/pool)
+ *   M5  (5 min)  → 7 days    (~2016 candles/pool)
+ *   M15 (15 min) → 14 days   (~1344 candles/pool)
+ *   H1  (1 hour) → 30 days   (~720 candles/pool)
+ *   H4  (4 hours)→ 90 days   (~540 candles/pool)
+ *   D1  (1 day)  → 365 days  (~365 candles/pool)
+ *   W1  (1 week) → forever   (unlimited)
+ *
+ * PriceTicks are kept for 2 days then cleaned (sufficient for M1 aggregation).
  */
 import type { PrismaClient, CandleInterval } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -18,21 +26,37 @@ import { getLogger } from '../../config/logger.js';
 import type { CacheService } from '../../infrastructure/cache/CacheService.js';
 import { CacheKeys, CacheTTL } from '../../infrastructure/cache/CacheService.js';
 
-/** Only intervals we actually persist (free tier) */
-const STORED_INTERVALS: Record<string, { enum: CandleInterval; ms: number }> = {
-  H4: { enum: 'H4', ms: 4 * 60 * 60_000 },
-  D1: { enum: 'D1', ms: 24 * 60 * 60_000 },
-  W1: { enum: 'W1', ms: 7 * 24 * 60 * 60_000 },
+/** All supported intervals with their config and retention policies */
+const STORED_INTERVALS: Record<string, {
+  enum: CandleInterval;
+  ms: number;
+  retentionDays: number | null; // null = keep forever
+}> = {
+  M1:  { enum: 'M1',  ms: 1 * 60_000,             retentionDays: 2 },
+  M5:  { enum: 'M5',  ms: 5 * 60_000,             retentionDays: 7 },
+  M15: { enum: 'M15', ms: 15 * 60_000,            retentionDays: 14 },
+  H1:  { enum: 'H1',  ms: 60 * 60_000,            retentionDays: 30 },
+  H4:  { enum: 'H4',  ms: 4 * 60 * 60_000,        retentionDays: 90 },
+  D1:  { enum: 'D1',  ms: 24 * 60 * 60_000,       retentionDays: 365 },
+  W1:  { enum: 'W1',  ms: 7 * 24 * 60 * 60_000,   retentionDays: null },
 };
 
 /** String → enum mapping for API queries */
 const INTERVAL_MAP: Record<string, CandleInterval> = {
-  '4h': 'H4',
-  '1d': 'D1',
-  '1w': 'W1',
-  H4: 'H4',
-  D1: 'D1',
-  W1: 'W1',
+  '1m':  'M1',
+  '5m':  'M5',
+  '15m': 'M15',
+  '1h':  'H1',
+  '4h':  'H4',
+  '1d':  'D1',
+  '1w':  'W1',
+  M1:  'M1',
+  M5:  'M5',
+  M15: 'M15',
+  H1:  'H1',
+  H4:  'H4',
+  D1:  'D1',
+  W1:  'W1',
 };
 
 /** TradingView-compatible candle output */
@@ -48,7 +72,7 @@ export interface CandleDTO {
 /** Query parameters for chart data */
 export interface GetCandlesParams {
   poolId: string;
-  interval: string;   // '4h' | '1d' | '1w'
+  interval: string;   // '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w'
   from?: number;       // Unix timestamp (seconds)
   to?: number;         // Unix timestamp (seconds)
   limit?: number;      // Max candles to return
@@ -126,7 +150,7 @@ export class CandlestickService {
     const priceDecimal = new Decimal(price);
     const volumeStr = volume.toString();
 
-    // Only upsert for stored intervals (H4, D1, W1)
+    // Only upsert for stored intervals (all 7 intervals)
     for (const [key, config] of Object.entries(STORED_INTERVALS)) {
       const openTime = this.floorToInterval(ts, config.ms);
       const closeTime = new Date(openTime.getTime() + config.ms);
@@ -198,7 +222,7 @@ export class CandlestickService {
     if (!interval) {
       throw new Error(
         `Invalid interval: ${params.interval}. Available: ${Object.keys(INTERVAL_MAP).join(', ')}. ` +
-        `Note: Only 4h/1d/1w are stored on free tier.`,
+        `Supported: 1m, 5m, 15m, 1h, 4h, 1d, 1w.`,
       );
     }
 
@@ -354,13 +378,22 @@ export class CandlestickService {
   }
 
   /**
-   * Get available intervals (only stored ones on free tier).
+   * Get available intervals with retention info.
    */
-  getAvailableIntervals(): Array<{ value: string; label: string; seconds: number }> {
+  getAvailableIntervals(): Array<{
+    value: string;
+    label: string;
+    seconds: number;
+    retentionDays: number | null;
+  }> {
     return [
-      { value: '4h', label: '4H', seconds: 14400 },
-      { value: '1d', label: '1D', seconds: 86400 },
-      { value: '1w', label: '1W', seconds: 604800 },
+      { value: '1m',  label: '1M',  seconds: 60,     retentionDays: 2 },
+      { value: '5m',  label: '5M',  seconds: 300,    retentionDays: 7 },
+      { value: '15m', label: '15M', seconds: 900,    retentionDays: 14 },
+      { value: '1h',  label: '1H',  seconds: 3600,   retentionDays: 30 },
+      { value: '4h',  label: '4H',  seconds: 14400,  retentionDays: 90 },
+      { value: '1d',  label: '1D',  seconds: 86400,  retentionDays: 365 },
+      { value: '1w',  label: '1W',  seconds: 604800, retentionDays: null },
     ];
   }
 
@@ -370,7 +403,7 @@ export class CandlestickService {
 
   /**
    * Aggregate recent price ticks into candles.
-   * Only processes H4, D1, W1 intervals (free tier).
+   * Processes all 7 intervals: M1, M5, M15, H1, H4, D1, W1.
    */
   async aggregateCandles(): Promise<number> {
     const pools = await this.prisma.pool.findMany({
@@ -406,18 +439,76 @@ export class CandlestickService {
   }
 
   /**
-   * Cleanup old ticks to save Supabase storage.
-   * Ticks: keep 2 days. Candles: keep forever (only 3 intervals = small footprint).
+   * Cleanup old data to save Supabase storage.
+   *
+   * 1. PriceTicks: keep 2 days (sufficient for M1 candle aggregation)
+   * 2. Candles: cleanup per retention policy:
+   *    - M1: 2 days, M5: 7 days, M15: 14 days, H1: 30 days
+   *    - H4: 90 days, D1: 365 days, W1: forever
+   * 3. PoolHistory: keep 90 days
+   * 4. ProtocolStats: keep 90 days
    */
   async cleanupOldData(): Promise<void> {
-    const cutoff = new Date(Date.now() - 2 * 24 * 60 * 60_000);
-
-    const result = await this.prisma.priceTick.deleteMany({
-      where: { timestamp: { lt: cutoff } },
+    // 1. Clean old price ticks (2 days)
+    const tickCutoff = new Date(Date.now() - 2 * 24 * 60 * 60_000);
+    const tickResult = await this.prisma.priceTick.deleteMany({
+      where: { timestamp: { lt: tickCutoff } },
     });
+    if (tickResult.count > 0) {
+      this.logger.info({ count: tickResult.count }, 'Cleaned old price ticks');
+    }
 
-    if (result.count > 0) {
-      this.logger.info({ count: result.count }, 'Cleaned old price ticks');
+    // 2. Clean candles per retention policy
+    let totalCandlesCleaned = 0;
+    for (const [key, config] of Object.entries(STORED_INTERVALS)) {
+      if (config.retentionDays === null) continue; // W1 = keep forever
+
+      const cutoff = new Date(Date.now() - config.retentionDays * 24 * 60 * 60_000);
+      try {
+        const result = await this.prisma.candle.deleteMany({
+          where: {
+            interval: config.enum,
+            openTime: { lt: cutoff },
+          },
+        });
+        if (result.count > 0) {
+          totalCandlesCleaned += result.count;
+          this.logger.debug(
+            { interval: key, count: result.count, retentionDays: config.retentionDays },
+            'Cleaned expired candles',
+          );
+        }
+      } catch (err) {
+        this.logger.error({ err, interval: key }, 'Failed to clean candles');
+      }
+    }
+    if (totalCandlesCleaned > 0) {
+      this.logger.info({ count: totalCandlesCleaned }, 'Total candles cleaned by retention policy');
+    }
+
+    // 3. Clean old pool history (90 days)
+    const histCutoff = new Date(Date.now() - 90 * 24 * 60 * 60_000);
+    try {
+      const histResult = await this.prisma.poolHistory.deleteMany({
+        where: { timestamp: { lt: histCutoff } },
+      });
+      if (histResult.count > 0) {
+        this.logger.info({ count: histResult.count }, 'Cleaned old pool history (>90 days)');
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to clean pool history');
+    }
+
+    // 4. Clean old protocol stats (90 days)
+    try {
+      const statsResult = await this.prisma.protocolStats.deleteMany({
+        where: { timestamp: { lt: histCutoff } },
+      });
+      if (statsResult.count > 0) {
+        this.logger.info({ count: statsResult.count }, 'Cleaned old protocol stats (>90 days)');
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Failed to clean protocol stats');
     }
   }
 

@@ -18,29 +18,38 @@ export class ChainSync {
   private readonly logger;
   private running = false;
   private syncIntervalMs: number;
+  private ordersEnabled: boolean;
 
   constructor(
     private readonly blockfrost: BlockfrostClient,
     private readonly prisma: PrismaClient,
     private readonly poolValidatorAddress: string,
-    syncIntervalMs = 30_000, // 30s default — conservative for free tier
+    syncIntervalMs = 120_000, // 120s default — optimized for Blockfrost free tier (was 30s)
+    ordersEnabled = false,    // Skip order sync when orders are disabled
   ) {
     this.logger = getLogger().child({ service: 'chain-sync' });
     this.syncIntervalMs = syncIntervalMs;
+    this.ordersEnabled = ordersEnabled;
   }
 
   /** Start the sync loop */
   async start(): Promise<void> {
     this.running = true;
-    this.logger.info('Chain sync started');
+    this.logger.info({
+      syncIntervalMs: this.syncIntervalMs,
+      ordersEnabled: this.ordersEnabled,
+    }, 'Chain sync started');
 
     while (this.running) {
       try {
         await this.syncPools();
         await this.promoteConfirmedIntents();
-        await this.promoteConfirmedOrders();
+        // Only sync orders if enabled — saves ~40% of Blockfrost calls per iteration
+        if (this.ordersEnabled) {
+          await this.promoteConfirmedOrders();
+          await this.checkExpiredOrders();
+        }
         await this.checkExpiredIntents();
-        await this.checkExpiredOrders();
       } catch (err) {
         this.logger.error({ err }, 'Chain sync iteration failed');
       }

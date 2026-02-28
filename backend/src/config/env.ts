@@ -56,6 +56,15 @@ const envSchema = z.object({
     .transform((val) => val === 'true')
     .default('false'),
 
+  // Order routes — disable to save server resources when orders are not in use
+  ORDER_ROUTES_ENABLED: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
+
+  // Chain sync interval (ms) — increase to save Blockfrost API calls
+  CHAIN_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(120_000),
+
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
 
