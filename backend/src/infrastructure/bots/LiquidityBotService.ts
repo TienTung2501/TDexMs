@@ -22,9 +22,9 @@ import {
 import { getLogger } from '../../config/logger.js';
 
 // ─── Config ─────────────────────────────────────────────────────────
-const MIN_INTERVAL_MS = 30 * 60 * 1000;
-const MAX_INTERVAL_MS = 120 * 60 * 1000;
-const MIN_ADA_BALANCE = 15_000_000n;
+const MIN_INTERVAL_MS = 5 * 24 * 60 * 60 * 1000;  // 5 ngày (432,000,000 ms)
+const MAX_INTERVAL_MS = 10 * 24 * 60 * 60 * 1000; // 10 ngày (864,000,000 ms)
+const MIN_ADA_BALANCE = 10_000_000n;
 const DEPOSIT_PERCENT_MIN = 2;
 const DEPOSIT_PERCENT_MAX = 8;
 const WITHDRAW_PERCENT_MIN = 5;

@@ -256,7 +256,7 @@ async function main(): Promise<void> {
     env.BLOCKFROST_URL,
     env.BLOCKFROST_PROJECT_ID,
     env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod',
-    60_000,
+    3 * 60 * 60_000,
     env.ORDER_ROUTES_ENABLED, // Only process orders if enabled
   );
 
@@ -274,15 +274,15 @@ async function main(): Promise<void> {
 
   // Pool snapshot cron — snapshots pool state → PoolHistory + ProtocolStats
   // B4/B6 fix: these tables were previously never populated
-  const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
+  const poolSnapshotCron = new PoolSnapshotCron(prisma, 12 * 3_600_000); // every hour
 
   // Ghost cleanup cron — removes CREATED intents/orders/pools whose TX was never
   // signed/submitted on-chain. Prevents ghost records from polluting the DB and UI.
   const ghostCleanupCron = new GhostCleanupCron(
     prisma,
     blockfrost,
-    120_000,   // check every 2 minutes
-    5 * 60_000, // delete CREATED records older than 5 minutes
+    6 * 60 * 60_000,  // Check 6 tiếng / lần
+    60 * 60_000,      // Xóa các record rác tồn tại quá 1 tiếng
     env.ORDER_ROUTES_ENABLED,
   );
 
