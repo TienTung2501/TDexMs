@@ -428,6 +428,16 @@ export function createAdminRouter(deps: AdminDependencies): Router {
           }
         }
 
+        // Get derived addresses from blueprint if available
+        let derivedAddresses = null;
+        if (deps.txBuilder) {
+          try {
+            derivedAddresses = deps.txBuilder.getDerivedAddresses();
+          } catch {
+            // Blueprint may not be available
+          }
+        }
+
         res.json({
           network: env.CARDANO_NETWORK,
           contracts: {
@@ -436,6 +446,7 @@ export function createAdminRouter(deps: AdminDependencies): Router {
             settings_nft_policy_id: env.SETTINGS_NFT_POLICY_ID,
             settings_nft_asset_name: env.SETTINGS_NFT_ASSET_NAME,
           },
+          derived_addresses: derivedAddresses,
           admin: {
             admin_address: env.ADMIN_ADDRESS,
             solver_address: env.SOLVER_ADDRESS,
@@ -460,6 +471,24 @@ export function createAdminRouter(deps: AdminDependencies): Router {
             order_count: orderCount,
           },
         });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
+  // ── Protocol: On-Chain State ────────────────
+  router.get(
+    '/admin/protocol/on-chain-state',
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        if (!deps.txBuilder) {
+          res.status(503).json({ error: 'TX builder not available' });
+          return;
+        }
+
+        const state = await deps.txBuilder.getOnChainState();
+        res.json(state);
       } catch (err) {
         next(err);
       }

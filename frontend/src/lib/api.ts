@@ -207,6 +207,8 @@ export interface PoolResponse {
   reserveA: string;
   reserveB: string;
   totalLpTokens: string;
+  lpPolicyId?: string;
+  poolNftAssetName?: string;
   feeNumerator: number;
   feeDenominator?: number;
   state: string;
@@ -341,14 +343,12 @@ export interface ChartCandlesResponse {
   interval: string;
   count: number;
   candles: Array<{
-    openTime: string;
-    closeTime: string;
-    open: string;
-    high: string;
-    low: string;
-    close: string;
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
     volume: string;
-    txCount: number;
   }>;
 }
 
@@ -619,11 +619,11 @@ export async function getPortfolioHistory(
 
 // LP Positions
 export interface LpPositionEntry {
-  pool_id: string;
+  poolId: string;
   pair: string;
   lp_balance: number;
   share_percent: number;
-  current_value: {
+  current_value?: {
     asset_a_amount: number;
     asset_b_amount: number;
     total_value_usd: number;
@@ -911,6 +911,20 @@ export interface ProtocolInfo {
     settings_nft_policy_id: string;
     settings_nft_asset_name: string;
   };
+  derived_addresses: {
+    escrowAddress: string;
+    escrowHash: string;
+    poolAddress: string;
+    poolHash: string;
+    factoryAddress: string;
+    factoryHash: string;
+    orderAddress: string;
+    intentPolicyId: string;
+    lpPolicyId: string;
+    poolNftPolicyId: string;
+    settingsAddress?: string;
+    settingsParamStatus: 'parameterized' | 'unparameterized' | 'error';
+  } | null;
   admin: {
     admin_address: string;
     solver_address: string;
@@ -935,6 +949,69 @@ export interface ProtocolInfo {
 
 export async function getProtocolInfo(): Promise<ProtocolInfo> {
   return apiFetch("/admin/protocol/info");
+}
+
+// ─── On-Chain Protocol State ──────────────────────────────
+
+export interface OnChainAssetClass {
+  policy_id: string;
+  asset_name: string;
+}
+
+export interface OnChainProtocolState {
+  factory: {
+    address: string;
+    utxo_ref: string | null;
+    datum: {
+      factory_nft: OnChainAssetClass;
+      pool_count: number;
+      admin: string;
+      settings_utxo: string;
+    } | null;
+    nfts: OnChainAssetClass[];
+    lovelace: string;
+  };
+  settings: {
+    address: string | null;
+    utxo_ref: string | null;
+    datum: {
+      admin: string;
+      protocol_fee_bps: number;
+      min_pool_liquidity: number;
+      min_intent_size: number;
+      solver_bond: number;
+      fee_collector: string;
+      version: number;
+    } | null;
+    nfts: OnChainAssetClass[];
+    lovelace: string;
+    discovery_method: 'env_config' | 'factory_datum' | 'not_found';
+  };
+  pools: Array<{
+    address: string;
+    pool_nft: OnChainAssetClass;
+    utxo_ref: string;
+    datum: {
+      asset_a: OnChainAssetClass;
+      asset_b: OnChainAssetClass;
+      total_lp_tokens: string;
+      fee_numerator: number;
+      protocol_fees_a: string;
+      protocol_fees_b: string;
+      last_root_k: string;
+    };
+    reserves: { asset_a: string; asset_b: string };
+    lovelace: string;
+  }>;
+  nft_relationships: {
+    factory_nft: { policy_id: string; asset_name: string; minted_via: string } | null;
+    settings_nft: { policy_id: string; asset_name: string; expected_policy: string } | null;
+    pool_nfts: Array<{ policy_id: string; asset_name: string; pool_pair: string }>;
+  };
+}
+
+export async function getOnChainState(): Promise<OnChainProtocolState> {
+  return apiFetch("/admin/protocol/on-chain-state");
 }
 
 // ─── Admin Pools (Admin view) ─────────────────────────────

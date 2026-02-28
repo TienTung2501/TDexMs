@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,12 +24,27 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
   const [amountB, setAmountB] = useState("");
   const [withdrawPercent, setWithdrawPercent] = useState("");
 
-  // Auto-calculate proportional amount
+  // Look up user's LP token balance from wallet
+  const userLpBalance = useMemo(() => {
+    if (!pool.lpPolicyId || !pool.poolNftAssetName) return 0;
+    const lpUnit = pool.lpPolicyId + pool.poolNftAssetName;
+    // Check both raw unit key and known token entries
+    return balances[lpUnit] ?? 0;
+  }, [pool.lpPolicyId, pool.poolNftAssetName, balances]);
+
+  const decimalsA = pool.assetA.decimals;
+  const decimalsB = pool.assetB.decimals;
+
+  // Human-readable reserves
+  const reserveAHuman = pool.reserveA / Math.pow(10, decimalsA);
+  const reserveBHuman = pool.reserveB / Math.pow(10, decimalsB);
+
+  // Auto-calculate proportional amount (both in human-readable units)
   const handleAmountAChange = (val: string) => {
     setAmountA(val);
-    if (val && parseFloat(val) > 0 && pool.reserveA > 0) {
-      const ratio = pool.reserveB / pool.reserveA;
-      setAmountB((parseFloat(val) * ratio).toFixed(2));
+    if (val && parseFloat(val) > 0 && reserveAHuman > 0) {
+      const ratio = reserveBHuman / reserveAHuman;
+      setAmountB((parseFloat(val) * ratio).toFixed(6));
     } else {
       setAmountB("");
     }
@@ -62,14 +77,15 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
   const handleWithdraw = useCallback(async () => {
     if (!address || !withdrawPercent) return;
 
-    const lpAmount = Math.floor(
-      pool.totalLpTokens * (parseFloat(withdrawPercent) / 100)
+    // Use user's LP balance, not total pool LP tokens
+    const lpToWithdraw = Math.floor(
+      userLpBalance * (parseFloat(withdrawPercent) / 100)
     ).toString();
 
     await execute(
       () =>
         withdrawLiquidity(pool.id, {
-          lpTokenAmount: lpAmount,
+          lpTokenAmount: lpToWithdraw,
           minAmountA: "0",
           minAmountB: "0",
           senderAddress: address,
@@ -82,7 +98,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
         onSuccess: () => setWithdrawPercent(""),
       },
     );
-  }, [pool.id, pool.totalLpTokens, withdrawPercent, address, changeAddress, execute]);
+  }, [pool.id, userLpBalance, withdrawPercent, address, changeAddress, execute]);
 
   return (
     <Tabs defaultValue="deposit" className="w-full">
@@ -143,8 +159,8 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
               <span className="font-mono">
                 {formatAmount(
                   Math.min(
-                    (parseFloat(amountA) / pool.reserveA) * pool.totalLpTokens,
-                    (parseFloat(amountB) / pool.reserveB) * pool.totalLpTokens
+                    (parseFloat(amountA) / reserveAHuman) * pool.totalLpTokens,
+                    (parseFloat(amountB) / reserveBHuman) * pool.totalLpTokens
                   )
                 )}
               </span>
@@ -153,7 +169,7 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
               <span className="text-muted-foreground">Pool share</span>
               <span className="font-mono">
                 {(
-                  (parseFloat(amountA) / (pool.reserveA + parseFloat(amountA))) *
+                  (parseFloat(amountA) / (reserveAHuman + parseFloat(amountA))) *
                   100
                 ).toFixed(4)}
                 %
@@ -216,26 +232,40 @@ export function LiquidityForm({ pool }: LiquidityFormProps) {
 
         {withdrawPercent && parseFloat(withdrawPercent) > 0 && (
           <div className="rounded-xl bg-secondary/50 p-3 space-y-1.5 text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">
-                Receive {pool.assetA.ticker}
-              </span>
-              <span className="font-mono">
-                ~{formatCompact(
-                  (pool.reserveA * parseFloat(withdrawPercent)) / 100 / 10
-                )}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">
-                Receive {pool.assetB.ticker}
-              </span>
-              <span className="font-mono">
-                ~{formatCompact(
-                  (pool.reserveB * parseFloat(withdrawPercent)) / 100 / 10
-                )}
-              </span>
-            </div>
+            {userLpBalance > 0 ? (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Your LP tokens</span>
+                  <span className="font-mono">{formatCompact(userLpBalance)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    Receive {pool.assetA.ticker}
+                  </span>
+                  <span className="font-mono">
+                    ~{formatCompact(
+                      (reserveAHuman * userLpBalance * parseFloat(withdrawPercent)) /
+                        (100 * pool.totalLpTokens)
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    Receive {pool.assetB.ticker}
+                  </span>
+                  <span className="font-mono">
+                    ~{formatCompact(
+                      (reserveBHuman * userLpBalance * parseFloat(withdrawPercent)) /
+                        (100 * pool.totalLpTokens)
+                    )}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="text-center text-muted-foreground py-1">
+                No LP tokens found in wallet
+              </div>
+            )}
           </div>
         )}
 

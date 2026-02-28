@@ -9,7 +9,7 @@ import React, {
   useRef,
   useMemo,
 } from "react";
-import { TOKEN_LIST } from "@/lib/mock-data";
+import { TOKEN_LIST, getDynamicTokenList } from "@/lib/mock-data";
 
 // ─── CIP-30 type declarations ───────────────
 // These match the CIP-30 wallet connector standard
@@ -418,6 +418,30 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       try {
         const balanceCbor = await api.getBalance();
         setLovelaceBalance(parseBalanceCbor(balanceCbor));
+        // Also refresh native token balances
+        const utxosCbor = await api.getUtxos();
+        if (utxosCbor && utxosCbor.length > 0) {
+          const { Lucid: LucidRefresh, Blockfrost: BfRefresh } = await getLucidModule();
+          const lucidRefresh = await LucidRefresh(
+            new BfRefresh(
+              process.env.NEXT_PUBLIC_BLOCKFROST_URL ||
+                "https://cardano-preprod.blockfrost.io/api/v0",
+              process.env.NEXT_PUBLIC_BLOCKFROST_PROJECT_ID || ""
+            ),
+            "Preprod",
+          );
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          lucidRefresh.selectWallet.fromAPI(api as any);
+          const utxos = await lucidRefresh.wallet().getUtxos();
+          const tokenTotals: Record<string, bigint> = {};
+          for (const utxo of utxos) {
+            for (const [unit, qty] of Object.entries(utxo.assets)) {
+              if (unit === "lovelace") continue;
+              tokenTotals[unit] = (tokenTotals[unit] || 0n) + qty;
+            }
+          }
+          setNativeBalances(tokenTotals);
+        }
       } catch {
         // non-critical
       }
@@ -434,8 +458,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       ADA: Number(lovelaceBalance) / 1_000_000,
     };
 
+    // Use dynamic token list (merges static + backend tokens with correct policyIds)
+    const tokenList = getDynamicTokenList();
+
     // Build a unit→Token lookup for known tokens
-    for (const token of TOKEN_LIST) {
+    for (const token of tokenList) {
       if (!token.policyId) continue; // skip ADA
       const unit = token.policyId + token.assetName;
       const qty = nativeBalances[unit];
@@ -447,7 +474,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
     // Also include unknown tokens by their unit ID
     for (const [unit, qty] of Object.entries(nativeBalances)) {
-      const isKnown = TOKEN_LIST.some(
+      const isKnown = tokenList.some(
         (t) => t.policyId && t.policyId + t.assetName === unit,
       );
       if (!isKnown && qty > 0n) {

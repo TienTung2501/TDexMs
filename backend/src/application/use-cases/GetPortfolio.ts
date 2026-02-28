@@ -127,12 +127,20 @@ export class GetPortfolio {
     const positions: LpPosition[] = [];
     for (const pool of poolsWithLp) {
       const lpPolicyId = pool.lpPolicyId!;
-      // LP tokens from our DEX use the policyId as the full unit (no assetName)
-      // check both plain policyId and policyId + "" (empty asset name hex)
-      const lpBalance =
-        balances.get(lpPolicyId) ??
-        balances.get(`${lpPolicyId}`) ??
-        0n;
+      const poolNftAssetName = pool.poolNftAssetName;
+      // LP tokens use unit = lpPolicyId + poolNftAssetName (same asset name as pool NFT)
+      const lpUnit = lpPolicyId + poolNftAssetName;
+      let lpBalance = balances.get(lpUnit) ?? 0n;
+
+      // Fallback: scan all balance entries matching lpPolicyId prefix
+      if (lpBalance === 0n) {
+        for (const [unit, qty] of balances.entries()) {
+          if (unit.startsWith(lpPolicyId) && qty > 0n) {
+            lpBalance = qty;
+            break;
+          }
+        }
+      }
 
       if (lpBalance === 0n) continue;
 

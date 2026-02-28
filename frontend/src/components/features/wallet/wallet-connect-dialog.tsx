@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
-import { Wallet, Loader2, AlertCircle } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { Wallet, Loader2, AlertCircle, Shield, Copy, Check } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useWallet, type DetectedWallet } from "@/providers/wallet-provider";
+import { checkAdminAuth } from "@/lib/api";
 
 export function WalletConnectDialog() {
   const {
@@ -23,8 +25,28 @@ export function WalletConnectDialog() {
     connect,
     disconnect,
   } = useWallet();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (isConnected && address) {
+      checkAdminAuth(address)
+        .then((res) => setIsAdmin(res.is_admin))
+        .catch(() => setIsAdmin(false));
+    } else {
+      setIsAdmin(false);
+    }
+  }, [isConnected, address]);
+
+  const handleCopyAddress = async () => {
+    if (!address) return;
+    await navigator.clipboard.writeText(address);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleConnect = async (walletId: string) => {
     setError(null);
@@ -63,13 +85,39 @@ export function WalletConnectDialog() {
           </DialogHeader>
           <div className="space-y-3">
             <div className="rounded-lg bg-muted p-3 space-y-1.5">
-              <p className="text-xs text-muted-foreground">Address</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">Address</p>
+                <button
+                  onClick={handleCopyAddress}
+                  className="text-muted-foreground hover:text-foreground transition-colors"
+                  title="Copy address"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5 text-green-500" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
               <p className="font-mono text-xs break-all">{address}</p>
             </div>
             <div className="rounded-lg bg-muted p-3 space-y-1.5">
               <p className="text-xs text-muted-foreground">Balance</p>
               <p className="text-lg font-bold">{adaBalance} ADA</p>
             </div>
+            {isAdmin && (
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                onClick={() => {
+                  router.push("/admin");
+                  setOpen(false);
+                }}
+              >
+                <Shield className="h-4 w-4" />
+                Admin Portal
+              </Button>
+            )}
             <Button
               variant="destructive"
               className="w-full"

@@ -347,10 +347,13 @@ export function createPortfolioRouter(
               ? (reserveA + reserveB) / totalLp
               : 0;
 
+            const tickerA = pool.assetATicker ?? (pool.assetAPolicyId ? pool.assetAAssetName : 'ADA');
+            const tickerB = pool.assetBTicker ?? (pool.assetBPolicyId ? pool.assetBAssetName : 'ADA');
+
             positions.push({
               poolId: pool.id,
               lpPolicyId: pool.lpPolicyId,
-              pair: `${pool.assetAAssetName || 'ADA'}_${pool.assetBAssetName || 'ADA'}`,
+              pair: `${tickerA}_${tickerB}`,
               assetA: { policyId: pool.assetAPolicyId, assetName: pool.assetAAssetName },
               assetB: { policyId: pool.assetBPolicyId, assetName: pool.assetBAssetName },
               reserveA: pool.reserveA.toString(),

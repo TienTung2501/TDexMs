@@ -1,0 +1,173 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: hsl(210 40% 98%);
+  --foreground: hsl(222 47% 11%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(222 47% 11%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(222 47% 11%);
+  --primary: hsl(158 64% 52%);
+  --primary-foreground: hsl(0 0% 10%);
+  --secondary: hsl(210 40% 96%);
+  --secondary-foreground: hsl(222 47% 11%);
+  --muted: hsl(210 40% 96%);
+  --muted-foreground: hsl(215 16% 40%);
+  --accent: hsl(158 64% 52%);
+  --accent-foreground: hsl(0 0% 98%);
+  --destructive: hsl(0 72% 60%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --border: hsl(214 32% 91%);
+  --input: hsl(214 32% 91%);
+  --ring: hsl(158 64% 52%);
+  --chart-1: hsl(158 64% 52%);
+  --chart-2: hsl(0 72% 60%);
+  --chart-3: hsl(220 72% 50%);
+  --chart-4: hsl(43 100% 60%);
+  --chart-5: hsl(270 60% 65%);
+  --radius: 0.75rem;
+  --sidebar: hsl(0 0% 100%);
+  --sidebar-foreground: hsl(222 47% 11%);
+  --sidebar-primary: hsl(158 64% 52%);
+  --sidebar-primary-foreground: hsl(0 0% 10%);
+  --sidebar-accent: hsl(210 40% 96%);
+  --sidebar-accent-foreground: hsl(222 47% 11%);
+  --sidebar-border: hsl(214 32% 91%);
+  --sidebar-ring: hsl(158 64% 52%);
+}
+
+.dark {
+  --background: hsl(0 0% 7%);
+  --foreground: hsl(0 0% 92%);
+  --card: hsl(0 0% 11%);
+  --card-foreground: hsl(0 0% 92%);
+  --popover: hsl(0 0% 11%);
+  --popover-foreground: hsl(0 0% 92%);
+  --primary: hsl(158 64% 52%);
+  --primary-foreground: hsl(0 0% 10%);
+  --secondary: hsl(0 0% 16%);
+  --secondary-foreground: hsl(0 0% 92%);
+  --muted: hsl(0 0% 15%);
+  --muted-foreground: hsl(0 0% 65%);
+  --accent: hsl(158 64% 52%);
+  --accent-foreground: hsl(0 0% 98%);
+  --destructive: hsl(0 72% 60%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --border: hsl(0 0% 18%);
+  --input: hsl(0 0% 20%);
+  --ring: hsl(158 64% 52%);
+  --chart-1: hsl(158 64% 60%);
+  --chart-2: hsl(200 100% 60%);
+  --chart-3: hsl(45 100% 60%);
+  --chart-4: hsl(265 80% 60%);
+  --chart-5: hsl(12 90% 65%);
+  --sidebar: hsl(0 0% 9%);
+  --sidebar-foreground: hsl(0 0% 92%);
+  --sidebar-primary: hsl(158 64% 52%);
+  --sidebar-primary-foreground: hsl(0 0% 10%);
+  --sidebar-accent: hsl(0 0% 15%);
+  --sidebar-accent-foreground: hsl(0 0% 92%);
+  --sidebar-border: hsl(0 0% 18%);
+  --sidebar-ring: hsl(158 64% 52%);
+}
+
+@theme inline {
+  --font-sans: "Inter", "Geist", sans-serif;
+  --font-mono: "JetBrains Mono", "Geist Mono", monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image: radial-gradient(circle at top, hsl(158 64% 58% / 0.08), transparent 45%),
+      radial-gradient(circle at 20% 20%, hsl(220 70% 60% / 0.05), transparent 40%);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background-color: hsl(158 64% 52% / 0.3);
+    color: var(--foreground);
+  }
+
+  .shell {
+    width: min(1440px, 100%);
+    margin-inline: auto;
+    padding-inline: clamp(1.25rem, 4vw, 3rem);
+  }
+
+  /* CHANGE: Custom typography styles for Basket.Finance */
+  h1 {
+    @apply text-4xl font-semibold leading-tight tracking-tight text-balance;
+  }
+
+  h2 {
+    @apply text-3xl font-semibold leading-tight text-balance;
+  }
+
+  h3 {
+    @apply text-xl font-semibold leading-tight;
+  }
+
+  .text-body-l {
+    @apply text-lg font-normal leading-relaxed;
+  }
+
+  .text-body-m {
+    @apply text-base font-normal leading-relaxed;
+  }
+
+  .text-body-s {
+    @apply text-sm font-normal leading-relaxed;
+  }
+
+  .text-caption {
+    @apply text-xs font-normal leading-relaxed;
+  }
+
+  /* Mono font for addresses and hashes */
+  .font-mono-sm {
+    @apply font-mono text-sm;
+  }
+}

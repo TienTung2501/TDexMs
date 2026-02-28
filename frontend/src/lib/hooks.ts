@@ -100,6 +100,8 @@ export interface NormalizedPool {
   reserveA: number;
   reserveB: number;
   totalLpTokens: number;
+  lpPolicyId?: string;
+  poolNftAssetName?: string;
   feePercent: number;
   tvlAda: number;
   volume24h: number;
@@ -177,6 +179,8 @@ function normalizePool(p: PoolResponse): NormalizedPool {
     reserveA: Number(p.reserveA),
     reserveB: Number(p.reserveB),
     totalLpTokens: Number(p.totalLpTokens),
+    lpPolicyId: p.lpPolicyId,
+    poolNftAssetName: p.poolNftAssetName,
     feePercent,
     tvlAda: Number(p.tvlAda) / 1_000_000,
     volume24h: Number(p.volume24h) / 1_000_000,
@@ -372,11 +376,11 @@ export function useCandles(
       const priceFactor = Math.pow(10, decimalsA - decimalsB);
       const volFactor = Math.pow(10, decimalsA || 6);
       return (res.candles || []).map((c) => ({
-        time: Math.floor(new Date(c.openTime).getTime() / 1000),
-        open: Number(c.open) * priceFactor,
-        high: Number(c.high) * priceFactor,
-        low: Number(c.low) * priceFactor,
-        close: Number(c.close) * priceFactor,
+        time: c.time,
+        open: c.open * priceFactor,
+        high: c.high * priceFactor,
+        low: c.low * priceFactor,
+        close: c.close * priceFactor,
         volume: Number(c.volume) / volFactor,
       }));
     },

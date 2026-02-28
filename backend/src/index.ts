@@ -273,14 +273,13 @@ async function main(): Promise<void> {
   // B4/B6 fix: these tables were previously never populated
   const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
 
-  // Testnet faucet bot — requests free test ADA every 24h
-  // Only active on preprod/preview; silently skips on mainnet
-  const faucetBot = new FaucetBot({
-    targetAddress: env.FAUCET_TARGET_ADDRESS || env.SOLVER_ADDRESS,
-    network: env.CARDANO_NETWORK,
-    apiKey: env.FAUCET_API_KEY || undefined,
-    intervalMs: env.FAUCET_INTERVAL_MS,
-  });
+  // Testnet faucet bot — DISABLED (no longer needed)
+  // const faucetBot = new FaucetBot({
+  //   targetAddress: env.FAUCET_TARGET_ADDRESS || env.SOLVER_ADDRESS,
+  //   network: env.CARDANO_NETWORK,
+  //   apiKey: env.FAUCET_API_KEY || undefined,
+  //   intervalMs: env.FAUCET_INTERVAL_MS,
+  // });
 
   // ──────────────────────────────────────────────
   // 6. Start
@@ -310,7 +309,7 @@ async function main(): Promise<void> {
     logger.info('OrderExecutorCron disabled (ORDER_EXECUTOR_ENABLED=false) — intent-only mode');
   }
   poolSnapshotCron.start();
-  faucetBot.start();
+  // faucetBot disabled
 
   // ──────────────────────────────────────────────
   // 7. Graceful Shutdown
@@ -324,7 +323,7 @@ async function main(): Promise<void> {
     reclaimKeeper.stop();
     orderExecutorCron.stop();
     poolSnapshotCron.stop();
-    faucetBot.stop();
+    // faucetBot disabled
     wsServer.close();
 
     httpServer.close(() => {

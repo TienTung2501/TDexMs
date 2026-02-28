@@ -47,6 +47,11 @@ import type {
   ExecuteOrderTxParams,
   DeploySettingsTxParams,
   BuildTxResult,
+  OnChainProtocolState,
+  FactoryOnChainState,
+  SettingsOnChainState,
+  PoolOnChainState,
+  OnChainAssetClass,
 } from '../../domain/ports/ITxBuilder.js';
 import { getLogger } from '../../config/logger.js';
 import { ChainError } from '../../domain/errors/index.js';
@@ -587,6 +592,292 @@ export class TxBuilder implements ITxBuilder {
   getPoolAddress(): string {
     const r = this.getResolved();
     return r.poolAddr;
+  }
+
+  /** Get all derived validator addresses and policy IDs from the blueprint */
+  getDerivedAddresses() {
+    const r = this.getResolved();
+
+    // Always try to resolve settings address:
+    // - If SETTINGS_NFT_POLICY_ID is set → parameterized (production address)
+    // - Otherwise → un-parameterized (shows the base script address)
+    let settingsAddress: string | undefined;
+    let settingsParamStatus: 'parameterized' | 'unparameterized' | 'error' = 'error';
+    try {
+      const bp = this.getBlueprint();
+      const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
+      if (settingsBp) {
+        const settingsScript = this.resolveSettingsScript(settingsBp);
+        settingsAddress = validatorToAddress(this.network, settingsScript);
+        settingsParamStatus = process.env.SETTINGS_NFT_POLICY_ID ? 'parameterized' : 'unparameterized';
+      }
+    } catch {
+      // Settings address derivation failed
+    }
+
+    return {
+      escrowAddress: r.escrowAddr,
+      escrowHash: r.escrowHash,
+      poolAddress: r.poolAddr,
+      poolHash: r.poolHash,
+      factoryAddress: r.factoryAddr,
+      factoryHash: r.factoryHash,
+      orderAddress: r.orderAddr,
+      intentPolicyId: r.intentPolicyId,
+      lpPolicyId: r.lpPolicyId,
+      poolNftPolicyId: r.poolNftPolicyId,
+      settingsAddress,
+      settingsParamStatus,
+    };
+  }
+
+  /** Read on-chain state from factory/settings/pool validator UTxOs */
+  async getOnChainState(): Promise<OnChainProtocolState> {
+    const lucid = await this.getLucid();
+    const r = this.getResolved();
+    const bp = this.getBlueprint();
+
+    // ── Factory State ─────────────────────────
+    let factory: FactoryOnChainState = {
+      address: r.factoryAddr,
+      utxo_ref: null,
+      datum: null,
+      nfts: [],
+      lovelace: '0',
+    };
+
+    try {
+      const factoryUtxos = await lucid.utxosAt(r.factoryAddr);
+      if (factoryUtxos.length > 0) {
+        const fu = factoryUtxos[0]; // Factory is a singleton UTxO
+        factory.utxo_ref = `${fu.txHash}#${fu.outputIndex}`;
+        factory.lovelace = String(fu.assets['lovelace'] ?? 0n);
+
+        // Extract NFTs (non-ADA assets with qty=1)
+        for (const [unit, qty] of Object.entries(fu.assets)) {
+          if (unit !== 'lovelace' && qty === 1n) {
+            factory.nfts.push({
+              policy_id: unit.slice(0, 56),
+              asset_name: unit.slice(56),
+            });
+          }
+        }
+
+        // Decode FactoryDatum
+        if (fu.datum) {
+          try {
+            const d = Data.from(fu.datum) as Constr<Data>;
+            if (d.index === 0 && d.fields.length >= 4) {
+              const nftConstr = d.fields[0] as Constr<Data>;
+              const settingsUtxoConstr = d.fields[3] as Constr<Data>;
+              factory.datum = {
+                factory_nft: {
+                  policy_id: nftConstr.fields[0] as string,
+                  asset_name: nftConstr.fields[1] as string,
+                },
+                pool_count: Number(d.fields[1] as bigint),
+                admin: d.fields[2] as string,
+                settings_utxo: `${settingsUtxoConstr.fields[0] as string}#${Number(settingsUtxoConstr.fields[1] as bigint)}`,
+              };
+            }
+          } catch (e) {
+            this.logger.warn({ error: e }, 'Failed to decode factory datum');
+          }
+        }
+      }
+    } catch (e) {
+      this.logger.warn({ error: e }, 'Failed to read factory UTxOs');
+    }
+
+    // ── Settings State ────────────────────────
+    let settings: SettingsOnChainState = {
+      address: null,
+      utxo_ref: null,
+      datum: null,
+      nfts: [],
+      lovelace: '0',
+      discovery_method: 'not_found',
+    };
+
+    // Try 1: lookup via SETTINGS_NFT env vars
+    const settingsNftPolicy = process.env.SETTINGS_NFT_POLICY_ID || '';
+    if (settingsNftPolicy) {
+      try {
+        const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
+        const settingsScript = this.resolveSettingsScript(settingsBp);
+        const settingsAddr = validatorToAddress(this.network, settingsScript);
+        settings.address = settingsAddr;
+        settings.discovery_method = 'env_config';
+
+        const settingsUtxos = await lucid.utxosAt(settingsAddr);
+        if (settingsUtxos.length > 0) {
+          const su = settingsUtxos[0];
+          settings.utxo_ref = `${su.txHash}#${su.outputIndex}`;
+          settings.lovelace = String(su.assets['lovelace'] ?? 0n);
+
+          for (const [unit, qty] of Object.entries(su.assets)) {
+            if (unit !== 'lovelace' && qty === 1n) {
+              settings.nfts.push({
+                policy_id: unit.slice(0, 56),
+                asset_name: unit.slice(56),
+              });
+            }
+          }
+
+          if (su.datum) {
+            settings.datum = this.decodeSettingsDatum(su.datum);
+          }
+        }
+      } catch (e) {
+        this.logger.warn({ error: e }, 'Failed to read settings UTxOs via env config');
+      }
+    }
+
+    // Try 2: if not found via env, try factory datum reference
+    if (!settings.datum && factory.datum) {
+      try {
+        const [refTxHash, refIdxStr] = factory.datum.settings_utxo.split('#');
+        if (refTxHash && refTxHash !== '' && refTxHash !== '0'.repeat(64)) {
+          const refUtxos = await lucid.utxosByOutRef([{
+            txHash: refTxHash,
+            outputIndex: parseInt(refIdxStr),
+          }]);
+          if (refUtxos.length > 0) {
+            const su = refUtxos[0];
+            settings.utxo_ref = `${su.txHash}#${su.outputIndex}`;
+            settings.lovelace = String(su.assets['lovelace'] ?? 0n);
+            settings.discovery_method = 'factory_datum';
+            // Use UTxO address as settings address
+            const suDetails = getAddressDetails(su.address);
+            settings.address = su.address;
+
+            for (const [unit, qty] of Object.entries(su.assets)) {
+              if (unit !== 'lovelace' && qty === 1n) {
+                settings.nfts.push({
+                  policy_id: unit.slice(0, 56),
+                  asset_name: unit.slice(56),
+                });
+              }
+            }
+
+            if (su.datum) {
+              settings.datum = this.decodeSettingsDatum(su.datum);
+            }
+          }
+        }
+      } catch (e) {
+        this.logger.warn({ error: e }, 'Failed to read settings via factory datum ref');
+      }
+    }
+
+    // ── Pool State ────────────────────────────
+    const pools: PoolOnChainState[] = [];
+    try {
+      const poolUtxos = await lucid.utxosAt(r.poolAddr);
+      for (const pu of poolUtxos) {
+        if (!pu.datum) continue;
+        try {
+          const d = Data.from(pu.datum) as Constr<Data>;
+          if (d.index !== 0 || d.fields.length < 8) continue;
+
+          const poolNftConstr = d.fields[0] as Constr<Data>;
+          const assetAConstr = d.fields[1] as Constr<Data>;
+          const assetBConstr = d.fields[2] as Constr<Data>;
+
+          const poolNft: OnChainAssetClass = {
+            policy_id: poolNftConstr.fields[0] as string,
+            asset_name: poolNftConstr.fields[1] as string,
+          };
+          const assetA: OnChainAssetClass = {
+            policy_id: assetAConstr.fields[0] as string,
+            asset_name: assetAConstr.fields[1] as string,
+          };
+          const assetB: OnChainAssetClass = {
+            policy_id: assetBConstr.fields[0] as string,
+            asset_name: assetBConstr.fields[1] as string,
+          };
+
+          // Get reserves from UTxO value
+          const unitA = assetA.policy_id === '' ? 'lovelace' : assetA.policy_id + assetA.asset_name;
+          const unitB = assetB.policy_id === '' ? 'lovelace' : assetB.policy_id + assetB.asset_name;
+
+          pools.push({
+            address: r.poolAddr,
+            pool_nft: poolNft,
+            utxo_ref: `${pu.txHash}#${pu.outputIndex}`,
+            datum: {
+              asset_a: assetA,
+              asset_b: assetB,
+              total_lp_tokens: String(d.fields[3] as bigint),
+              fee_numerator: Number(d.fields[4] as bigint),
+              protocol_fees_a: String(d.fields[5] as bigint),
+              protocol_fees_b: String(d.fields[6] as bigint),
+              last_root_k: String(d.fields[7] as bigint),
+            },
+            reserves: {
+              asset_a: String(pu.assets[unitA] ?? 0n),
+              asset_b: String(pu.assets[unitB] ?? 0n),
+            },
+            lovelace: String(pu.assets['lovelace'] ?? 0n),
+          });
+        } catch (e) {
+          this.logger.warn({ error: e, txHash: pu.txHash }, 'Failed to decode pool datum');
+        }
+      }
+    } catch (e) {
+      this.logger.warn({ error: e }, 'Failed to read pool UTxOs');
+    }
+
+    // ── NFT Relationships ────────────────────
+    const nftRelationships: OnChainProtocolState['nft_relationships'] = {
+      factory_nft: factory.datum ? {
+        policy_id: factory.datum.factory_nft.policy_id,
+        asset_name: factory.datum.factory_nft.asset_name,
+        minted_via: 'intent_token_policy (one-shot)',
+      } : null,
+      settings_nft: settings.nfts.length > 0 ? {
+        policy_id: settings.nfts[0].policy_id,
+        asset_name: settings.nfts[0].asset_name,
+        expected_policy: r.intentPolicyId,
+      } : null,
+      pool_nfts: pools.map(p => ({
+        policy_id: p.pool_nft.policy_id,
+        asset_name: p.pool_nft.asset_name,
+        pool_pair: `${p.datum.asset_a.asset_name || 'ADA'}/${p.datum.asset_b.asset_name || 'ADA'}`,
+      })),
+    };
+
+    return { factory, settings, pools, nft_relationships: nftRelationships };
+  }
+
+  /** Decode a SettingsDatum from raw CBOR datum */
+  private decodeSettingsDatum(rawDatum: string): SettingsOnChainState['datum'] {
+    try {
+      const d = Data.from(rawDatum) as Constr<Data>;
+      if (d.index === 0 && d.fields.length >= 7) {
+        // SettingsDatum { admin, protocol_fee_bps, min_pool_liquidity, min_intent_size, solver_bond, fee_collector, version }
+        const feeCollectorConstr = d.fields[5] as Constr<Data>;
+        let feeCollectorStr = '';
+        try {
+          feeCollectorStr = plutusAddressToAddress(feeCollectorConstr, this.network);
+        } catch {
+          feeCollectorStr = '(unable to decode)';
+        }
+
+        return {
+          admin: d.fields[0] as string,
+          protocol_fee_bps: Number(d.fields[1] as bigint),
+          min_pool_liquidity: Number(d.fields[2] as bigint),
+          min_intent_size: Number(d.fields[3] as bigint),
+          solver_bond: Number(d.fields[4] as bigint),
+          fee_collector: feeCollectorStr,
+          version: Number(d.fields[6] as bigint),
+        };
+      }
+    } catch (e) {
+      this.logger.warn({ error: e }, 'Failed to decode settings datum');
+    }
+    return null;
   }
 
   /** Build or retrieve the escrow validator + intent minting policy. */

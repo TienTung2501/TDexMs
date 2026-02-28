@@ -77,7 +77,7 @@ export class WsServer {
         alive: true,
       };
       this.clients.set(clientId, client);
-      logger.info({ clientId, total: this.clients.size }, 'WS client connected');
+      logger.debug({ clientId, total: this.clients.size }, 'WS client connected');
 
       ws.on('message', (raw) => {
         try {
@@ -94,7 +94,7 @@ export class WsServer {
 
       ws.on('close', () => {
         this.clients.delete(clientId);
-        logger.info({ clientId, total: this.clients.size }, 'WS client disconnected');
+        logger.debug({ clientId, total: this.clients.size }, 'WS client disconnected');
       });
 
       ws.on('error', (err) => {

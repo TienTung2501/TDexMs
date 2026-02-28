@@ -28,7 +28,7 @@ export const TOKENS: Record<string, Token> = {
     color: "#0033ad",
   },
   tBTC: {
-    policyId: "test0000000000000000000000000000000000000000000000000001",
+    policyId: "a257a1387d2908c0823a776bc4638ab42217e4682bcd416df0d139de",
     assetName: "74425443",
     ticker: "tBTC",
     name: "Test Bitcoin",
@@ -37,38 +37,18 @@ export const TOKENS: Record<string, Token> = {
     image: "https://ivory-deaf-guineafowl-894.mypinata.cloud/ipfs/bafkreigqrejn2u3eiclyx4fnfoownopkjcmjm2atsqvl6c4koyboi2647a?pinataGatewayToken=ZF-2NSDMZeCixzMlrJNPo0-N-mcMc51IGpbOuHB5uduKMyNRGFVkOu9QbYj8HO13",
     color: "#f7931a",
   },
-  tUSDT: {
-    policyId: "test0000000000000000000000000000000000000000000000000002",
+  tUSD: {
+    policyId: "a257a1387d2908c0823a776bc4638ab42217e4682bcd416df0d139de",
     assetName: "7455534454",
-    ticker: "tUSDT",
-    name: "Test Tether USD",
+    ticker: "tUSD",
+    name: "Test USD Stablecoin",
     decimals: 6,
     logo: "💲",
     image: "https://ivory-deaf-guineafowl-894.mypinata.cloud/ipfs/bafkreia6nhyo7edo5vtraapffk3auczsz4spyl2gs7lmpseitocinbl6pa?pinataGatewayToken=ZF-2NSDMZeCixzMlrJNPo0-N-mcMc51IGpbOuHB5uduKMyNRGFVkOu9QbYj8HO13",
     color: "#26a17b",
   },
-  tPOLYGON: {
-    policyId: "test0000000000000000000000000000000000000000000000000003",
-    assetName: "74504f4c59474f4e",
-    ticker: "tPOL",
-    name: "Test Polygon",
-    decimals: 6,
-    logo: "⬡",
-    image: "https://ivory-deaf-guineafowl-894.mypinata.cloud/ipfs/bafkreiafxotb762oywlvydqpo4juvilrycz7uiwu46auw2paeoy3jgzhbi?pinataGatewayToken=ZF-2NSDMZeCixzMlrJNPo0-N-mcMc51IGpbOuHB5uduKMyNRGFVkOu9QbYj8HO13",
-    color: "#8247e5",
-  },
-  tNEAR: {
-    policyId: "test0000000000000000000000000000000000000000000000000004",
-    assetName: "744e454152",
-    ticker: "tNEAR",
-    name: "Test NEAR Protocol",
-    decimals: 6,
-    logo: "Ⓝ",
-    image: "https://ivory-deaf-guineafowl-894.mypinata.cloud/ipfs/bafkreibyko4tnhy6g4s3hp6f4pfjdueu7yon3ijckzob4f4phmudwavloi?pinataGatewayToken=ZF-2NSDMZeCixzMlrJNPo0-N-mcMc51IGpbOuHB5uduKMyNRGFVkOu9QbYj8HO13",
-    color: "#00ec97",
-  },
   tSOL: {
-    policyId: "test0000000000000000000000000000000000000000000000000005",
+    policyId: "20446ece88e97c06cdac86db0dbf7515b44a3de4aa09e04c66ea0340",
     assetName: "74534f4c",
     ticker: "tSOL",
     name: "Test Solana",
@@ -159,15 +139,36 @@ export async function loadDynamicTokens(): Promise<void> {
     const { fetchTokenRegistry } = await import("./api");
     const remote = await fetchTokenRegistry();
     const merged = new Map<string, Token>();
+    // Build ticker→key lookup so remote tokens can overwrite static by ticker
+    const tickerToKey = new Map<string, string>();
     // Static tokens first (higher quality metadata)
     for (const t of TOKEN_LIST) {
       const key = t.policyId ? `${t.policyId}.${t.assetName}` : "lovelace";
       merged.set(key, t);
+      tickerToKey.set(t.ticker.toLowerCase(), key);
     }
-    // Overlay dynamic tokens (only add new ones, don't overwrite existing)
+    // Overlay dynamic tokens — merge by policyId key, or update existing by ticker match
     for (const rt of remote) {
       const key = rt.policyId ? `${rt.policyId}.${rt.assetName}` : "lovelace";
-      if (!merged.has(key)) {
+      if (merged.has(key)) {
+        // Already exists with same policyId — keep static metadata
+        continue;
+      }
+      // Check if a static token with the same ticker exists but different policyId
+      const existingKey = tickerToKey.get(rt.ticker.toLowerCase());
+      if (existingKey && existingKey !== key) {
+        // Replace the old static entry with real on-chain data, preserving metadata
+        const existing = merged.get(existingKey)!;
+        merged.delete(existingKey);
+        merged.set(key, {
+          ...existing,
+          policyId: rt.policyId,
+          assetName: rt.assetName,
+          ticker: rt.ticker,
+          decimals: rt.decimals,
+        });
+        tickerToKey.set(rt.ticker.toLowerCase(), key);
+      } else if (!merged.has(key)) {
         merged.set(key, {
           policyId: rt.policyId,
           assetName: rt.assetName,
@@ -176,6 +177,7 @@ export async function loadDynamicTokens(): Promise<void> {
           decimals: rt.decimals,
           logo: "🪙",
         });
+        tickerToKey.set(rt.ticker.toLowerCase(), key);
       }
     }
     _dynamicTokens = Array.from(merged.values());

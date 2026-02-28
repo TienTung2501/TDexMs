@@ -237,4 +237,90 @@ export interface ITxBuilder {
 
   /** Build a TX to deploy the factory UTxO — admin bootstrap */
   buildDeployFactoryTx(params: DeployFactoryTxParams): Promise<BuildTxResult>;
+
+  /** Get all derived validator addresses and policy IDs from the blueprint */
+  getDerivedAddresses(): {
+    escrowAddress: string;
+    escrowHash: string;
+    poolAddress: string;
+    poolHash: string;
+    factoryAddress: string;
+    factoryHash: string;
+    orderAddress: string;
+    intentPolicyId: string;
+    lpPolicyId: string;
+    poolNftPolicyId: string;
+    settingsAddress?: string;
+    settingsParamStatus: 'parameterized' | 'unparameterized' | 'error';
+  };
+
+  /** Read on-chain state from factory/settings/pool validator UTxOs */
+  getOnChainState(): Promise<OnChainProtocolState>;
+}
+
+// ─── On-Chain State Types ────────────────────
+
+export interface OnChainAssetClass {
+  policy_id: string;
+  asset_name: string;
+}
+
+export interface FactoryOnChainState {
+  address: string;
+  utxo_ref: string | null;
+  datum: {
+    factory_nft: OnChainAssetClass;
+    pool_count: number;
+    admin: string;
+    settings_utxo: string; // txHash#index
+  } | null;
+  nfts: OnChainAssetClass[];
+  lovelace: string;
+}
+
+export interface SettingsOnChainState {
+  address: string | null;
+  utxo_ref: string | null;
+  datum: {
+    admin: string;
+    protocol_fee_bps: number;
+    min_pool_liquidity: number;
+    min_intent_size: number;
+    solver_bond: number;
+    fee_collector: string;
+    version: number;
+  } | null;
+  nfts: OnChainAssetClass[];
+  lovelace: string;
+  /** How the settings address was discovered */
+  discovery_method: 'env_config' | 'factory_datum' | 'not_found';
+}
+
+export interface PoolOnChainState {
+  address: string;
+  pool_nft: OnChainAssetClass;
+  utxo_ref: string;
+  datum: {
+    asset_a: OnChainAssetClass;
+    asset_b: OnChainAssetClass;
+    total_lp_tokens: string;
+    fee_numerator: number;
+    protocol_fees_a: string;
+    protocol_fees_b: string;
+    last_root_k: string;
+  };
+  reserves: { asset_a: string; asset_b: string };
+  lovelace: string;
+}
+
+export interface OnChainProtocolState {
+  factory: FactoryOnChainState;
+  settings: SettingsOnChainState;
+  pools: PoolOnChainState[];
+  /** NFT relationship: which NFTs are used where */
+  nft_relationships: {
+    factory_nft: { policy_id: string; asset_name: string; minted_via: string } | null;
+    settings_nft: { policy_id: string; asset_name: string; expected_policy: string } | null;
+    pool_nfts: Array<{ policy_id: string; asset_name: string; pool_pair: string }>;
+  };
 }

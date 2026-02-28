@@ -217,7 +217,7 @@ export class SolverEngine {
       // a previous iteration submitted a TX but timed out waiting for confirmation.
       // Don't re-settle — the TX may still confirm and consume the escrow UTxO.
       if (dbIntent.status === 'FILLING' && dbIntent.settlementTxHash) {
-        this.logger.info(
+        this.logger.debug(
           { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash },
           'Skipping FILLING intent with pending settlement TX — awaiting on-chain confirmation',
         );
@@ -248,7 +248,7 @@ export class SolverEngine {
       return;
     }
 
-    this.logger.info(
+    this.logger.debug(
       { chainCount: chainIntents.length, dbVerifiedCount: intents.length },
       'Processing intents (filtered stale UTxOs)',
     );
@@ -307,7 +307,9 @@ export class SolverEngine {
             const grossB = escrowInfos.filter(e => e.direction === 'BToA').reduce((s, e) => s + e.remainingInput, 0n);
             const hasOpposing = grossA > 0n && grossB > 0n;
 
-            this.logger.info(
+            // Only log at info when there are actually opposing intents (rare & interesting)
+            const nettingLogLevel = hasOpposing ? 'info' : 'debug';
+            this.logger[nettingLogLevel](
               {
                 poolId: batch.poolId,
                 intentCount: batch.intents.length,
@@ -330,9 +332,9 @@ export class SolverEngine {
                 : 'NettingEngine analysis (single direction — no netting possible)',
             );
 
-            // Log individual fill allocations
+            // Log individual fill allocations (debug — fires per intent per cycle)
             for (const fill of plan.fills) {
-              this.logger.info(
+              this.logger.debug(
                 {
                   escrow: `${fill.escrow.txHash.slice(0, 12)}…#${fill.escrow.outputIndex}`,
                   direction: fill.escrow.direction,
@@ -410,7 +412,7 @@ export class SolverEngine {
       for (const subBatch of subBatches) {
         if (subBatch.intents.length > 1) {
           // ── BATCH SETTLEMENT: multiple same-direction intents in one TX ──
-          this.logger.info(
+          this.logger.debug(
             { poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
             'Settling batch of same-direction intents in single TX',
           );
@@ -525,7 +527,7 @@ export class SolverEngine {
           solverAddress: this.config.solverAddress,
         });
 
-        this.logger.info(
+        this.logger.debug(
           { txHash: txResult.txHash, fee: txResult.estimatedFee.toString() },
           'Settlement TX built',
         );

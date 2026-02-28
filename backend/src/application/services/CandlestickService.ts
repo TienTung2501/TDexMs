@@ -173,7 +173,7 @@ export class CandlestickService {
             high: priceDecimal,
             low: priceDecimal,
             close: priceDecimal,
-            volume: volumeStr,
+            volume: '0', // Volume is added by the raw SQL UPDATE below
             txCount: 1,
           },
           update: {

@@ -81,7 +81,7 @@ export class IntentCollector {
       intents.push(intent);
     }
 
-    this.logger.info({ count: intents.length, total: utxos.length }, 'Collected active intents');
+    this.logger.debug({ count: intents.length, total: utxos.length }, 'Collected active intents');
     return intents;
   }
 

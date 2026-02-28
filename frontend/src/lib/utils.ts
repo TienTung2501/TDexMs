@@ -38,11 +38,13 @@ export function formatTokenAmount(
 }
 
 /** Compact large numbers */
-export function formatCompact(value: number): string {
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
-  return value.toFixed(2);
+export function formatCompact(value: number | null | undefined): string {
+  const n = Number(value);
+  if (!isFinite(n) || isNaN(n)) return "0.00";
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(2)}K`;
+  return n.toFixed(2);
 }
 
 /** Format ADA with symbol */

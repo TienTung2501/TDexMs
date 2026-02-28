@@ -167,8 +167,12 @@ export function PriceChart({
   useEffect(() => {
     if (!candleSeriesRef.current || !lineSeriesRef.current || !volumeSeriesRef.current) return;
 
-    // Filter out invalid timestamps (NaN, 0, negative)
-    const validData = data.filter((d) => d.time > 0 && !isNaN(d.time) && isFinite(d.open) && isFinite(d.close));
+    // Filter out invalid timestamps (NaN, 0, negative) and non-finite prices
+    const validData = data
+      .filter((d) => d.time > 0 && !isNaN(d.time) && isFinite(d.open) && isFinite(d.close))
+      // lightweight-charts v5 requires strictly ascending time — sort then deduplicate
+      .sort((a, b) => a.time - b.time)
+      .filter((d, i, arr) => i === 0 || d.time !== arr[i - 1].time);
 
     if (validData.length === 0) {
       // Clear all series when no valid data

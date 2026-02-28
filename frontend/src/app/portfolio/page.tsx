@@ -227,7 +227,7 @@ export default function PortfolioPage() {
                 <div
                   className="bg-amber-500 transition-all"
                   style={{ width: `${lockedPct}%` }}
-                  title={`Locked in Orders: ${lockedPct.toFixed(1)}%`}
+                  title={`Locked in Intents: ${lockedPct.toFixed(1)}%`}
                 />
                 <div
                   className="bg-purple-500 transition-all"
@@ -242,7 +242,7 @@ export default function PortfolioPage() {
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-2 w-2 rounded-full bg-amber-500" />
-                  Orders ({lockedPct.toFixed(0)}%)
+                  Intents ({lockedPct.toFixed(0)}%)
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="inline-block h-2 w-2 rounded-full bg-purple-500" />
@@ -309,7 +309,7 @@ export default function PortfolioPage() {
             className="data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
           >
             <Clock className="h-3.5 w-3.5 mr-1.5" />
-            Open Orders
+            Active Intents
             {openOrders.length > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-[10px] px-1.5">
                 {openOrders.length}
@@ -321,7 +321,7 @@ export default function PortfolioPage() {
             className="data-[state=active]:bg-primary/10 data-[state=active]:text-primary"
           >
             <History className="h-3.5 w-3.5 mr-1.5" />
-            Order History
+            Intent History
           </TabsTrigger>
           <TabsTrigger
             value="lp-positions"
@@ -350,7 +350,7 @@ export default function PortfolioPage() {
               ) : openOrders.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
                   <Clock className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No active orders</p>
+                  <p className="text-sm">No active intents</p>
                   <p className="text-xs mt-1">
                     Place a swap or order on the{" "}
                     <Link href="/" className="text-primary hover:underline">
@@ -548,7 +548,7 @@ export default function PortfolioPage() {
               ) : history.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
                   <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No order history yet</p>
+                  <p className="text-sm">No intent history yet</p>
                 </div>
               ) : (
                 <div className="divide-y">
@@ -714,14 +714,14 @@ export default function PortfolioPage() {
               ) : (
                 /* ── Legacy LP positions (from /portfolio/liquidity) ── */
                 <div className="divide-y">
-                  {positions.map((pos) => {
+                  {positions.map((pos, idx) => {
                     const [tickerA, tickerB] = pos.pair.split("_");
                     const tokenA = TOKENS[tickerA];
                     const tokenB = TOKENS[tickerB];
                     const cv = pos.current_value ?? { asset_a_amount: 0, asset_b_amount: 0, total_value_usd: 0 };
                     return (
                       <div
-                        key={pos.pool_id}
+                        key={pos.poolId ?? `lp-legacy-${idx}`}
                         className="flex flex-col md:flex-row md:items-center justify-between px-4 py-4 gap-4"
                       >
                         <div className="flex items-center gap-3">
@@ -764,7 +764,7 @@ export default function PortfolioPage() {
                           <span className="text-xs font-semibold text-primary">
                             ≈ ${formatCompact(cv.total_value_usd)}
                           </span>
-                          <Link href={`/pools/${pos.pool_id}`}>
+                          <Link href={`/pools/${pos.poolId}`}>
                             <Button size="sm" variant="outline" className="h-7 text-xs">
                               Withdraw
                             </Button>
