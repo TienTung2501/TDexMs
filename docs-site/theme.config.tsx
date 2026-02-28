@@ -4,12 +4,21 @@ import React from 'react'
 const config: DocsThemeConfig = {
   logo: (
     <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800 }}>
-      <svg width="28" height="28" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="4" fill="none" />
-        <path d="M30 55 L45 35 L55 50 L70 30" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-        <path d="M30 70 L45 55 L55 65 L70 45" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.5" />
-        <circle cx="50" cy="50" r="6" fill="currentColor" />
-      </svg>
+      <span style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '28px',
+        height: '28px',
+        borderRadius: '8px',
+        background: 'rgba(59,130,246,0.15)',
+        color: '#3B82F6',
+        fontWeight: 700,
+        fontSize: '16px',
+        lineHeight: 1,
+      }}>
+        S
+      </span>
       SolverNet DEX
     </span>
   ),

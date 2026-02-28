@@ -2,178 +2,288 @@
 
 import { Callout } from 'nextra/components'
 
-All AMM formulas in SolverNet DEX are implemented in `backend/src/solver/AmmMath.ts` and **exactly match** the on-chain validation in the pool validator. This ensures off-chain calculations never disagree with on-chain enforcement.
+All mathematical functions used by the solver and on-chain validators. Implementations use **BigInt integer arithmetic** exclusively — no floating point.
 
-## Constants
+**Source**: `backend/src/solver/AmmMath.ts` (236 lines)
+**On-chain**: `lib/solvernet/math.ak` (328 lines, 10 unit tests)
 
-```typescript
-const D = 10_000n  // Fee denominator (basis points)
-```
+## Swap Calculation
 
-## Swap Formula
+### calculateSwapOutput
 
-Given:
-- $R_{in}$ = input reserve
-- $R_{out}$ = output reserve  
-- $\Delta_{in}$ = input amount
-- $f$ = fee numerator (e.g., 30 for 0.3%)
+Given an input amount, calculate the output after fees:
 
-**Output amount:**
+$$output = \frac{reserveOut \times inputAfterFee}{reserveIn + inputAfterFee}$$
 
-$$
-\Delta_{out} = \frac{R_{out} \times \Delta_{in} \times (D - f)}{R_{in} \times D + \Delta_{in} \times (D - f)}
-$$
+Where:
+
+$$inputAfterFee = inputAmount - fee$$
+$$fee = \frac{inputAmount \times feeNumerator}{feeDenominator}$$
 
 ```typescript
 static calculateSwapOutput(
+  inputAmount: bigint,
   reserveIn: bigint,
   reserveOut: bigint,
-  inputAmount: bigint,
   feeNumerator: bigint
 ): bigint {
-  const numerator = reserveOut * inputAmount * (D - feeNumerator)
-  const denominator = reserveIn * D + inputAmount * (D - feeNumerator)
-  return numerator / denominator
+  const FEE_DENOMINATOR = 10000n;
+  const fee = (inputAmount * feeNumerator) / FEE_DENOMINATOR;
+  const inputAfterFee = inputAmount - fee;
+  const numerator = reserveOut * inputAfterFee;
+  const denominator = reserveIn + inputAfterFee;
+  return numerator / denominator;  // Integer division (floor)
 }
 ```
 
-<Callout type="info">
-All calculations use **integer arithmetic** (`BigInt`). No floating-point operations. This matches the Aiken validator which also uses integer math. Division truncates toward zero.
-</Callout>
+**Example**:
+```
+Input:     100,000 ADA
+ReserveIn: 1,000,000 ADA
+ReserveOut: 500,000 TOKEN
+Fee:       30 (0.30%)
 
-## Protocol Fee
+fee = 100,000 × 30 / 10,000 = 300 ADA
+inputAfterFee = 99,700 ADA
+output = 500,000 × 99,700 / (1,000,000 + 99,700)
+       = 49,850,000,000 / 1,099,700
+       = 45,330 TOKEN
+```
 
-Protocol fee is 1/6 of the LP fee:
+### calculateProtocolFee
 
-$$
-\text{protocolFee} = \frac{\Delta_{in} \times f}{D \times 6}
-$$
+Protocol's share of the trading fee:
+
+$$protocolFee = \frac{fee}{protocolFeeShare}$$
 
 ```typescript
 static calculateProtocolFee(
-  inputAmount: bigint,
+  fee: bigint,
+  protocolFeeShare: bigint = 6n  // 1/6 of fee
+): bigint {
+  return fee / protocolFeeShare;
+}
+```
+
+### calculateRequiredInput (Reverse)
+
+Given a desired output, calculate the required input:
+
+$$requiredInput = \frac{reserveIn \times output \times feeDenominator}{(reserveOut - output) \times (feeDenominator - feeNumerator)}$$
+
+```typescript
+static calculateRequiredInput(
+  outputAmount: bigint,
+  reserveIn: bigint,
+  reserveOut: bigint,
   feeNumerator: bigint
 ): bigint {
-  return (inputAmount * feeNumerator / D) / 6n
+  const FEE_DENOMINATOR = 10000n;
+  const numerator = reserveIn * outputAmount * FEE_DENOMINATOR;
+  const denominator = (reserveOut - outputAmount) * (FEE_DENOMINATOR - feeNumerator);
+  return numerator / denominator + 1n;  // Round up
 }
 ```
 
-## Price Impact
+## Price Functions
 
-$$
-\text{priceImpact} = 1 - \frac{\Delta_{out} / \Delta_{in}}{R_{out} / R_{in}}
-$$
+### meetsLimitPrice
 
-Simplified:
+Check if a swap execution meets a limit order's price target:
 
-$$
-\text{priceImpact} = \frac{\Delta_{in}}{R_{in} + \Delta_{in}}
-$$
+$$\frac{outputAmount}{inputAmount} \geq \frac{minOutput}{budget}$$
 
-```typescript
-static calculatePriceImpact(
-  reserveIn: bigint,
-  inputAmount: bigint
-): number {
-  // Returns as decimal (e.g., 0.05 = 5%)
-  return Number(inputAmount) / Number(reserveIn + inputAmount)
-}
-```
-
-## LP Token Calculations
-
-### Initial Liquidity (Pool Creation)
-
-$$
-LP_{\text{initial}} = \sqrt{\text{depositA} \times \text{depositB}} - 1000
-$$
-
-```typescript
-static calculateInitialLp(depositA: bigint, depositB: bigint): bigint {
-  const product = depositA * depositB
-  const sqrtProduct = sqrt(product) // Integer square root
-  return sqrtProduct - 1000n        // Min liquidity lock
-}
-```
-
-The locked 1000 LP tokens prevent division-by-zero attacks and ensure the pool can never be fully drained.
-
-### Subsequent Deposit
-
-$$
-LP_{\text{minted}} = \min\left(\frac{\text{totalLP} \times \text{depositA}}{R_A}, \quad \frac{\text{totalLP} \times \text{depositB}}{R_B}\right)
-$$
-
-```typescript
-static calculateLpTokensForDeposit(
-  totalLp: bigint,
-  reserveA: bigint,
-  reserveB: bigint,
-  depositA: bigint,
-  depositB: bigint
-): bigint {
-  const lpFromA = (totalLp * depositA) / reserveA
-  const lpFromB = (totalLp * depositB) / reserveB
-  return lpFromA < lpFromB ? lpFromA : lpFromB
-}
-```
-
-### Withdrawal
-
-$$
-\text{amountA} = \frac{R_A \times LP_{\text{burned}}}{\text{totalLP}}
-$$
-
-$$
-\text{amountB} = \frac{R_B \times LP_{\text{burned}}}{\text{totalLP}}
-$$
-
-```typescript
-static calculateWithdrawal(
-  totalLp: bigint,
-  reserveA: bigint,
-  reserveB: bigint,
-  lpBurned: bigint
-): { amountA: bigint; amountB: bigint } {
-  return {
-    amountA: (reserveA * lpBurned) / totalLp,
-    amountB: (reserveB * lpBurned) / totalLp,
-  }
-}
-```
-
-## Limit Price Check
-
-For limit orders, the solver verifies that the execution price meets the user's target:
-
-$$
-\Delta_{out} \times \text{priceDen} \geq \Delta_{in\_consumed} \times \text{priceNum}
-$$
+In integer arithmetic (cross multiply to avoid division):
 
 ```typescript
 static meetsLimitPrice(
   outputAmount: bigint,
-  inputConsumed: bigint,
-  priceNumerator: bigint,
-  priceDenominator: bigint
+  inputAmount: bigint,
+  minOutput: bigint,
+  budget: bigint
 ): boolean {
-  return outputAmount * priceDenominator >= inputConsumed * priceNumerator
+  return outputAmount * budget >= minOutput * inputAmount;
+}
+```
+
+### Price Impact
+
+$$impact = 1 - \frac{effectivePrice}{spotPrice}$$
+
+Where:
+$$spotPrice = \frac{reserveOut}{reserveIn}$$
+$$effectivePrice = \frac{output}{input}$$
+
+## Liquidity Calculations
+
+### calculateInitialLp
+
+First liquidity deposit:
+
+$$LP_{initial} = \sqrt{amountA \times amountB} - minimumLiquidity$$
+
+```typescript
+static calculateInitialLp(amountA: bigint, amountB: bigint): bigint {
+  const MINIMUM_LIQUIDITY = 1000n;
+  return bigIntSqrt(amountA * amountB) - MINIMUM_LIQUIDITY;
+}
+```
+
+`minimumLiquidity` (1000 tokens) is permanently locked to prevent a zero-liquidity griefing attack.
+
+### calculateDepositLp
+
+Subsequent deposits:
+
+$$LP_{minted} = \min\left(\frac{amountA \times totalLP}{reserveA}, \frac{amountB \times totalLP}{reserveB}\right)$$
+
+```typescript
+static calculateDepositLp(
+  amountA: bigint, amountB: bigint,
+  reserveA: bigint, reserveB: bigint,
+  totalLp: bigint
+): bigint {
+  const lpFromA = (amountA * totalLp) / reserveA;
+  const lpFromB = (amountB * totalLp) / reserveB;
+  return lpFromA < lpFromB ? lpFromA : lpFromB;
+}
+```
+
+### calculateWithdrawal
+
+LP token redemption:
+
+$$outputA = \frac{lpBurned \times reserveA}{totalLP}$$
+$$outputB = \frac{lpBurned \times reserveB}{totalLP}$$
+
+```typescript
+static calculateWithdrawal(
+  lpBurned: bigint,
+  reserveA: bigint, reserveB: bigint,
+  totalLp: bigint
+): { amountA: bigint; amountB: bigint } {
+  return {
+    amountA: (lpBurned * reserveA) / totalLp,
+    amountB: (lpBurned * reserveB) / totalLp,
+  };
+}
+```
+
+## Root K (Manipulation Resistance)
+
+The pool validator tracks $\sqrt{k}$ to prevent reserves manipulation:
+
+$$rootK = \sqrt{reserveA \times reserveB}$$
+
+After every swap, the validator checks:
+
+$$rootK_{new} \geq rootK_{old}$$
+
+```typescript
+static calculateRootK(reserveA: bigint, reserveB: bigint): bigint {
+  return bigIntSqrt(reserveA * reserveB);
+}
+```
+
+### bigIntSqrt (Newton's Method)
+
+```typescript
+static bigIntSqrt(n: bigint): bigint {
+  if (n < 0n) throw new Error('Square root of negative');
+  if (n < 2n) return n;
+
+  let x = n;
+  let y = (x + 1n) / 2n;
+  while (y < x) {
+    x = y;
+    y = (x + n / x) / 2n;
+  }
+  return x;
+}
+```
+
+## Partial Fill Calculations
+
+### calculateMaxAbsorbableAmount
+
+Binary search for the maximum input that keeps output/input ratio above the limit price:
+
+```typescript
+static calculateMaxAbsorbableAmount(
+  reserveIn: bigint, reserveOut: bigint,
+  feeNumerator: bigint,
+  minOutput: bigint, budget: bigint
+): bigint {
+  let lo = 0n;
+  let hi = reserveIn;  // Upper bound
+
+  while (lo < hi) {
+    const mid = (lo + hi + 1n) / 2n;
+    const output = this.calculateSwapOutput(mid, reserveIn, reserveOut, feeNumerator);
+
+    if (this.meetsLimitPrice(output, mid, minOutput, budget)) {
+      lo = mid;
+    } else {
+      hi = mid - 1n;
+    }
+  }
+  return lo;
+}
+```
+
+### calculateMaxIntentFill
+
+Binary search for the maximum fill amount that satisfies the intent's minOutput:
+
+```typescript
+static calculateMaxIntentFill(
+  intent: Intent, pool: PoolState
+): bigint {
+  const proportionalMinOutput = (fillAmount: bigint) =>
+    (fillAmount * intent.minOutput) / intent.inputAmount;
+
+  let lo = 0n;
+  let hi = intent.remainingInput;
+
+  while (lo < hi) {
+    const mid = (lo + hi + 1n) / 2n;
+    const output = this.calculateSwapOutput(
+      mid, pool.reserveIn, pool.reserveOut, pool.feeNumerator
+    );
+
+    if (output >= proportionalMinOutput(mid)) {
+      lo = mid;
+    } else {
+      hi = mid - 1n;
+    }
+  }
+  return lo;
 }
 ```
 
 ## Numerical Safety
 
-All formulas follow these rules to match on-chain validators:
+<Callout type="warning">
+All operations use BigInt to prevent overflow and precision loss. Key rules:
 
-1. **Integer only** — No `Number` or `parseFloat` in calculations
-2. **Overflow-safe** — `BigInt` handles arbitrarily large values
-3. **Truncation** — Division always truncates toward zero (matches Plutus behavior)
-4. **Order of operations** — Multiply before divide to preserve precision
+- **Division**: Always integer floor division (`/`). Round up explicitly with `+ 1n` when needed.
+- **Ordering**: Multiply before dividing to preserve precision.
+- **Overflow**: BigInt has no overflow — arbitrary precision.
+- **Equivalence**: On-chain Aiken and off-chain TypeScript functions must produce identical results.
+</Callout>
 
-```typescript
-// ✅ Correct: multiply first
-const result = (a * b) / c
+### On-Chain vs Off-Chain Parity
 
-// ❌ Wrong: divide first loses precision
-const result = (a / c) * b
-```
+The Aiken `math.ak` functions mirror the TypeScript `AmmMath.ts` exactly:
+
+| TypeScript | Aiken | Purpose |
+|-----------|-------|---------|
+| `calculateSwapOutput` | `calculate_swap_output` | Swap formula |
+| `calculateProtocolFee` | `calculate_swap_fee` | Fee computation |
+| `calculateInitialLp` | `calculate_initial_lp` | First LP deposit |
+| `calculateDepositLp` | `calculate_deposit_lp` | Subsequent LP |
+| `calculateWithdrawal` | `calculate_withdrawal` | LP redemption |
+| `calculateRootK` | `calculate_root_k` | Manipulation check |
+| `meetsLimitPrice` | `meets_limit_price` | Limit order verification |
+
+Both use the same integer arithmetic — results are byte-for-byte identical.

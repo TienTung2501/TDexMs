@@ -1,93 +1,82 @@
 # Solver Engine
 
-import { Callout } from 'nextra/components'
+import { Cards, Card, Callout } from 'nextra/components'
 
-The **Solver Engine** is the off-chain component that drives the entire DEX. It collects user intents from the blockchain, finds optimal execution paths, nets opposing trades, and submits batched settlement transactions.
+The solver engine is the off-chain component that collects, optimizes, and settles swap intents.
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        Solver Engine                              │
-│                                                                  │
-│   ┌────────────┐    ┌─────────────┐    ┌────────────────┐       │
-│   │  Intent    │    │   Route     │    │    Batch       │       │
-│   │ Collector  │───►│ Optimizer   │───►│   Builder      │       │
-│   └────────────┘    └─────────────┘    └───────┬────────┘       │
-│         │                                       │                │
-│         │ Query escrow                         │ Group by pool  │
-│         │ UTxOs from chain                      │                │
-│         │                                       ▼                │
-│   ┌─────┴──────┐                       ┌────────────────┐       │
-│   │  Filter &  │                       │   Netting      │       │
-│   │  Validate  │                       │   Engine       │       │
-│   └────────────┘                       └───────┬────────┘       │
-│                                                 │                │
-│                                                 │ Net opposing   │
-│                                                 │ reduce AMM     │
-│                                                 ▼                │
-│                                        ┌────────────────┐       │
-│                                        │ TX Submitter   │       │
-│                                        │ Build, sign,   │       │
-│                                        │ submit batch TX│       │
-│                                        └────────────────┘       │
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                      SolverEngine (813 lines)                  │
+│                                                                │
+│  runIteration() — executes every SOLVER_INTERVAL ms            │
+│                                                                │
+│  Phase 1          Phase 2           Phase 3          Phase 4   │
+│  ┌──────────┐    ┌────────────┐    ┌──────────┐    ┌────────┐ │
+│  │ Collect  │───▶│ Route +    │───▶│ Netting  │───▶│ Settle │ │
+│  │ Intents  │    │ Batch      │    │ Analysis │    │  + TX  │ │
+│  └──────────┘    └────────────┘    └──────────┘    └────────┘ │
+│       │                │                │               │      │
+│  IntentCollector  RouteOptimizer   NettingEngine   TxSubmitter  │
+│  (171 lines)      BatchBuilder     (273 lines)    (170 lines)  │
+│                   (118 lines)                                  │
+│                   RouteOptimizer                               │
+│                   (295 lines)                                  │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-## Pipeline Stages
+## 6-Stage Pipeline
 
-The solver runs in a continuous loop (default: every 5 seconds):
+| Stage | Module | Purpose |
+|-------|--------|---------|
+| 1 | `IntentCollector` | Query Blockfrost for escrow UTxOs, parse datums |
+| 2 | `SolverEngine.filter` | Remove stale, expired, and in-progress intents |
+| 3 | `RouteOptimizer` | Find best route (direct / multi-hop / partial fill) |
+| 4 | `BatchBuilder` | Group by pool, enforce TX limits, split batches |
+| 5 | `NettingEngine` | Offset opposing flows, calculate net AMM residual |
+| 6 | `TxSubmitter` | Build settlement TX, sign, submit, confirm |
 
-| Stage | Component | Input | Output |
-|---|---|---|---|
-| 1. **Collect** | IntentCollector | Escrow script address | Raw UTxOs with parsed datums |
-| 2. **Filter** | DB cross-reference | Raw UTxOs + DB intents | Validated active intents |
-| 3. **Route** | RouteOptimizer | Active intents | Intents with optimal pool routes |
-| 4. **Batch** | BatchBuilder | Routed intents | Grouped batches by pool |
-| 5. **Net** | NettingEngine | Pool batches | Netted batches with reduced AMM load |
-| 6. **Settle** | TxSubmitter | Netted batches | Settlement TXs submitted on-chain |
+## Netting Advantage
 
-## How Netting Works
+Netting can dramatically reduce AMM pool impact:
 
-The key innovation of SolverNet DEX is **netting** — cross-matching opposing intents before hitting the AMM.
+```
+Without netting:                     With netting:
+  Intent 1: 100 ADA → TOKEN         Net flow: 20 ADA → TOKEN
+  Intent 2:  80 ADA ← TOKEN         (80 ADA offset directly)
+  Total AMM: 180 ADA through pool   Total AMM: 20 ADA through pool
+  Price impact: HIGH                 Price impact: LOW
+```
 
-### Example
-
-Consider 3 intents for the ADA/USDT pool:
-
-| Intent | Direction | Amount |
-|---|---|---|
-| Alice | ADA → USDT | 1000 ADA |
-| Bob | USDT → ADA | 800 ADA worth of USDT |
-| Carol | ADA → USDT | 500 ADA |
-
-**Without netting:** All 3 intents go through the AMM separately → 2500 ADA of total impact.
-
-**With netting:**
-- ADA → USDT gross: 1500 ADA (Alice + Carol)
-- USDT → ADA gross: 800 ADA worth
-- **Net residual:** Only 700 ADA worth goes through the AMM
-- Alice and Carol get part of their USDT directly from Bob
-- **53% less price impact!**
-
-<Callout type="info">
-Netting provides **better prices** for all participants. It's a Pareto improvement — no one gets a worse price, and most get a better one. See [Netting Engine](/docs/solver-engine/netting) for the detailed algorithm.
-</Callout>
+In a batch of 3 intents, netting achieved **53% improvement** — only 47% of the total flow hit the AMM.
 
 ## Configuration
 
 | Variable | Default | Description |
-|---|---|---|
-| `SOLVER_ENABLED` | `false` | Enable/disable the solver loop |
-| `SOLVER_BATCH_WINDOW_MS` | `5000` | Loop interval (ms) |
-| `SOLVER_MAX_RETRIES` | `3` | Max retry attempts per failed batch |
-| `SOLVER_MIN_PROFIT_LOVELACE` | `100000` | Minimum profit threshold |
-| `SOLVER_SEED_PHRASE` | — | 24-word mnemonic for solver wallet |
+|----------|---------|-------------|
+| `SOLVER_ENABLED` | `true` | Enable/disable solver |
+| `SOLVER_INTERVAL` | `30000` | Milliseconds between iterations |
+| `SOLVER_MAX_BATCH_SIZE` | `15` | Maximum intents per TX |
+| `SOLVER_MIN_PROFIT_LOVELACE` | `0` | Minimum profit threshold |
+| `SOLVER_PARTIAL_FILL_ENABLED` | `true` | Allow partial fills |
+| `SOLVER_MAX_TX_CPU` | `14000000000` | 14B CPU execution units |
+| `SOLVER_MAX_TX_MEM` | `10000000` | 10M memory units |
 
-## Components
-
-- [Solver Pipeline →](/docs/solver-engine/pipeline)
-- [Netting Engine →](/docs/solver-engine/netting)
-- [AMM Math →](/docs/solver-engine/amm-math)
-- [Batch Builder →](/docs/solver-engine/batch-builder)
-- [Route Optimizer →](/docs/solver-engine/route-optimizer)
+<Cards>
+  <Card title="Pipeline" href="/docs/solver-engine/pipeline">
+    Detailed stage-by-stage pipeline walkthrough
+  </Card>
+  <Card title="Netting" href="/docs/solver-engine/netting">
+    Netting algorithm with numerical examples
+  </Card>
+  <Card title="AMM Math" href="/docs/solver-engine/amm-math">
+    Swap, LP, and price calculations
+  </Card>
+  <Card title="Batch Builder" href="/docs/solver-engine/batch-builder">
+    Grouping, constraints, and priority
+  </Card>
+  <Card title="Route Optimizer" href="/docs/solver-engine/route-optimizer">
+    Direct routes, multi-hop, and partial fills
+  </Card>
+</Cards>

@@ -2,94 +2,161 @@
 
 import { Callout } from 'nextra/components'
 
-## Trading Page (`/`)
+Detailed breakdown of each page in the SolverNet DEX frontend.
 
-The main trading interface. This is the default landing page.
+## Trading Page (`/trade`)
+
+The main trading interface with four panels:
+
+```
+┌─────────────────────┬────────────────────┐
+│                     │                    │
+│   Price Chart       │    Swap Card       │
+│   (TradingView)     │    - Token inputs  │
+│                     │    - Quote display  │
+│                     │    - Swap button    │
+│                     │                    │
+├─────────────────────┤                    │
+│                     │                    │
+│   Recent Trades     ├────────────────────┤
+│   (Live feed)       │   Pool Stats       │
+│                     │   - Price, TVL     │
+│                     │   - 24h volume     │
+└─────────────────────┴────────────────────┘
+```
+
+**Key Features:**
+- Real-time price chart with multiple timeframes
+- Token selection with wallet balance display
+- Live quote updates as amount changes
+- Recent trades feed from the selected pool
+- Pool statistics sidebar
+
+## Pools Page (`/pools`)
+
+Lists all active liquidity pools with key metrics.
+
+| Column | Description |
+|--------|-------------|
+| Pair | Token pair (e.g., ADA/TOKEN) |
+| TVL | Total value locked in ADA |
+| Volume 24h | Trading volume in last 24 hours |
+| Fees 24h | Fee revenue in last 24 hours |
+| APY | Estimated annual percentage yield |
+| Actions | Trade / Add Liquidity buttons |
+
+**Sorting:** Click column headers to sort by any metric.
+
+## Pool Detail (`/pools/[id]`)
+
+Detailed view of a specific pool with tabs:
+
+1. **Overview** — TVL chart, volume chart, price chart, key stats
+2. **Swap History** — Recent trades in this pool with direction, amounts, time
+3. **Liquidity** — Add/remove liquidity forms
+4. **Info** — Contract addresses, fee structure, pool parameters
+
+## Orders Page (`/orders`)
+
+Create and manage advanced orders.
+
+### Order Types
+
+| Type | Description | Trigger |
+|------|-------------|---------|
+| **Limit** | Buy/sell at a target price | Pool price reaches target |
+| **DCA** | Invest fixed amounts at intervals | Time interval elapsed |
+| **Stop-Loss** | Sell when price drops | Pool price falls below threshold |
 
 ### Layout
 
 ```
-┌──────────────────────────────────────────────────┐
-│  Header: Pair Selector | Price | 24h Change |    │
-│          Volume | TVL | Fill Rate                │
-├─────────────────────────────┬────────────────────┤
-│                             │                    │
-│     TradingView Chart       │    Swap Card       │
-│     (Candlestick + Volume)  │    ────────        │
-│                             │    Input Asset     │
-│                             │    Amount          │
-│                             │    ↕               │
-│                             │    Output Asset    │
-│                             │    Est. Output     │
-│                             │    [Swap Button]   │
-│                             │                    │
-│                             │    Tabs:           │
-│                             │    Swap|Limit|DCA  │
-├─────────────────────────────┤    |Stop-Loss      │
-│                             │                    │
-│  Pseudo-Orderbook           │    Price Impact    │
-│  Buy side | Sell side       │    Fee             │
-│                             │    Rate            │
-├─────────────────────────────┴────────────────────┤
-│  Trading Footer: Recent trades, open intents     │
-└──────────────────────────────────────────────────┘
+┌─────────────────────┬────────────────────┐
+│                     │                    │
+│   Order Entry       │   Active Orders    │
+│   - Type selector   │   - Status badges  │
+│   - Token inputs    │   - Cancel buttons │
+│   - Price/params    │   - Progress bars  │
+│   - Create button   │                    │
+│                     │                    │
+├─────────────────────┴────────────────────┤
+│                                          │
+│   Order History                          │
+│   - Completed, cancelled, expired orders │
+│                                          │
+└──────────────────────────────────────────┘
 ```
-
-## Pools Page (`/pools`)
-
-Lists all available liquidity pools with sorting and filtering.
-
-### Features
-
-- Pool list with TVL, volume, APY metrics
-- Sort by TVL, volume, or APY
-- Click to view pool details
-- Deposit/Withdraw modals
-- Pool creation (admin only)
-
-## Orders Page (`/orders`)
-
-Manage advanced orders.
-
-### Tabs
-
-- **Active Orders** — Currently open limit/DCA/stop-loss orders
-- **Order History** — Filled-and cancelled orders
-- **Create Order** — Form for creating new orders
 
 ## Portfolio Page (`/portfolio`)
 
-Wallet portfolio overview.
+Comprehensive wallet overview with four sections:
 
-### Sections
+### Summary
+- Total balance in USD and ADA
+- Balance breakdown: Wallet / Locked in Orders / Locked in LP
+- Token allocation pie chart
+- Portfolio performance line chart
 
-- **Summary** — Total value, PnL, trade count
-- **LP Positions** — Active liquidity positions with pool share %
-- **Open Intents** — Pending swap intents
-- **Open Orders** — Active advanced orders
-- **Trade History** — Complete transaction history
+### Open Positions
+- Active intents and orders with progress tracking
+- Cancel and reclaim actions
+- Expiration countdown timers
+
+### Trade History
+- Completed swaps with execution details
+- Explorer links for each transaction
+- Filter by status and type
+
+### LP Positions
+- Active liquidity positions across pools
+- LP token value and share percentage
+- One-click withdraw button
 
 ## Analytics Page (`/analytics`)
 
-Protocol-wide analytics dashboard.
+Protocol-wide metrics and charts:
 
-### Widgets
+| Metric | Description |
+|--------|-------------|
+| Total TVL | Sum of all pool reserves in USD |
+| Volume 24h | Total trading volume in last 24 hours |
+| Fees 24h | Total fee revenue in last 24 hours |
+| Fill Rate | Percentage of intents successfully filled |
+| Unique Traders | Number of distinct wallet addresses |
 
-- TVL over time (line chart)
-- Volume over time (bar chart)
-- Fee revenue (cumulative)
-- Active traders (unique wallets)
-- Pool distribution (pie chart)
-- Fill rate trend
+**Charts:**
+- TVL over time (30 days)
+- Volume bar chart (daily)
+- Fee revenue trend
 
 ## Admin Page (`/admin`)
 
-Admin-only management panel. Only accessible when connected with the admin wallet.
+<Callout type="warning">
+Admin page is only accessible to wallets matching the configured `ADMIN_ADDRESS`.
+</Callout>
 
-### Features
+### Protocol Hub
 
-- Protocol settings management
-- Fee collection from pools
-- Pool creation and closure
-- Intent reclaim management
-- System health monitoring
+Step-by-step protocol deployment:
+
+1. **Deploy Settings** — Create settings UTxO with protocol parameters
+2. **Deploy Factory** — Deploy pool factory contract
+3. **Create Pool** — Bootstrap initial liquidity pool
+
+### Revenue Dashboard
+
+- Pending fees per pool
+- One-click fee collection
+- 30-day fee growth chart
+
+### Solver Control
+
+- Real-time solver status (running, batches, success rate)
+- Manual solver trigger button
+- Active intents and pending orders count
+
+### Protocol Settings
+
+- Update fee parameters
+- Change admin address
+- View on-chain state

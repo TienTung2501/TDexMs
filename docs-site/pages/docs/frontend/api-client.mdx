@@ -2,56 +2,38 @@
 
 import { Callout } from 'nextra/components'
 
-The frontend uses a typed API client (`frontend/src/lib/api.ts`) to communicate with the backend.
+The frontend uses a centralized API client for all backend communication.
 
-## Configuration
-
-```typescript
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL 
-  || 'https://tdexms.onrender.com'
-```
-
-## Client Structure
+## Client Setup
 
 ```typescript
-// frontend/src/lib/api.ts
+// lib/api.ts
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-    public details?: unknown
-  ) {
-    super(message)
-  }
-}
-
-async function fetchApi<T>(
-  endpoint: string, 
+async function apiFetch<T>(
+  path: string,
   options?: RequestInit
 ): Promise<T> {
-  const url = `${API_BASE_URL}/v1${endpoint}`
-  const response = await fetch(url, {
+  const url = `${API_BASE}/v1${path}`;
+
+  const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options?.headers,
     },
-    ...options,
-  })
-  
-  const data = await response.json()
-  
-  if (!response.ok) {
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
     throw new ApiError(
-      response.status,
-      data.error?.code || 'UNKNOWN',
-      data.error?.message || 'Unknown error',
-      data.error?.details
-    )
+      error.code || 'UNKNOWN',
+      error.message || res.statusText,
+      res.status
+    );
   }
-  
-  return data.data as T
+
+  return res.json();
 }
 ```
 
@@ -60,103 +42,249 @@ async function fetchApi<T>(
 ### Health
 
 ```typescript
-api.health.check()        // GET /health
-api.health.ready()        // GET /health/ready
+// Check API health
+const health = await apiFetch('/health');
 ```
 
-### Quote
+### Quotes
 
 ```typescript
-api.quote.get({
-  inputAsset: 'lovelace',
-  outputAsset: 'abc...TOKEN',
-  amount: '100000000',
-  slippage: 0.5,
-})
+// Get swap quote
+const quote = await apiFetch(
+  `/quote?inputAsset=lovelace&outputAsset=${unit}&inputAmount=${amount}`
+);
 ```
 
 ### Intents
 
 ```typescript
-api.intents.create({
-  creatorAddress: 'addr_test1qz...',
-  inputAsset: 'lovelace',
-  outputAsset: 'abc...TOKEN',
-  inputAmount: '100000000',
-  minimumOutput: '49000000',
-})
+// Create intent
+const result = await apiFetch('/intents', {
+  method: 'POST',
+  body: JSON.stringify({
+    creator: address,
+    inputPolicyId: '',
+    inputAssetName: '',
+    inputAmount: '100000000',
+    outputPolicyId: policyId,
+    outputAssetName: assetName,
+    minOutput: quote.minOutput,
+    deadline: Math.floor(Date.now() / 1000) + 3600,
+    partialFill: false,
+    senderAddress: address,
+    changeAddress: address,
+  }),
+});
 
-api.intents.list({ address, status, limit, offset })
-api.intents.get(intentId)
-api.intents.cancel(intentId, { creatorAddress })
+// List user's intents
+const intents = await apiFetch(`/intents?address=${address}&limit=20`);
+
+// Cancel intent
+const cancelResult = await apiFetch(`/intents/${intentId}`, {
+  method: 'DELETE',
+  body: JSON.stringify({ senderAddress: address }),
+});
 ```
 
 ### Pools
 
 ```typescript
-api.pools.list({ sort: 'tvl', order: 'desc' })
-api.pools.get(poolId)
-api.pools.create({ assetA, assetB, amountA, amountB, fee, creatorAddress })
-api.pools.deposit(poolId, { amountA, amountB, depositorAddress })
-api.pools.withdraw(poolId, { lpAmount, withdrawerAddress, minA, minB })
-api.pools.history(poolId)
-api.pools.swaps(poolId)
+// List pools
+const pools = await apiFetch('/pools');
+
+// Get pool detail
+const pool = await apiFetch(`/pools/${poolId}`);
+
+// Get pool swaps
+const swaps = await apiFetch(`/pools/${poolId}/swaps?limit=50`);
+
+// Get pool history
+const history = await apiFetch(`/pools/${poolId}/history?days=30`);
+
+// Add liquidity
+const deposit = await apiFetch(`/pools/${poolId}/deposit`, {
+  method: 'POST',
+  body: JSON.stringify({ amountA, amountB, depositorAddress, changeAddress }),
+});
+
+// Remove liquidity
+const withdraw = await apiFetch(`/pools/${poolId}/withdraw`, {
+  method: 'POST',
+  body: JSON.stringify({ lpTokensToBurn, withdrawerAddress, changeAddress }),
+});
+```
+
+### Tokens
+
+```typescript
+// Get dynamic token list
+const { tokens } = await apiFetch('/tokens');
 ```
 
 ### Orders
 
 ```typescript
-api.orders.create({ 
-  creatorAddress, orderType, inputAsset, outputAsset,
-  totalBudget, priceNumerator, priceDenominator,
-  dcaInterval, dcaAmountPerInterval,
-  expiresInSeconds
-})
-api.orders.list({ creator, status, type })
-api.orders.get(orderId)
-api.orders.cancel(orderId)
+// Create order
+const order = await apiFetch('/orders', {
+  method: 'POST',
+  body: JSON.stringify({ type: 'LIMIT', /* ... */ }),
+});
+
+// List orders
+const orders = await apiFetch(`/orders?creator=${address}`);
+
+// Cancel order
+const cancel = await apiFetch(`/orders/${orderId}`, { method: 'DELETE' });
 ```
 
-### Chart
+### Chart Data
 
 ```typescript
-api.chart.config()
-api.chart.candles({ poolId, interval, from, to, limit })
-api.chart.price(poolId)
-api.chart.info(poolId)
-api.chart.history({ symbol, from, to, resolution })
+// Get candles
+const candles = await apiFetch(
+  `/chart/candles?poolId=${poolId}&interval=H4&limit=100`
+);
+
+// Get latest price
+const { price } = await apiFetch(`/chart/price/${poolId}`);
 ```
 
-### Transaction
+### Transactions
 
 ```typescript
-api.tx.submit({ signedTx, intentId })
-api.tx.confirm({ txHash, intentId })
-api.tx.status(txHash)
-```
+// Submit signed TX
+const result = await apiFetch('/tx/submit', {
+  method: 'POST',
+  body: JSON.stringify({ signedTx: cborHex }),
+});
 
-### Analytics
-
-```typescript
-api.analytics.overview()
+// Check TX status
+const status = await apiFetch(`/tx/${txHash}/status`);
 ```
 
 ### Portfolio
 
 ```typescript
-api.portfolio.summary(address)
-api.portfolio.transactions(address)
+// Get portfolio summary
+const summary = await apiFetch(`/portfolio/summary?wallet_address=${address}`);
+
+// Get open orders
+const openOrders = await apiFetch(
+  `/portfolio/open-orders?wallet_address=${address}`
+);
+
+// Get trade history
+const history = await apiFetch(
+  `/portfolio/history?wallet_address=${address}`
+);
+
+// Get LP positions
+const lpPositions = await apiFetch(
+  `/portfolio/liquidity?wallet_address=${address}`
+);
+
+// Build cancel/reclaim TX
+const action = await apiFetch('/portfolio/build-action', {
+  method: 'POST',
+  body: JSON.stringify({ wallet_address, utxo_ref, action_type: 'cancel' }),
+});
+
+// Build LP withdraw TX
+const withdraw = await apiFetch('/portfolio/build-withdraw', {
+  method: 'POST',
+  body: JSON.stringify({ wallet_address, pool_id, lp_tokens_to_burn }),
+});
 ```
 
-### WebSocket
+### Analytics
 
 ```typescript
-api.ws.connect()
-api.ws.subscribePrices(pair)
-api.ws.subscribeIntent(intentId)
-api.ws.subscribePool(poolId)
-api.ws.on('price', callback)
-api.ws.on('intentUpdate', callback)
-api.ws.on('poolUpdate', callback)
-api.ws.disconnect()
+// Protocol overview
+const stats = await apiFetch('/analytics/overview');
+
+// Token info
+const token = await apiFetch(`/analytics/tokens/${policyId}`);
+
+// All prices
+const { prices } = await apiFetch('/analytics/prices');
 ```
+
+## WebSocket Client
+
+```typescript
+// lib/websocket.ts
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001';
+
+export function createWSClient() {
+  const ws = new WebSocket(`${WS_URL}/v1/ws`);
+
+  return {
+    subscribePrices: (pairs: string[]) => {
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        channel: 'prices',
+        params: { pairs },
+      }));
+    },
+
+    subscribeIntent: (intentId: string) => {
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        channel: 'intent',
+        params: { intentId },
+      }));
+    },
+
+    subscribePool: (poolId: string) => {
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        channel: 'pool',
+        params: { poolId },
+      }));
+    },
+
+    onMessage: (handler: (msg: any) => void) => {
+      ws.onmessage = (e) => handler(JSON.parse(e.data));
+    },
+
+    close: () => ws.close(),
+  };
+}
+```
+
+## Error Handling
+
+```typescript
+class ApiError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
+// Usage in components
+try {
+  const result = await apiFetch('/intents', { method: 'POST', body });
+  toast.success('Swap intent created!');
+} catch (error) {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'INSUFFICIENT_FUNDS':
+        toast.error('Insufficient balance for this swap');
+        break;
+      case 'RATE_LIMIT_EXCEEDED':
+        toast.error('Too many requests. Please wait a moment.');
+        break;
+      default:
+        toast.error(error.message);
+    }
+  }
+}
+```
+
+<Callout type="info">
+All API methods return typed responses. Use TypeScript interfaces from the backend's shared types for type safety across the full stack.
+</Callout>

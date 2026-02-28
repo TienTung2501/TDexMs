@@ -2,163 +2,196 @@
 
 import { Callout } from 'nextra/components'
 
+The domain model defines the core business entities, their relationships, and state machines.
+
 ## Core Entities
 
 ### Intent
 
-The `Intent` entity represents a user's swap request. It follows a strict state machine lifecycle.
+An intent represents a user's desire to swap tokens. It is locked in an on-chain escrow until a solver fills it or the user cancels.
 
 ```typescript
 interface Intent {
-  id: string
-  creatorAddress: string          // User's wallet address
-  inputAsset: string              // Asset being sold (e.g., "lovelace")
-  outputAsset: string             // Asset being bought
-  inputAmount: bigint             // Amount being sold
-  minimumOutput: bigint           // Minimum acceptable output
-  actualOutput?: bigint           // Actual received amount (after fill)
-  status: IntentStatus            // Current lifecycle state
-  escrowTxHash?: string           // On-chain escrow TX hash
-  escrowTxIndex?: number          // UTxO output index
-  settlementTxHash?: string       // Settlement TX hash (when filled)
-  expiresAt: Date                 // TTL expiry
-  createdAt: Date
-  updatedAt: Date
+  id: string;
+  status: IntentStatus;
+  creator: string;              // Wallet address (Bech32)
+  inputPolicyId: string;        // "" for ADA
+  inputAssetName: string;       // "" for ADA
+  inputAmount: bigint;          // Lovelace/smallest unit
+  outputPolicyId: string;
+  outputAssetName: string;
+  minOutput: bigint;            // Minimum acceptable output
+  actualOutput?: bigint;        // Actual received (after fill)
+  deadline: bigint;             // Slot number
+  partialFill: boolean;
+  maxPartialFills: number;
+  fillCount: number;
+  remainingInput: bigint;
+  escrowTxHash?: string;
+  escrowOutputIdx?: number;
+  settlementTxHash?: string;
+  solverAddress?: string;
 }
 ```
-
-**Business Rules:**
-- An intent can only be filled if it's `ACTIVE` and not expired
-- An intent can be cancelled if it's `ACTIVE` or `PENDING`
-- Partial fills track the remaining amount
-- Expired intents are automatically reclaimed by the keeper cron
 
 ### Pool
 
-The `Pool` entity represents an AMM liquidity pool with constant-product invariant.
+A constant-product AMM liquidity pool with two assets.
 
 ```typescript
 interface Pool {
-  id: string
-  nftPolicyId: string             // Pool NFT policy ID
-  nftAssetName: string            // Pool NFT asset name
-  assetA: string                  // First asset (always "lovelace" for ADA pairs)
-  assetB: string                  // Second asset (canonical: A < B)
-  reserveA: bigint                // Current reserve of asset A
-  reserveB: bigint                // Current reserve of asset B
-  totalLpTokens: bigint           // Total LP tokens in circulation
-  feeNumerator: number            // Fee in basis points (e.g., 30 = 0.3%)
-  protocolFeeA: bigint            // Accumulated protocol fees (asset A)
-  protocolFeeB: bigint            // Accumulated protocol fees (asset B)
-  tvl: number                     // Total value locked (USD or ADA)
-  volume24h: number               // 24-hour trading volume
-  state: PoolState                // ACTIVE, INACTIVE, CREATING
-  createdAt: Date
+  id: string;
+  poolNftPolicyId: string;      // Unique pool identifier NFT
+  poolNftAssetName: string;
+  assetA: AssetInfo;            // First asset (typically ADA)
+  assetB: AssetInfo;            // Second asset
+  reserveA: bigint;             // Current reserve of A
+  reserveB: bigint;             // Current reserve of B
+  totalLpTokens: bigint;        // LP tokens in circulation
+  feeNumerator: number;         // Fee basis points (e.g., 30 = 0.30%)
+  protocolFeeAccA: bigint;      // Accumulated protocol fees (A)
+  protocolFeeAccB: bigint;      // Accumulated protocol fees (B)
+  tvlAda: bigint;               // Total value locked
+  state: PoolState;
+  txHash: string;               // Current UTxO reference
+  outputIndex: number;
+  lpPolicyId?: string;          // LP token minting policy
+}
+
+interface AssetInfo {
+  policyId: string;
+  assetName: string;
+  decimals: number;
+  ticker?: string;
 }
 ```
 
-**Business Rules:**
-- Assets are canonically ordered: `assetA < assetB` (enforced by factory validator)
-- Active reserves exclude accumulated protocol fees
-- Price = `reserveB / reserveA` (for A→B direction)
-- Minimum liquidity of 1000 LP tokens is locked forever (prevents division by zero)
-
 ### Order
 
-The `Order` entity supports advanced order types: Limit, DCA, and Stop-Loss.
+An advanced order (Limit, DCA, or Stop-Loss) locked in an on-chain escrow with execution conditions.
 
 ```typescript
 interface Order {
-  id: string
-  creatorAddress: string
-  orderType: 'LIMIT' | 'DCA' | 'STOP_LOSS'
-  inputAsset: string
-  outputAsset: string
-  totalBudget: bigint             // Total budget for the order
-  remainingBudget: bigint         // Remaining unexecuted budget
-  priceNumerator: bigint          // Target price (numerator)
-  priceDenominator: bigint        // Target price (denominator)
-  
-  // DCA-specific
-  dcaInterval?: number            // Interval between executions (seconds)
-  dcaAmountPerInterval?: bigint   // Amount per execution
-  lastExecutedAt?: Date           // Last DCA execution time
-  
-  // Stop-Loss specific
-  stopLossPrice?: number          // Trigger price
-  
-  status: OrderStatus
-  escrowTxHash?: string
-  escrowTxIndex?: number
-  expiresAt: Date
+  id: string;
+  type: OrderType;              // LIMIT | DCA | STOP_LOSS
+  status: OrderStatus;
+  creator: string;
+  inputPolicyId: string;
+  inputAssetName: string;
+  outputPolicyId: string;
+  outputAssetName: string;
+  // Limit / Stop-Loss fields
+  inputAmount?: bigint;
+  priceNumerator?: bigint;
+  priceDenominator?: bigint;
+  // DCA fields
+  totalBudget?: bigint;
+  amountPerInterval?: bigint;
+  intervalSlots?: number;
+  remainingBudget?: bigint;
+  executedIntervals?: number;
+  // Common
+  deadline: bigint;
+  escrowTxHash?: string;
+  escrowOutputIdx?: number;
 }
 ```
 
 ## Value Objects
 
+Value objects are immutable and compared by value rather than identity.
+
+### Asset Unit
+
 ```typescript
-// Immutable value types
-type AssetUnit = string        // "lovelace" or "{policyId}{assetName}"
-type TokenPair = { assetA: AssetUnit; assetB: AssetUnit }
-type SwapDirection = 'AToB' | 'BToA'
+// Represents a Cardano native asset: policyId + assetName
+// ADA is represented as empty strings: { policyId: "", assetName: "" }
+type AssetUnit = {
+  policyId: string;   // 56 hex chars (28 bytes) or "" for ADA
+  assetName: string;  // Hex-encoded asset name or "" for ADA
+};
 
-interface SwapResult {
-  outputAmount: bigint
-  feeAmount: bigint
-  protocolFee: bigint
-  priceImpact: number
-  effectivePrice: number
+// Helper: convert to Lucid-style unit string
+function toUnit(asset: AssetUnit): string {
+  if (!asset.policyId) return 'lovelace';
+  return asset.policyId + asset.assetName;
 }
+```
 
-interface SwapRoute {
-  type: 'direct' | 'multi-hop'
-  pools: Pool[]
-  estimatedOutput: bigint
-  totalPriceImpact: number
+### Amount
+
+```typescript
+// All amounts are BigInt to prevent floating-point errors
+// ADA amounts are in lovelace (1 ADA = 1,000,000 lovelace)
+type Amount = bigint;
+
+// Display conversion
+function toDisplay(amount: bigint, decimals: number): string {
+  const str = amount.toString().padStart(decimals + 1, '0');
+  const whole = str.slice(0, -decimals) || '0';
+  const frac = str.slice(-decimals);
+  return `${whole}.${frac}`;
 }
 ```
 
 ## Enums
 
-```typescript
-enum IntentStatus {
-  CREATED = 'CREATED',
-  PENDING = 'PENDING',
-  ACTIVE = 'ACTIVE',
-  FILLING = 'FILLING',
-  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
-  FILLED = 'FILLED',
-  CANCELLING = 'CANCELLING',
-  CANCELLED = 'CANCELLED',
-  EXPIRED = 'EXPIRED',
-  RECLAIMED = 'RECLAIMED',
-}
+### IntentStatus
 
-enum OrderType {
-  LIMIT = 'LIMIT',
-  DCA = 'DCA',
-  STOP_LOSS = 'STOP_LOSS',
-}
+| Value | Description | Valid Transitions |
+|-------|-------------|-------------------|
+| `CREATED` | Initial state | → `PENDING` |
+| `PENDING` | TX submitted to chain | → `ACTIVE` |
+| `ACTIVE` | Escrow confirmed on-chain | → `FILLING`, `CANCELLING`, `EXPIRED` |
+| `FILLING` | Solver building settlement | → `FILLED`, `PARTIALLY_FILLED`, `ACTIVE` (on failure) |
+| `PARTIALLY_FILLED` | Some input consumed | → `FILLING`, `FILLED`, `EXPIRED` |
+| `FILLED` | Fully settled | Terminal state |
+| `CANCELLING` | Cancel TX submitted | → `CANCELLED` |
+| `CANCELLED` | Cancel confirmed | Terminal state |
+| `EXPIRED` | Deadline passed | → `RECLAIMED` |
+| `RECLAIMED` | Expired funds recovered | Terminal state |
 
-enum OrderStatus {
-  CREATED = 'CREATED',
-  PENDING = 'PENDING',
-  ACTIVE = 'ACTIVE',
-  PARTIALLY_FILLED = 'PARTIALLY_FILLED',
-  FILLED = 'FILLED',
-  CANCELLED = 'CANCELLED',
-  EXPIRED = 'EXPIRED',
-}
+### OrderType
 
-enum PoolState {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-  CREATING = 'CREATING',
-}
+| Value | Trigger Condition | Use Case |
+|-------|-------------------|----------|
+| `LIMIT` | Price reaches target | Buy/sell at a specific price |
+| `DCA` | Time interval elapsed | Dollar-cost average over time |
+| `STOP_LOSS` | Price drops below threshold | Automatic risk management |
 
-enum CandleInterval {
-  H4 = 'H4',
-  D1 = 'D1',
-  W1 = 'W1',
-}
+### PoolState
+
+| Value | Description |
+|-------|-------------|
+| `ACTIVE` | Pool is live and accepting trades |
+| `INACTIVE` | Pool is paused by admin |
+| `CREATING` | Pool creation TX pending confirmation |
+
+### CandleInterval
+
+| Value | Duration | Use Case |
+|-------|----------|----------|
+| `M1` | 1 minute | Scalping / real-time |
+| `M5` | 5 minutes | Short-term trading |
+| `M15` | 15 minutes | Intraday analysis |
+| `H1` | 1 hour | Swing trading |
+| `H4` | 4 hours | Position trading |
+| `D1` | 1 day | Daily analysis |
+| `W1` | 1 week | Long-term trends |
+
+## Entity Relationships
+
+```
+Intent (standalone)
+  └── Referenced by Swap.intentId (optional)
+
+Pool
+  ├── has many Swap
+  ├── has many PoolHistory
+  ├── has many Candle
+  └── has many PriceTick
+
+Order (standalone)
+
+ProtocolStats (standalone, periodic snapshots)
 ```

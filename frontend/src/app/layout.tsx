@@ -18,6 +18,9 @@ export const metadata: Metadata = {
   description:
     "Decentralized exchange on Cardano powered by solver architecture for optimal trade execution.",
   keywords: ["Cardano", "DEX", "DeFi", "Solver", "Intent", "Swap", "AMM"],
+  icons: {
+    icon: "/icon.svg",
+  },
 };
 
 export default function RootLayout({

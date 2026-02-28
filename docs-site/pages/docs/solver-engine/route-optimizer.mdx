@@ -2,121 +2,235 @@
 
 import { Callout } from 'nextra/components'
 
-The **Route Optimizer** finds the best execution path for each intent. It currently supports direct pool swaps, with multi-hop routing planned for future releases.
+The route optimizer finds the best execution path for each intent.
+
+**Source**: `backend/src/solver/RouteOptimizer.ts` (295 lines)
 
 ## Route Types
 
-| Type | Description | Example |
-|---|---|---|
-| **Direct** | Single pool swap | ADA → USDT via ADA/USDT pool |
-| **Multi-hop** | Through intermediate pools | TOKEN → ADA → USDT via TOKEN/ADA and ADA/USDT pools |
+| Route | Description | When Used |
+|-------|-------------|-----------|
+| `DIRECT` | Swap directly in the target pool | Default for most swaps |
+| `DIRECT_PARTIAL` | Partial fill in the target pool | When full fill exceeds price impact |
+| `MULTI_HOP` | Route via ADA as intermediate | When no direct pool exists |
 
 ## Direct Route
 
+The default and most common route:
+
 ```typescript
-class RouteOptimizer {
-  async findBestRoute(intent: ValidIntent): Promise<SwapRoute> {
-    // Try direct pool first
-    const directPool = await this.poolRepo.findByAssets(
-      intent.inputAsset,
-      intent.outputAsset
-    )
-    
-    if (directPool && directPool.state === 'ACTIVE') {
-      const direction = this.getDirection(intent, directPool)
-      const output = directPool.calculateSwapOutput(
-        intent.inputAmount, 
-        direction
-      )
-      const priceImpact = directPool.calculatePriceImpact(
-        intent.inputAmount,
-        direction
-      )
-      
-      return {
-        type: 'direct',
-        pools: [directPool],
-        direction,
-        estimatedOutput: output.outputAmount,
-        totalFee: output.feeAmount,
-        priceImpact,
-      }
-    }
-    
-    // Try multi-hop
-    return this.findMultiHopRoute(intent)
+async findBestRoute(intent: ValidIntent): Promise<RoutedIntent> {
+  // Find pool for this token pair
+  const pool = await this.findPool(
+    intent.inputAsset, intent.outputAsset
+  );
+
+  if (!pool) {
+    return this.tryMultiHop(intent); // No direct pool
   }
+
+  // Calculate full fill output
+  const output = AmmMath.calculateSwapOutput(
+    intent.remainingInput,
+    pool.reserveIn,
+    pool.reserveOut,
+    pool.feeNumerator
+  );
+
+  // Check if output meets proportional minOutput
+  const proportionalMin = (intent.remainingInput * intent.minOutput)
+    / intent.inputAmount;
+
+  if (output >= proportionalMin) {
+    return {
+      ...intent,
+      route: 'DIRECT',
+      fillAmount: intent.remainingInput,
+      expectedOutput: output,
+      pool,
+    };
+  }
+
+  // Full fill doesn't meet price → try partial
+  return this.tryPartialFill(intent, pool);
 }
 ```
 
-## Multi-Hop Routing
+## Partial Fill (Binary Search)
 
-For pairs without a direct pool, the optimizer searches for intermediate pools:
+When a full fill would cause too much price impact, the optimizer finds the maximum amount that still meets the user's price target:
 
 ```typescript
-private async findMultiHopRoute(intent: ValidIntent): Promise<SwapRoute> {
-  // Find all pools containing the input asset
-  const inputPools = await this.poolRepo.findByAsset(intent.inputAsset)
-  
-  // Find all pools containing the output asset  
-  const outputPools = await this.poolRepo.findByAsset(intent.outputAsset)
-  
-  // Find common intermediate assets
-  const routes: MultiHopCandidate[] = []
-  
-  for (const pool1 of inputPools) {
-    const intermediateAsset = pool1.assetA === intent.inputAsset 
-      ? pool1.assetB 
-      : pool1.assetA
-    
-    for (const pool2 of outputPools) {
-      if (pool2.assetA === intermediateAsset || pool2.assetB === intermediateAsset) {
-        // Found a 2-hop route: input → intermediate → output
-        const output1 = pool1.calculateSwapOutput(intent.inputAmount, /*...*/)
-        const output2 = pool2.calculateSwapOutput(output1.outputAmount, /*...*/)
-        
-        routes.push({
-          pools: [pool1, pool2],
-          estimatedOutput: output2.outputAmount,
-          totalPriceImpact: /*...*/,
-        })
-      }
-    }
+async tryPartialFill(
+  intent: ValidIntent,
+  pool: PoolState
+): Promise<RoutedIntent | null> {
+  if (!this.config.partialFillEnabled) return null;
+
+  // Binary search for max fill amount
+  const maxFill = AmmMath.calculateMaxIntentFill(intent, pool);
+
+  // Enforce 10% minimum threshold (prevent dust fills)
+  const minFillAmount = intent.remainingInput / 10n;
+
+  if (maxFill < minFillAmount) {
+    return null; // Pool too shallow
   }
-  
-  if (routes.length === 0) {
-    throw new NoRouteError(intent.inputAsset, intent.outputAsset)
+
+  // Check fill count hasn't exceeded max
+  if (intent.fillCount >= intent.maxPartialFills) {
+    return null; // Too many partial fills already
   }
-  
-  // Return route with best output
-  return routes.sort((a, b) => 
-    Number(b.estimatedOutput - a.estimatedOutput)
-  )[0]
+
+  const output = AmmMath.calculateSwapOutput(
+    maxFill, pool.reserveIn, pool.reserveOut, pool.feeNumerator
+  );
+
+  return {
+    ...intent,
+    route: 'DIRECT_PARTIAL',
+    fillAmount: maxFill,
+    expectedOutput: output,
+    pool,
+  };
 }
 ```
+
+### Binary Search Algorithm
+
+```
+Goal: Find max fillAmount where output/fillAmount ≥ minOutput/inputAmount
+
+lo = 0
+hi = remainingInput
+
+while lo < hi:
+  mid = (lo + hi + 1) / 2
+  output = calculateSwapOutput(mid, reserveIn, reserveOut, fee)
+  
+  if output × inputAmount ≥ minOutput × mid:
+    lo = mid      (can fill this much)
+  else:
+    hi = mid - 1  (too much impact)
+
+return lo
+```
+
+This converges in ~60 iterations (log2 of typical BigInt range) and produces the exact maximum fill amount that satisfies the user's price.
+
+## Multi-Hop Route
+
+When there's no direct pool for a token pair (e.g., TOKEN_A → TOKEN_B), route through ADA:
+
+```typescript
+async tryMultiHop(intent: ValidIntent): Promise<RoutedIntent | null> {
+  // Step 1: TOKEN_A → ADA
+  const poolA = await this.findPool(intent.inputAsset, ADA_ASSET);
+  if (!poolA) return null;
+
+  const adaAmount = AmmMath.calculateSwapOutput(
+    intent.remainingInput,
+    poolA.reserveIn, poolA.reserveOut, poolA.feeNumerator
+  );
+
+  // Step 2: ADA → TOKEN_B
+  const poolB = await this.findPool(ADA_ASSET, intent.outputAsset);
+  if (!poolB) return null;
+
+  const finalOutput = AmmMath.calculateSwapOutput(
+    adaAmount,
+    poolB.reserveIn, poolB.reserveOut, poolB.feeNumerator
+  );
+
+  const proportionalMin = (intent.remainingInput * intent.minOutput)
+    / intent.inputAmount;
+
+  if (finalOutput < proportionalMin) return null;
+
+  return {
+    ...intent,
+    route: 'MULTI_HOP',
+    fillAmount: intent.remainingInput,
+    expectedOutput: finalOutput,
+    pools: [poolA, poolB],
+    intermediateAmount: adaAmount,
+  };
+}
+```
+
+```
+Multi-hop:  TOKEN_A ──▶ Pool 1 ──▶ ADA ──▶ Pool 2 ──▶ TOKEN_B
+
+Fee applied twice:
+  Hop 1: 0.3% fee on TOKEN_A → ADA
+  Hop 2: 0.3% fee on ADA → TOKEN_B
+  Total effective fee: ~0.6%
+```
+
+## Pool Cache
+
+The route optimizer maintains a short-lived cache to avoid redundant Blockfrost queries:
+
+```typescript
+private poolCache: Map<string, { pool: PoolState; expiry: number }>;
+private CACHE_TTL = 1_000; // 1 second
+
+async findPool(assetA: AssetClass, assetB: AssetClass): Promise<PoolState | null> {
+  const key = `${assetA.unit}_${assetB.unit}`;
+
+  const cached = this.poolCache.get(key);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.pool;
+  }
+
+  const pool = await this.fetchPoolFromDb(assetA, assetB);
+  if (pool) {
+    this.poolCache.set(key, { pool, expiry: Date.now() + this.CACHE_TTL });
+  }
+  return pool;
+}
+```
+
+The 1-second TTL ensures reserves are fresh (pools can change between solver iterations) while avoiding redundant queries within a single iteration.
 
 ## Route Selection Criteria
 
-When multiple routes are available, the optimizer selects based on:
+| Criteria | Weight | Description |
+|----------|--------|-------------|
+| Output amount | Primary | Higher output is better |
+| Price impact | Secondary | Lower impact preferred |
+| Fill percentage | Tertiary | Full fill > partial fill |
+| Hop count | Quaternary | Direct > multi-hop (fewer fees) |
 
-1. **Output amount** — Highest output wins (primary criterion)
-2. **Price impact** — Lower impact preferred for large trades
-3. **Pool liquidity** — Deeper pools provide better execution
-4. **Number of hops** — Fewer hops preferred (less fee accumulation)
+```typescript
+selectBestRoute(routes: RoutedIntent[]): RoutedIntent {
+  return routes.sort((a, b) => {
+    // Prefer higher output
+    const outputDiff = Number(b.expectedOutput - a.expectedOutput);
+    if (outputDiff !== 0) return outputDiff;
 
-<Callout type="warning">
-Multi-hop swaps accumulate fees at each hop. A 2-hop swap through two 0.3% fee pools has an effective fee of ~0.6%. The optimizer accounts for this when comparing routes.
+    // Prefer full fills
+    if (a.route === 'DIRECT' && b.route !== 'DIRECT') return -1;
+    if (b.route === 'DIRECT' && a.route !== 'DIRECT') return 1;
+
+    // Prefer fewer hops
+    return (a.pools?.length || 1) - (b.pools?.length || 1);
+  })[0];
+}
+```
+
+## Pro-Rata MinOutput
+
+For partial fills, the minOutput is calculated proportionally:
+
+$$proportionalMinOutput = \frac{fillAmount \times minOutput}{inputAmount}$$
+
+This ensures a partial fill of 60% of the input still delivers at least 60% of the minimum expected output.
+
+```typescript
+const proportionalMin = (fillAmount * intent.minOutput) / intent.inputAmount;
+```
+
+<Callout type="info">
+**Future**: Solver competition will allow multiple solvers to bid on intent batches. The user's intent specifies constraints (minOutput, deadline), and solvers compete to provide the best execution. This is similar to an auction model where the solver offering the most tokens wins.
 </Callout>
-
-## Future: Solver Competition
-
-The architecture is designed for future multi-solver competition:
-
-```
-Intent submitted → Multiple solvers compete
-                   Solver A: Direct route → quote 100 USDT
-                   Solver B: Multi-hop → quote 102 USDT  ← Wins!
-                   Solver C: Cross-DEX → quote 101 USDT
-```
-
-Each solver can implement their own proprietary routing algorithms, with the protocol ensuring that users always get at least their `minOutput`.

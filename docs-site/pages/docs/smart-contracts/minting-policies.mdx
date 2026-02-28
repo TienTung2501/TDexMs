@@ -2,141 +2,173 @@
 
 import { Callout } from 'nextra/components'
 
-SolverNet DEX uses three minting policies to manage on-chain identity tokens. These are crucial for the security model — they prevent replay attacks, identify pool UTxOs, and track LP shares.
+Three minting policies control token creation and destruction in SolverNet.
 
 ## Intent Token Policy
 
-**File:** `smartcontract/validators/intent_token_policy.ak`  
-**Parameters:** None
+**File**: `validators/intent_token_policy.ak` (91 lines)
+**Parameters**: None (unparameterized)
+**Purpose**: One-shot NFT that identifies and tracks each swap intent / order.
 
-### Purpose
+### MintIntentToken
 
-Creates **one-shot authentication tokens** for escrow and order UTxOs. Each intent gets a unique NFT that:
+Creates a unique token bound to a specific UTxO:
 
-1. Proves the escrow UTxO is legitimate (not a spoofed copy)
-2. Must be burned when the intent is filled (prevents double-fill)
-3. Has a unique name derived from the consumed UTxO
-
-### Token Name Derivation
-
-```aiken
-// Token name = hash of the consumed UTxO reference
-// This guarantees uniqueness (each UTxO can only be consumed once)
-let token_name = blake2b_256(
-  serialise(consumed_utxo.transaction_id) 
-  <> serialise(consumed_utxo.output_index)
-)
+```
+Checks:
+1. One-shot pattern: a specific UTxO is consumed in the TX
+2. Token name = blake2b_256(txId ++ outputIndex) — derived from consumed UTxO
+3. Exactly 1 token minted with that name
+4. Guarantees globally unique token (UTxO can only be consumed once)
 ```
 
-### Minting Rules
+```aiken
+// Token name derivation
+fn derive_token_name(utxo: OutputReference) -> AssetName {
+  blake2b_256(
+    serialise(utxo.transaction_id) |> bytearray.concat(
+      serialise(utxo.output_index)
+    )
+  )
+}
+```
 
-| Action | Conditions |
-|---|---|
-| **Mint (qty = 1)** | Must consume a specific UTxO (the "one-shot" input); token name = hash of that UTxO |
-| **Burn (qty = -1)** | Always allowed (needed for Fill/Cancel/Reclaim) |
+<Callout>
+The intent token policy has **no parameters**, unlike what older docs may suggest. It derives the escrow validator hash at runtime from the datum, not from script parameterization.
+</Callout>
 
-### Security Properties
+### BurnIntentToken
 
-- **Uniqueness:** The token name is derived from a UTxO hash — each UTxO can only be consumed once, so each token name is unique
-- **Anti-replay:** If a solver tries to reuse an old escrow UTxO, the intent token won't match
-- **Provable consumption:** Burning the token proves the escrow was properly consumed
+Destroys intent tokens during settlement or cancellation:
+
+```
+Checks:
+1. Negative quantity in mint field (burning)
+2. Allows multiple burns per TX — enables batch settlement
+   where the solver burns tokens for all settled intents in one TX
+```
+
+This is critical for efficiency: a single settlement TX can burn 15 intent tokens simultaneously.
 
 ---
 
 ## Pool NFT Policy
 
-**File:** `smartcontract/validators/pool_nft_policy.ak`  
-**Parameters:** `factory_hash: ScriptHash`, `admin_vkh: VerificationKeyHash`
+**File**: `validators/pool_nft_policy.ak` (117 lines)
+**Parameters**: `factory_validator_hash: ScriptHash`, `admin_vkh: VerificationKeyHash`
+**Purpose**: Thread token that ensures pool UTxO continuity.
 
-### Purpose
+### MintPoolNFT
 
-Creates exactly **one NFT per pool** using the **thread token pattern**. This NFT:
-
-1. Uniquely identifies the pool UTxO (no two pools share the same NFT)
-2. Must remain at the pool validator address at all times
-3. Can only be burned when closing a pool (admin-only)
-
-### Minting Rules
-
-| Action | Conditions |
-|---|---|
-| **Mint (qty = 1)** | Admin signature required; factory validator referenced (ensuring unique pair); consumed UTxO for unique name |
-| **Burn (qty = -1)** | Admin signature required; pool must be empty (all liquidity withdrawn) |
-
-### Thread Token Pattern
-
-The pool NFT acts as a **thread token** — it threads through the pool's lifetime:
+Creates the unique NFT that lives in a pool UTxO:
 
 ```
-Create Pool TX                 Swap TX                    Close Pool TX
-┌──────────┐                ┌──────────┐                ┌──────────┐
-│ Mint NFT │──► Pool UTxO ──│ Pool UTxO│──► Pool UTxO ──│ Burn NFT │
-│ qty = 1  │    + NFT      │ + NFT    │    + NFT      │ qty = -1 │
-└──────────┘                └──────────┘                └──────────┘
+Checks:
+1. One-shot pattern (consumed UTxO derives token name)
+2. Exactly 1 token minted
+3. Factory validator invoked in the same TX
+   (ensures pool creation goes through proper validation)
 ```
 
-Every transaction that interacts with the pool must:
-1. Consume the pool UTxO containing the NFT
-2. Produce a new pool UTxO containing the same NFT
+The Pool NFT serves as a **thread token**:
+- Every pool TX must prove the NFT continues from input to output
+- Prevents attackers from creating fake pool UTxOs
+- Token name is unique per pool (derived from creation UTxO)
 
-This ensures pool state continuity and prevents UTxO splitting attacks.
+### BurnPoolNFT
+
+Destroys the NFT when closing a pool:
+
+```
+Checks:
+1. Admin signature (admin_vkh)
+2. Only admin can burn → only admin can close pools
+```
 
 ---
 
 ## LP Token Policy
 
-**File:** `smartcontract/validators/lp_token_policy.ak`  
-**Parameters:** `pool_hash: ScriptHash`, `factory_hash: ScriptHash`
-
-### Purpose
-
-Manages **LP (Liquidity Provider) tokens** representing proportional ownership of pool reserves.
+**File**: `validators/lp_token_policy.ak` (104 lines)
+**Parameters**: `pool_validator_hash: ScriptHash`, `factory_validator_hash: ScriptHash`
+**Purpose**: Controls LP token minting and burning via forwarding.
 
 ### Forwarding Mint Pattern
 
-<Callout type="info">
-LP Token Policy uses the **Forwarding Mint** pattern — instead of implementing its own validation logic, it **delegates validation to the pool validator**. This ensures LP minting/burning is always consistent with pool operations.
-</Callout>
+The LP Token policy does **not** contain AMM math. Instead, it delegates validation:
 
-```aiken
-// LP Token Policy validation
-validator lp_token_policy(pool_hash, factory_hash) {
-  mint(_redeemer, ctx) {
-    // Verify that the pool validator is being executed in this same TX
-    expect list.any(
-      ctx.transaction.inputs,
-      fn(input) { 
-        payment_credential(input.output.address) == ScriptCredential(pool_hash) 
-      }
-    )
-    // The pool validator handles all LP math validation
-    True
-  }
-}
+```
+┌──────────────────┐         ┌───────────────────┐
+│ LP Token Policy   │────────▶│ Pool Validator     │
+│ "Is pool/factory  │  checks │ (validates math)   │
+│  invoked in TX?"  │         │ OR                 │
+│                   │         │ Factory Validator   │
+└──────────────────┘         │ (validates init)    │
+                             └───────────────────┘
 ```
 
-### LP Token Math
+```
+For any mint/burn of LP tokens:
+1. Check: Pool validator script hash appears in TX inputs or withdrawals
+   OR Factory validator script hash appears in TX inputs or withdrawals
+2. If yes → LP token policy succeeds (Pool/Factory already validated the amounts)
+3. If no → LP token policy fails (unauthorized mint)
+```
 
-**Initial deposit (pool creation):**
+This ensures:
+- **Deposits**: Pool validator verifies proportional deposit and correct LP amount
+- **Withdrawals**: Pool validator verifies LP burned matches proportional withdrawal
+- **Pool creation**: Factory validator verifies initial LP = √(amountA × amountB) - minimum_liquidity
+- LP tokens cannot be minted or burned outside of these validated operations
 
-$$
-LP_{\text{initial}} = \sqrt{\text{depositA} \times \text{depositB}} - 1000
-$$
+### LP Token Naming
 
-The 1000 tokens are locked forever (minimum liquidity).
+Each pool has its own LP token with a unique asset name (derived from the pool creation UTxO). The policy ID is shared across all pools, but the asset name is unique per pool.
 
-**Subsequent deposits:**
+```
+LP Token = (lp_token_policy_id, pool_specific_asset_name)
+```
 
-$$
-LP_{\text{minted}} = \min\left(\frac{\text{totalLP} \times \text{depositA}}{\text{reserveA}}, \frac{\text{totalLP} \times \text{depositB}}{\text{reserveB}}\right)
-$$
+---
 
-**Withdrawals:**
+## Token Summary
 
-$$
-\text{amountA} = \frac{\text{reserveA} \times LP_{\text{burned}}}{\text{totalLP}}
-$$
+| Token | Type | Parameters | Mint Rule | Burn Rule |
+|-------|------|------------|-----------|-----------|
+| Intent Token | One-shot NFT | None | UTxO consumed, blake2b name, exactly 1 | Any negative amount (batch burns) |
+| Pool NFT | Thread Token | factory_hash, admin_vkh | UTxO consumed, factory invoked | Admin signature |
+| LP Token | Fungible | pool_hash, factory_hash | Pool or Factory validator invoked | Pool validator invoked |
 
-$$
-\text{amountB} = \frac{\text{reserveB} \times LP_{\text{burned}}}{\text{totalLP}}
-$$
+## Interaction Diagram
+
+```
+                    ┌─────────────────┐
+                    │  Intent Token   │
+                    │  Policy         │
+                    │  (no params)    │
+                    └────────┬────────┘
+                             │ mints/burns for
+                    ┌────────▼────────┐
+              ┌─────│  Escrow         │─────┐
+              │     │  Validator      │     │
+              │     └─────────────────┘     │
+              │                             │
+    fills against                    fills against
+              │                             │
+    ┌─────────▼──────────┐    ┌────────────▼────────┐
+    │  Pool Validator     │    │  Order Validator    │
+    │  (params: admin)    │    │  (params: intent    │
+    │                     │    │   token policy)     │
+    └──────┬──────────────┘    └─────────────────────┘
+           │
+    ┌──────▼──────────────┐    ┌─────────────────────┐
+    │  LP Token Policy     │    │  Pool NFT Policy    │
+    │  (forwards to pool)  │    │  (params: factory,  │
+    └──────────────────────┘    │   admin)            │
+                                └──────────┬──────────┘
+                                           │
+                                ┌──────────▼──────────┐
+                                │  Factory Validator   │
+                                │  (params: pool_hash) │
+                                └─────────────────────┘
+```

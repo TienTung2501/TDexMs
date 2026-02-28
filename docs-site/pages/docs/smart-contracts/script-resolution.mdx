@@ -1,104 +1,191 @@
-# Script Resolution Order
+# Script Resolution
 
 import { Callout } from 'nextra/components'
 
-## Dependency Graph
+SolverNet uses **parameterized scripts** that reference each other. This creates a dependency DAG that must be resolved in a specific order.
 
-Smart contracts in SolverNet DEX have a strict dependency order. Some validators take the hash of other validators as parameters (parameterized scripts). This creates a **DAG (Directed Acyclic Graph)** that must be resolved in order.
-
-```
-Step 1:  escrow_validator (no params)          → escrow_hash
-Step 2:  pool_validator(admin_vkh)             → pool_hash
-Step 3:  intent_token_policy (no params)       → intent_policy_id
-Step 4:  factory_validator(pool_hash)          → factory_hash
-Step 5:  lp_token_policy(pool_hash, factory_hash) → lp_policy_id
-Step 6:  pool_nft_policy(factory_hash, admin_vkh) → nft_policy_id
-Step 7:  order_validator(intent_policy_id)     → order_hash
-```
-
-## Dependency Diagram
+## Dependency DAG
 
 ```
-                    ┌───────────────┐
-                    │  admin_vkh    │ (external parameter)
-                    └───┬───────┬───┘
-                        │       │
-                        ▼       │
-              ┌──────────────┐  │
-         ┌───►│pool_validator│  │      ┌──────────────────┐
-         │    │  (Step 2)    │  │      │ escrow_validator  │
-         │    └──────┬───────┘  │      │   (Step 1)       │
-         │           │         │      │  No dependencies  │
-         │           ▼         │      └──────────────────┘
-         │  ┌────────────────┐ │
-         │  │factory_validator│ │      ┌──────────────────┐
-         │  │   (Step 4)     │ │      │ intent_token_policy│
-         │  └───┬────────┬───┘ │      │   (Step 3)       │
-         │      │        │     │      │  No dependencies  │
-         │      ▼        ▼     ▼      └────────┬─────────┘
-         │ ┌─────────┐ ┌───────────┐            │
-         │ │lp_token │ │pool_nft   │            ▼
-         │ │ policy  │ │  policy   │   ┌──────────────────┐
-         │ │(Step 5) │ │ (Step 6)  │   │ order_validator  │
-         │ └─────────┘ └───────────┘   │   (Step 7)       │
-         │                             └──────────────────┘
-         │
-    pool_hash flows to:
-    factory_validator, lp_token_policy
+Step 1:  Intent Token Policy (no params)
+            │
+Step 2:  ┌──▼───────────────────────────────┐
+         │  Escrow Validator (no params)     │
+         │  Order Validator (intent_policy)  │
+         └──────────────────────────────────┘
+            │
+Step 3:  Pool Validator (admin_vkh)
+            │
+Step 4:  Factory Validator (pool_hash)
+            │
+Step 5:  ┌──▼───────────────────────────────────┐
+         │  Pool NFT Policy (factory_hash, admin)│
+         │  LP Token Policy (pool_hash, factory) │
+         └──────────────────────────────────────┘
+            │
+Step 6:  Settings Validator (settings_nft)
+            │
+Step 7:  Final addresses computed
 ```
 
-## Resolution in Code
+## Resolution Order
 
-The backend resolves scripts at startup:
+The backend resolves all scripts at startup in `TxBuilder`:
+
+| Step | Script | Inputs | Output |
+|------|--------|--------|--------|
+| 1 | Intent Token Policy | (none) | `intent_token_policy_id` |
+| 2a | Escrow Validator | (none) | `escrow_validator_hash`, `escrow_address` |
+| 2b | Order Validator | `intent_token_policy_id` | `order_validator_hash`, `order_address` |
+| 3 | Pool Validator | `admin_vkh` | `pool_validator_hash`, `pool_address` |
+| 4 | Factory Validator | `pool_validator_hash` | `factory_validator_hash`, `factory_address` |
+| 5a | Pool NFT Policy | `factory_validator_hash`, `admin_vkh` | `pool_nft_policy_id` |
+| 5b | LP Token Policy | `pool_validator_hash`, `factory_validator_hash` | `lp_token_policy_id` |
+| 6 | Settings Validator | `settings_nft` (from Pool NFT) | `settings_address` |
+
+## TypeScript Resolution Code
+
+From `backend/src/infrastructure/cardano/TxBuilder.ts`:
 
 ```typescript
-// backend/src/infrastructure/cardano/ScriptResolver.ts
+async resolveScripts() {
+  // Load the Aiken blueprint (plutus.json)
+  const blueprint = JSON.parse(
+    fs.readFileSync('smartcontract/plutus.json', 'utf8')
+  );
 
-async function resolveScripts(adminVkh: string) {
-  // Step 1: No-param validators
-  const escrowScript = readPlutusScript('escrow_validator')
-  const escrowHash = lucid.utils.validatorToScriptHash(escrowScript)
-  
-  // Step 2: Pool validator with admin param 
-  const poolScript = applyParams('pool_validator', [adminVkh])
-  const poolHash = lucid.utils.validatorToScriptHash(poolScript)
-  
-  // Step 3: No-param policy
-  const intentTokenPolicy = readPlutusScript('intent_token_policy')
-  const intentPolicyId = lucid.utils.mintingPolicyToId(intentTokenPolicy)
-  
-  // Step 4: Factory with pool hash
-  const factoryScript = applyParams('factory_validator', [poolHash])
-  const factoryHash = lucid.utils.validatorToScriptHash(factoryScript)
-  
-  // Step 5: LP token with pool + factory hashes
-  const lpTokenPolicy = applyParams('lp_token_policy', [poolHash, factoryHash])
-  const lpPolicyId = lucid.utils.mintingPolicyToId(lpTokenPolicy)
-  
-  // Step 6: Pool NFT with factory hash + admin
-  const poolNftPolicy = applyParams('pool_nft_policy', [factoryHash, adminVkh])
-  const nftPolicyId = lucid.utils.mintingPolicyToId(poolNftPolicy)
-  
-  // Step 7: Order with intent policy
-  const orderScript = applyParams('order_validator', [intentPolicyId])
-  const orderHash = lucid.utils.validatorToScriptHash(orderScript)
-  
-  return { escrowHash, poolHash, factoryHash, intentPolicyId, lpPolicyId, nftPolicyId, orderHash }
+  // Step 1: Unparameterized scripts
+  const intentTokenPolicy = this.resolveFromBlueprint(
+    blueprint, 'intent_token_policy'
+  );
+  const intentTokenPolicyId = lucidUtils.mintingPolicyToId(intentTokenPolicy);
+
+  const escrowValidator = this.resolveFromBlueprint(
+    blueprint, 'escrow_validator'
+  );
+  const escrowAddress = lucidUtils.validatorToAddress(
+    network, escrowValidator
+  );
+
+  // Step 2: Order validator (depends on intent token policy)
+  const orderValidator = this.applyParams(
+    blueprint, 'order_validator',
+    [intentTokenPolicyId]  // Apply intent_token_policy_id parameter
+  );
+  const orderAddress = lucidUtils.validatorToAddress(
+    network, orderValidator
+  );
+
+  // Step 3: Pool validator (depends on admin)
+  const poolValidator = this.applyParams(
+    blueprint, 'pool_validator',
+    [adminVkh]
+  );
+  const poolValidatorHash = lucidUtils.validatorToScriptHash(poolValidator);
+
+  // Step 4: Factory (depends on pool)
+  const factoryValidator = this.applyParams(
+    blueprint, 'factory_validator',
+    [poolValidatorHash]
+  );
+  const factoryValidatorHash = lucidUtils.validatorToScriptHash(
+    factoryValidator
+  );
+
+  // Step 5: Minting policies (depend on pool + factory)
+  const poolNftPolicy = this.applyParams(
+    blueprint, 'pool_nft_policy',
+    [factoryValidatorHash, adminVkh]
+  );
+
+  const lpTokenPolicy = this.applyParams(
+    blueprint, 'lp_token_policy',
+    [poolValidatorHash, factoryValidatorHash]
+  );
+
+  // Step 6: Settings (depends on settings NFT identity)
+  const settingsValidator = this.applyParams(
+    blueprint, 'settings_validator',
+    [settingsNft]
+  );
 }
 ```
 
-<Callout type="warning">
-Changing any parameter (e.g., admin address) changes _all downstream script hashes_. This means new addresses for validators, requiring redeployment of all dependent contracts.
-</Callout>
-
 ## Address Derivation
 
-Script hashes are combined with a network tag to produce bech32 addresses:
+Each validator/policy produces:
 
-| Script | Preprod Address Pattern |
-|---|---|
-| Escrow | `addr_test1wz...` (same for all networks since no params) |
-| Pool | `addr_test1wr...` (changes with admin_vkh) |
-| Factory | `addr_test1wq...` (changes with pool_hash) |
-| Order | `addr_test1wp...` (changes with intent_policy_id) |
-| Settings | Identified by NFT, not by script address |
+| Script | Derivation | Used For |
+|--------|-----------|----------|
+| Escrow Validator | `validatorToAddress(network, script)` | Intent UTxO destination |
+| Pool Validator | `validatorToAddress(network, script)` | Pool UTxO destination |
+| Order Validator | `validatorToAddress(network, script)` | Order UTxO destination |
+| Factory Validator | `validatorToAddress(network, script)` | Pool creation TX |
+| Settings Validator | `validatorToAddress(network, script)` | Protocol settings UTxO |
+| Intent Token Policy | `mintingPolicyToId(script)` | Minting/burning intent tokens |
+| Pool NFT Policy | `mintingPolicyToId(script)` | Pool thread tokens |
+| LP Token Policy | `mintingPolicyToId(script)` | Liquidity tokens |
+
+## Parameter Application
+
+Aiken compiles parameterized validators as functions. The backend applies parameters using Lucid's `applyParamsToScript`:
+
+```typescript
+applyParams(blueprint, validatorName, params) {
+  const validator = blueprint.validators.find(
+    v => v.title === validatorName
+  );
+
+  return {
+    type: 'PlutusV3',
+    script: applyParamsToScript(
+      validator.compiledCode,
+      params.map(p => this.encodeParam(p))
+    ),
+  };
+}
+```
+
+Parameters are CBOR-encoded and applied to the script as partial application, producing a new script with a unique hash.
+
+<Callout type="warning">
+**Important**: Changing any parameter (e.g., `admin_vkh`) changes the script hash, which changes the address. This means all existing UTxOs at the old address become inaccessible to the new script. Parameter changes require protocol migration.
+</Callout>
+
+## Blueprint (plutus.json)
+
+The Aiken build produces `smartcontract/plutus.json` containing:
+
+```json
+{
+  "preamble": {
+    "title": "solvernet",
+    "version": "0.1.0",
+    "plutusVersion": "v3"
+  },
+  "validators": [
+    {
+      "title": "escrow_validator",
+      "compiledCode": "5901a2010000...",
+      "hash": "abc123...",
+      "parameters": []          // No params
+    },
+    {
+      "title": "pool_validator",
+      "compiledCode": "5902f4010000...",
+      "hash": null,             // Parameterized — hash unknown until applied
+      "parameters": [
+        { "title": "admin_vkh", "schema": { "type": "bytes" } }
+      ]
+    }
+    // ... other validators
+  ]
+}
+```
+
+Build with:
+```bash
+cd smartcontract
+aiken build
+# Output: smartcontract/plutus.json
+```

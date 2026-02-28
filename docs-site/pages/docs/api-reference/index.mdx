@@ -1,64 +1,84 @@
 # API Reference
 
-import { Callout } from 'nextra/components'
+import { Cards, Card } from 'nextra/components'
 
-SolverNet DEX exposes a **REST API** and **WebSocket** interface, both accessible under the `/v1` prefix.
+The SolverNet DEX backend exposes a comprehensive REST API and real-time WebSocket interface.
 
 ## Base URL
 
-| Environment | URL |
-|---|---|
-| **Production** | `https://tdexms.onrender.com/v1` |
-| **Local Development** | `http://localhost:3001/v1` |
+```
+Production: https://your-api-domain.com/v1
+Local:      http://localhost:3001/v1
+```
 
 ## Authentication
 
-Most endpoints are **public**. Admin endpoints require a wallet signature verification:
-
-```
-Admin-Address: addr_test1qz...
-```
+Currently, public endpoints do not require authentication. Admin endpoints verify the caller's wallet address matches the configured `ADMIN_ADDRESS`.
 
 ## Rate Limiting
 
-| Default | Value |
-|---|---|
-| Window | 60 seconds |
-| Max requests | 100 per window |
-| Headers | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` |
+| Type | Limit | Window |
+|------|-------|--------|
+| **Read** (GET) | `RATE_LIMIT_MAX` requests | 60 seconds |
+| **Write** (POST/DELETE) | `RATE_LIMIT_MAX / 5` requests | 60 seconds |
 
-## Response Format
-
-All responses follow a consistent format:
+When rate limited, the API returns HTTP 429 with:
 
 ```json
 {
-  "success": true,
-  "data": { ... },
-  "meta": {
-    "timestamp": "2026-02-27T12:00:00Z",
-    "requestId": "req_abc123"
-  }
+  "status": "error",
+  "code": "RATE_LIMIT_EXCEEDED",
+  "message": "Too many requests, please try again later"
 }
 ```
 
-Error responses:
+## Response Format
+
+All responses follow a consistent JSON structure:
 
 ```json
 {
-  "success": false,
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid input parameters",
-    "details": [
-      { "field": "amount", "message": "Must be a positive integer" }
-    ]
-  }
+  "field": "value"
+}
+```
+
+Error responses include:
+
+```json
+{
+  "status": "error",
+  "code": "ERROR_CODE",
+  "message": "Human-readable description",
+  "details": {}
 }
 ```
 
 ## Sections
 
-- [REST API →](/docs/api-reference/rest)
-- [WebSocket →](/docs/api-reference/websocket)
-- [Error Codes →](/docs/api-reference/errors)
+<Cards>
+  <Card title="REST API" href="/docs/api-reference/rest">
+    Complete reference for all 60+ REST endpoints including Health, Quote, Intents, Pools, Orders, Charts, Transactions, Analytics, Portfolio, Solver, and Admin.
+  </Card>
+  <Card title="WebSocket" href="/docs/api-reference/websocket">
+    Real-time event streaming for prices, intent updates, and pool state changes.
+  </Card>
+  <Card title="Error Codes" href="/docs/api-reference/errors">
+    Comprehensive error code reference with HTTP status mappings.
+  </Card>
+</Cards>
+
+## Quick Reference
+
+| Category | Endpoints | Description |
+|----------|-----------|-------------|
+| Health | 2 | System status and readiness probes |
+| Quote | 1 | Swap quotes with routing |
+| Intents | 4 | Create, list, get, cancel swap intents |
+| Pools | 7 | CRUD + swaps, history, tokens |
+| Orders | 4 | Limit, DCA, Stop-Loss orders |
+| Chart | 7 | TradingView-compatible OHLCV data |
+| Transactions | 3 | Submit, confirm, status check |
+| Analytics | 3 | Protocol stats, token data, prices |
+| Solver | 2 | Intent filling, order execution |
+| Portfolio | 8 | Wallet summary, positions, history |
+| Admin | 15+ | Settings, factory, revenue, solver control |

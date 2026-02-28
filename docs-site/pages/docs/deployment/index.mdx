@@ -1,50 +1,51 @@
 # Deployment
 
-import { Callout } from 'nextra/components'
+import { Cards, Card, Callout } from 'nextra/components'
 
-SolverNet DEX is deployed as a multi-service stack across different hosting providers.
+Production deployment guide for SolverNet DEX.
 
-## Production Architecture
+## Architecture
 
 ```
-┌────────────────────────┐    ┌─────────────────────────┐
-│      Vercel            │    │       Render             │
-│  ┌──────────────────┐  │    │  ┌───────────────────┐  │
-│  │   Next.js 16     │  │───►│  │   Express API     │  │
-│  │   Frontend       │  │    │  │   + Solver Engine  │  │
-│  └──────────────────┘  │    │  └─────────┬─────────┘  │
-└────────────────────────┘    │            │             │
-                              └────────────┼─────────────┘
-                                           │
-            ┌──────────────────────────────┤
-            ▼                              ▼
-  ┌──────────────────┐        ┌──────────────────────┐
-  │    Supabase      │        │    Blockfrost        │
-  │  ┌────────────┐  │        │  ┌────────────────┐  │
-  │  │ PostgreSQL │  │        │  │ Cardano API    │  │
-  │  │ Database   │  │        │  │ UTxO queries   │  │
-  │  └────────────┘  │        │  │ TX submission  │  │
-  └──────────────────┘        │  └────────────────┘  │
-                              └──────────────────────┘
-  ┌──────────────────┐
-  │  Upstash Redis   │
-  │  ┌────────────┐  │
-  │  │ Cache      │  │
-  │  │ Rate limit │  │
-  │  └────────────┘  │
-  └──────────────────┘
+┌──────────────────┐     ┌──────────────────┐
+│   Vercel          │     │   Render          │
+│   (Frontend)      │────→│   (Backend API)   │
+│   Next.js SSR     │     │   Express + WS    │
+└──────────────────┘     └────────┬─────────┘
+                                  │
+                    ┌─────────────┼─────────────┐
+                    │             │             │
+              ┌─────▼─────┐ ┌────▼────┐ ┌─────▼──────┐
+              │ Supabase   │ │Upstash  │ │ Blockfrost │
+              │ PostgreSQL │ │ Redis   │ │ Cardano    │
+              └────────────┘ └─────────┘ └────────────┘
 ```
 
-| Service | Provider | Purpose |
-|---|---|---|
-| **Frontend** | Vercel | Next.js static export + SSR |
-| **Backend** | Render | Express API + Solver + Cron jobs |
-| **Database** | Supabase | PostgreSQL with connection pooling |
-| **Cache** | Upstash | Serverless Redis |
-| **Chain Data** | Blockfrost | Cardano API |
+## Deployment Options
 
-### Quick Links
+<Cards>
+  <Card title="Docker" href="/docs/deployment/docker">
+    Containerized deployment with Docker Compose
+  </Card>
+  <Card title="Environment" href="/docs/deployment/environment">
+    Production environment configuration
+  </Card>
+  <Card title="Production" href="/docs/deployment/production">
+    Cloud deployment guides (Render, Vercel, Supabase)
+  </Card>
+</Cards>
 
-- [Docker →](/docs/deployment/docker)
-- [Environment Variables →](/docs/deployment/environment)
-- [Production →](/docs/deployment/production)
+## Quick Deploy Checklist
+
+- [ ] PostgreSQL database provisioned (Supabase recommended)
+- [ ] Blockfrost API key obtained (correct network)
+- [ ] Redis cache set up (Upstash recommended)
+- [ ] Backend deployed (Render / Docker)
+- [ ] Frontend deployed (Vercel)
+- [ ] Environment variables configured
+- [ ] CORS origins set for production domain
+- [ ] SSL/TLS enabled on all endpoints
+- [ ] Database migrations applied
+- [ ] Smart contracts deployed on-chain
+- [ ] Solver wallet funded and enabled
+- [ ] Monitoring and alerting set up

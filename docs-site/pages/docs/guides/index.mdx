@@ -1,8 +1,51 @@
-# Guides
+# User Guides
 
-Step-by-step tutorials for common operations in SolverNet DEX.
+import { Cards, Card, Callout } from 'nextra/components'
 
-- [Swap Flow →](/docs/guides/swap-flow) — Complete walkthrough of making a swap from intent creation to settlement
-- [Liquidity Provision →](/docs/guides/liquidity) — How to add and remove liquidity from AMM pools
-- [Advanced Orders →](/docs/guides/advanced-orders) — Setting up Limit, DCA, and Stop-Loss orders
-- [Running a Solver →](/docs/guides/running-solver) — Deploy and operate your own solver bot
+Step-by-step guides for using every feature of the SolverNet DEX.
+
+<Callout type="info">
+These guides assume you have a Cardano wallet (Nami, Eternl, Lace, or Flint) with preprod tADA.
+Use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) to get testnet ADA.
+</Callout>
+
+## Guides
+
+<Cards>
+  <Card title="Swap Flow" href="/docs/guides/swap-flow">
+    Complete token swap walkthrough — from quote to settlement
+  </Card>
+  <Card title="Liquidity Provision" href="/docs/guides/liquidity">
+    Add & remove liquidity, LP tokens, impermanent loss
+  </Card>
+  <Card title="Advanced Orders" href="/docs/guides/advanced-orders">
+    Limit orders, DCA, stop-loss strategies
+  </Card>
+  <Card title="Running a Solver" href="/docs/guides/running-solver">
+    Set up and operate your own solver node
+  </Card>
+</Cards>
+
+## How SolverNet Works — Quick Recap
+
+```
+User creates Intent → Solver collects batch → Netting offsets opposing flows
+  → AMM fills residual → Users receive tokens on-chain
+```
+
+| Concept | Description |
+|---------|-------------|
+| **Intent** | A signed request to swap token A for token B, locked in an escrow UTxO |
+| **Solver** | An off-chain bot that collects intents, optimizes via netting, and builds settlement TXs |
+| **Netting** | Matching opposing swaps directly (e.g., ADA→MIN vs MIN→ADA) to reduce AMM usage |
+| **AMM Pool** | On-chain constant-product liquidity pool that fills any residual after netting |
+| **Escrow** | Smart contract holding user funds until settlement, cancellation, or reclaim |
+
+## Typical Flow
+
+1. **Connect wallet** — CIP-30 compatible wallet
+2. **Select tokens** — Choose input and output token
+3. **Get quote** — Backend calculates expected output, fees, and price impact
+4. **Create intent** — Backend builds TX, user signs, TX submitted on-chain
+5. **Wait for settlement** — Solver processes within ~2 minutes
+6. **Receive tokens** — Output sent directly to your wallet address

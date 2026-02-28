@@ -1,240 +1,287 @@
-# Solver Pipeline
+# Pipeline
 
 import { Callout } from 'nextra/components'
 
-The solver engine runs as a continuous loop, executing a 6-stage pipeline on each iteration.
+The solver pipeline runs as a loop in `SolverEngine.runIteration()`.
 
-## Pipeline Overview
+## Iteration Flow
 
 ```typescript
-// backend/src/solver/SolverEngine.ts
-class SolverEngine {
-  async runLoop() {
-    while (this.enabled) {
-      try {
-        // Stage 1: Collect on-chain intents
-        const utxos = await this.intentCollector.collect()
-        
-        // Stage 2: Filter and validate
-        const validIntents = await this.filterAndValidate(utxos)
-        
-        if (validIntents.length === 0) {
-          await sleep(this.batchWindowMs)
-          continue
-        }
-        
-        // Stage 3: Find optimal routes
-        const routedIntents = await this.routeOptimizer.findRoutes(validIntents)
-        
-        // Stage 4: Group into batches by pool
-        const batches = this.batchBuilder.groupByPool(routedIntents)
-        
-        // Stage 5: Net opposing intents within each batch
-        const nettedBatches = batches.map(b => this.nettingEngine.net(b))
-        
-        // Stage 6: Build and submit settlement TXs
-        for (const batch of nettedBatches) {
-          await this.txSubmitter.settle(batch)
-        }
-      } catch (error) {
-        logger.error({ error }, 'Solver loop error')
-        await sleep(this.retryDelay)
-      }
-      
-      await sleep(this.batchWindowMs)
-    }
+async runIteration() {
+  // Phase 1: Collect
+  const rawIntents = await this.intentCollector.collect();
+
+  // Phase 2: Filter
+  const validIntents = this.filterAndValidate(rawIntents);
+  if (validIntents.length === 0) return;
+
+  // Phase 3: Route + Batch
+  const routedIntents = await this.routeOptimizer.routeAll(validIntents);
+  const batches = this.batchBuilder.build(routedIntents);
+
+  // Phase 4: Netting + Settle
+  for (const batch of batches) {
+    const plan = NettingEngine.analyze(batch, poolReserves);
+    const tx = await this.buildSettlementTx(batch, plan);
+    await this.txSubmitter.submit(tx);
   }
 }
 ```
 
 ## Stage 1: Intent Collection
 
+**Module**: `IntentCollector` (171 lines)
+
+The collector queries Blockfrost for all UTxOs at the escrow validator address:
+
 ```typescript
-class IntentCollector {
-  async collect(): Promise<ParsedEscrowUtxo[]> {
-    // Query Blockfrost for all UTxOs at the escrow address
-    const utxos = await this.chainProvider.getUtxosAtAddress(
-      this.escrowScriptAddress
-    )
-    
-    // Parse inline datums from each UTxO
-    return utxos
-      .map(utxo => this.parseEscrowDatum(utxo))
-      .filter(parsed => parsed !== null)
-  }
-  
-  private parseEscrowDatum(utxo: UTxO): ParsedEscrowUtxo | null {
-    try {
-      const datum = Data.from(utxo.datum!, EscrowDatum)
-      return {
-        utxoRef: { txHash: utxo.txHash, outputIndex: utxo.outputIndex },
-        owner: datum.owner,
-        inputAsset: datum.input_asset,
-        outputAsset: datum.output_asset,
-        minOutput: datum.min_output,
-        intentToken: datum.intent_token,
-        expiryTime: datum.expiry_time,
-        value: utxo.assets,
-      }
-    } catch {
-      return null // Skip UTxOs with unparseable datums
-    }
-  }
+async collect(): Promise<RawIntent[]> {
+  // 1. Get all UTxOs at escrow address
+  const utxos = await this.blockfrost.getUtxos(this.escrowAddress);
+
+  // 2. Parse each UTxO's inline datum (EscrowDatum — 12 fields)
+  const intents = utxos
+    .map(utxo => this.parseDatum(utxo))
+    .filter(Boolean);
+
+  // 3. Filter expired (past deadline)
+  const now = Date.now();
+  return intents.filter(i => i.deadline > now);
 }
 ```
 
-## Stage 2: Filtering & Validation
-
+**Datum parsing** — The 12-field `Constr(0, [...])`:
 ```typescript
-async filterAndValidate(utxos: ParsedEscrowUtxo[]): Promise<ValidIntent[]> {
-  const validIntents: ValidIntent[] = []
-  
-  for (const utxo of utxos) {
-    // Check if intent exists in database
-    const dbIntent = await this.intentRepo.findByUtxoRef(
-      utxo.utxoRef.txHash, 
-      utxo.utxoRef.outputIndex
-    )
-    
-    // Skip if:
-    if (!dbIntent) continue                           // Not in our DB
-    if (dbIntent.status !== 'ACTIVE') continue        // Not active
-    if (dbIntent.isExpired()) continue                // Expired
-    if (this.inFlightSet.has(dbIntent.id)) continue   // Already being settled
-    
-    validIntents.push({
-      ...utxo,
-      dbIntent,
-    })
-  }
-  
-  return validIntents
+parseDatum(utxo) {
+  const fields = utxo.datum.fields;
+  return {
+    creator:          fields[0],     // VerificationKeyHash
+    inputPolicyId:    fields[1],
+    inputAssetName:   fields[2],
+    outputPolicyId:   fields[3],
+    outputAssetName:  fields[4],
+    minOutput:        BigInt(fields[5]),
+    deadline:         BigInt(fields[6]),
+    escrowToken:      fields[7],
+    inputAmount:      BigInt(fields[8]),
+    maxPartialFills:  Number(fields[9]),
+    fillCount:        Number(fields[10]),
+    remainingInput:   BigInt(fields[11]),
+    // UTxO reference for spending
+    utxoRef:          `${utxo.txHash}#${utxo.outputIndex}`,
+  };
 }
 ```
 
-## Stage 3: Route Selection
+## Stage 2: Filter & Validate
+
+**Module**: `SolverEngine.filterAndValidate()`
 
 ```typescript
-class RouteOptimizer {
-  async findRoutes(intents: ValidIntent[]): Promise<RoutedIntent[]> {
-    return Promise.all(intents.map(async intent => {
-      const route = await this.findBestRoute(intent)
-      return { ...intent, route }
-    }))
+filterAndValidate(intents: RawIntent[]): ValidIntent[] {
+  return intents.filter(intent => {
+    // Skip if already being processed this cycle
+    if (this.processingSet.has(intent.utxoRef)) return false;
+
+    // Skip if status is FILLING (mid-settlement)
+    if (this.fillingSet.has(intent.escrowToken)) return false;
+
+    // Skip stale intents from previous failed iterations
+    if (intent.fillCount >= intent.maxPartialFills) return false;
+
+    // Mark as processing to prevent double-processing
+    this.processingSet.add(intent.utxoRef);
+    return true;
+  });
+}
+```
+
+## Stage 3: Route Optimization
+
+**Module**: `RouteOptimizer` (295 lines)
+
+For each intent, find the best execution path:
+
+```typescript
+async findBestRoute(intent: ValidIntent): Promise<RoutedIntent> {
+  const pool = await this.findPool(intent.inputAsset, intent.outputAsset);
+
+  // Try full fill first
+  const fullOutput = AmmMath.calculateSwapOutput(
+    intent.remainingInput, pool.reserveIn, pool.reserveOut, pool.feeNumerator
+  );
+
+  if (fullOutput >= intent.proportionalMinOutput) {
+    return { ...intent, route: 'DIRECT', fillAmount: intent.remainingInput };
   }
-  
-  private async findBestRoute(intent: ValidIntent): Promise<SwapRoute> {
-    // Try direct pool
-    const directPool = await this.poolRepo.findByAssets(
-      intent.inputAsset, 
-      intent.outputAsset
-    )
-    
-    if (directPool) {
-      const output = directPool.calculateSwapOutput(intent.inputAmount, 'AToB')
-      return { type: 'direct', pools: [directPool], estimatedOutput: output }
+
+  // Fall back to partial fill (binary search)
+  if (this.config.partialFillEnabled) {
+    const maxFill = AmmMath.calculateMaxIntentFill(
+      intent, pool, intent.proportionalMinOutput
+    );
+
+    if (maxFill >= intent.remainingInput / 10n) { // 10% min threshold
+      return { ...intent, route: 'DIRECT_PARTIAL', fillAmount: maxFill };
     }
-    
-    // Try multi-hop (e.g., TOKEN → ADA → TOKEN2)
-    // ... multi-hop routing logic
-    
-    throw new Error(`No route found for ${intent.inputAsset} → ${intent.outputAsset}`)
   }
+
+  // Try multi-hop (via ADA)
+  return this.tryMultiHop(intent);
 }
 ```
 
 ## Stage 4: Batch Building
 
+**Module**: `BatchBuilder` (118 lines)
+
 ```typescript
-class BatchBuilder {
-  groupByPool(intents: RoutedIntent[]): IntentBatch[] {
-    const batches = new Map<string, IntentBatch>()
-    
-    for (const intent of intents) {
-      const poolId = intent.route.pools[0].id
-      
-      if (!batches.has(poolId)) {
-        batches.set(poolId, {
-          pool: intent.route.pools[0],
-          intents: [],
-        })
-      }
-      
-      batches.get(poolId)!.intents.push(intent)
+build(intents: RoutedIntent[]): Batch[] {
+  // Group by pool
+  const groups = this.groupByPool(intents);
+
+  // Split groups exceeding constraints
+  const batches: Batch[] = [];
+  for (const group of groups) {
+    if (group.length <= MAX_BATCH_SIZE) {
+      batches.push(group);
+    } else {
+      // Split into sub-batches of MAX_BATCH_SIZE
+      batches.push(...this.splitBatch(group));
     }
-    
-    return Array.from(batches.values())
   }
+
+  // Sort by urgency (earliest deadline first)
+  return batches.sort((a, b) =>
+    Math.min(...a.map(i => i.deadline)) - Math.min(...b.map(i => i.deadline))
+  );
 }
 ```
+
+Constraints:
+
+| Constraint | Value | Reason |
+|-----------|-------|--------|
+| `MAX_BATCH_SIZE` | 15 | Cardano TX size limit |
+| `MAX_TX_CPU` | 14,000,000,000 | Plutus execution budget |
+| `MAX_TX_MEM` | 10,000,000 | Plutus memory budget |
 
 ## Stage 5: Netting
 
-See [Netting Engine](/docs/solver-engine/netting) for the detailed algorithm.
+**Module**: `NettingEngine` (273 lines)
+
+For each batch, calculate optimal flow offsets:
+
+```typescript
+static analyze(batch: Batch, pool: PoolState): NettingPlan {
+  // Separate by direction
+  const aToB = batch.filter(i => i.direction === 'AToB');
+  const bToA = batch.filter(i => i.direction === 'BToA');
+
+  if (aToB.length === 0 || bToA.length === 0) {
+    return this.singleDirectionPlan(batch, pool);
+  }
+
+  // Calculate gross flows
+  const grossAtoB = sum(aToB.map(i => i.fillAmount));
+  const grossBtoA = sum(bToA.map(i => i.fillAmount));
+
+  // Convert to common denomination via spot price
+  const grossBtoAInA = grossBtoA * pool.reserveA / pool.reserveB;
+
+  // Net residual
+  const netResidual = abs(grossAtoB - grossBtoAInA);
+  const residualDirection = grossAtoB > grossBtoAInA ? 'AToB' : 'BToA';
+
+  // Only residual hits AMM
+  const ammOutput = AmmMath.calculateSwapOutput(
+    netResidual, pool.reserveIn, pool.reserveOut, pool.feeNumerator
+  );
+
+  // Allocate outputs proportionally
+  return {
+    outputs: this.allocateOutputs(batch, ammOutput, grossAtoB, grossBtoA),
+    nettingImprovement: 1 - netResidual / (grossAtoB + grossBtoAInA),
+    residualDirection,
+    residualAmount: netResidual,
+  };
+}
+```
 
 ## Stage 6: Settlement
 
+**Module**: `TxSubmitter` (170 lines) + `TxBuilder`
+
+The settlement TX:
+
 ```typescript
-class TxSubmitter {
-  async settle(batch: NettedBatch): Promise<void> {
-    // Build the settlement transaction
-    const tx = await this.txBuilder.buildSettlementTx({
-      pool: batch.pool,
-      escrowUtxos: batch.intents.map(i => i.utxoRef),
-      nettedAmounts: batch.nettedAmounts,
-      outputs: batch.outputs,          // Payments to intent owners
-      residualSwap: batch.residual,    // Amount going through AMM
-    })
-    
-    // Sign with solver wallet
-    const signedTx = await tx.sign.withWallet().complete()
-    const txHash = await signedTx.submit()
-    
-    // Wait for confirmation
-    const confirmed = await this.chainProvider.awaitTx(txHash)
-    
-    if (confirmed) {
-      // Update intent statuses
-      for (const intent of batch.intents) {
-        intent.dbIntent.markFilled(txHash)
-        await this.intentRepo.save(intent.dbIntent)
-      }
-      
-      // Record swaps and price ticks
-      await this.recordSwaps(batch, txHash)
-      
-      // Broadcast WebSocket updates
-      this.wsManager.broadcast('intent', batch.intents.map(i => ({
-        type: 'intentUpdate',
-        data: { id: i.dbIntent.id, status: 'FILLED', settlementTx: txHash }
-      })))
-    }
+async buildSettlementTx(batch: Batch, plan: NettingPlan) {
+  const tx = lucid.newTx();
+
+  // 1. Consume all escrow UTxOs (with Fill redeemer)
+  for (const intent of batch) {
+    tx.collectFrom([intent.utxo], fillRedeemer);
+  }
+
+  // 2. Consume pool UTxO (with Swap redeemer)
+  tx.collectFrom([pool.utxo], swapRedeemer);
+
+  // 3. Burn all intent tokens
+  for (const intent of batch) {
+    tx.mintAssets({ [intent.intentTokenUnit]: -1n }, burnRedeemer);
+  }
+
+  // 4. Send outputs to each user
+  for (const { address, assets } of plan.outputs) {
+    tx.payToAddress(address, assets);
+  }
+
+  // 5. Create new pool UTxO with updated reserves
+  tx.payToContract(poolAddress, { inline: newPoolDatum }, newPoolValue);
+
+  // 6. Set validity interval
+  tx.validFrom(now).validTo(now + 300_000); // 5 min window
+
+  // 7. Add collateral + sign
+  tx.addSigner(solverPkh).complete();
+}
+```
+
+The `TxSubmitter` uses a **singleton FIFO queue** shared by 3 bot types:
+
+```
+┌──────────────┐
+│ Solver Bot   │──┐
+├──────────────┤  │   ┌───────────────┐   ┌──────────────┐
+│ ChainSync    │──┼──▶│ TX Queue      │──▶│ Blockfrost   │
+│ Bot          │  │   │ (serial FIFO) │   │ submitTx()   │
+├──────────────┤  │   └───────────────┘   └──────────────┘
+│ Order        │──┘
+│ Monitor Bot  │
+└──────────────┘
+```
+
+This prevents UTxO contention — only one TX is in-flight at a time.
+
+## Error Handling
+
+```typescript
+try {
+  await this.txSubmitter.submit(tx);
+} catch (error) {
+  if (error.message.includes('UTxO already spent')) {
+    // Normal during concurrency — retry next iteration
+    this.processingSet.delete(intent.utxoRef);
+  } else if (error.message.includes('SCRIPT_EXECUTION_FAILED')) {
+    // Validator rejection — log and skip
+    logger.error('Settlement TX rejected', { batch, error });
+  } else {
+    // Network/Blockfrost error — retry with backoff
+    await this.retryWithBackoff(tx);
   }
 }
 ```
 
-## Error Handling & Retries
-
-```typescript
-// Built-in retry logic
-async settleWithRetry(batch: NettedBatch): Promise<void> {
-  for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-    try {
-      await this.settle(batch)
-      return // Success
-    } catch (error) {
-      logger.warn({ attempt, error }, 'Settlement attempt failed')
-      
-      if (error.message.includes('UTxO already consumed')) {
-        // UTxO was consumed by another solver or user cancel
-        // Remove from in-flight set and skip
-        break
-      }
-      
-      if (attempt < this.maxRetries) {
-        await sleep(1000 * attempt) // Exponential backoff
-      }
-    }
-  }
-}
-```
+<Callout type="info">
+After successful submission, `TxSubmitter` calls `awaitTx()` for on-chain confirmation, then invokes a post-confirmation callback to update database records.
+</Callout>

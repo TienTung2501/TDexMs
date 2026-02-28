@@ -2,104 +2,78 @@
 
 import { Callout } from 'nextra/components'
 
-SolverNet DEX follows a **Clean Architecture** pattern with clear separation of concerns across four major subsystems.
+SolverNet DEX is a full-stack decentralized exchange built on Cardano, following clean architecture principles with clear separation between domain logic, infrastructure, and interface layers.
 
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Frontend (Next.js 16)                       │
-│  ┌──────────┐ ┌──────────┐ ┌─────────┐ ┌──────────┐ ┌───────────┐ │
-│  │  Swap UI │ │  Pools   │ │ Orders  │ │Portfolio │ │ Analytics │ │
-│  └────┬─────┘ └────┬─────┘ └────┬────┘ └────┬─────┘ └─────┬─────┘ │
-│       └──────────┬──┴────────────┴───────────┴─────────────┘       │
-│                  │  REST API + WebSocket                            │
-└──────────────────┼─────────────────────────────────────────────────┘
-                   │
-┌──────────────────┼─────────────────────────────────────────────────┐
-│                  ▼  Backend (Express + TypeScript)                  │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                    Interface Layer                            │  │
-│  │  ┌─────────────────────┐  ┌────────────────────────────┐     │  │
-│  │  │   HTTP REST Routes  │  │   WebSocket Handlers       │     │  │
-│  │  │   /v1/intents       │  │   prices, intents, pools   │     │  │
-│  │  │   /v1/pools         │  │                            │     │  │
-│  │  │   /v1/orders        │  │                            │     │  │
-│  │  │   /v1/chart         │  │                            │     │  │
-│  │  └────────┬────────────┘  └──────────┬─────────────────┘     │  │
-│  └───────────┼──────────────────────────┼───────────────────────┘  │
-│              ▼                          ▼                           │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                   Application Layer                          │  │
-│  │  ┌────────────┐ ┌──────────────┐ ┌─────────────────────┐    │  │
-│  │  │ Use Cases  │ │  Services    │ │  Event Handlers     │    │  │
-│  │  │ CreateSwap │ │ Candlestick  │ │  WS Broadcasting    │    │  │
-│  │  │ GetQuote   │ │ Analytics    │ │                     │    │  │
-│  │  │ CreatePool │ │              │ │                     │    │  │
-│  │  └────────────┘ └──────────────┘ └─────────────────────┘    │  │
-│  └──────────────────────────┬───────────────────────────────────┘  │
-│                             ▼                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                     Domain Layer                             │  │
-│  │  ┌──────────┐ ┌───────────────┐ ┌──────────────────────┐    │  │
-│  │  │ Entities │ │ Value Objects │ │  Ports (Interfaces)  │    │  │
-│  │  │ Intent   │ │ AssetUnit     │ │  IChainProvider      │    │  │
-│  │  │ Pool     │ │ TokenPair     │ │  IIntentRepository   │    │  │
-│  │  │ Order    │ │ SwapRoute     │ │  IPoolRepository     │    │  │
-│  │  └──────────┘ └───────────────┘ └──────────────────────┘    │  │
-│  └──────────────────────────┬───────────────────────────────────┘  │
-│                             ▼                                      │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                  Infrastructure Layer                        │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────────────┐  │  │
-│  │  │ Database │ │ Cardano  │ │ Cache  │ │ Cron / Workers   │  │  │
-│  │  │ Prisma   │ │Blockfrost│ │ Redis  │ │ ChainSync        │  │  │
-│  │  │ Supabase │ │ Lucid    │ │Upstash │ │ ReclaimKeeper    │  │  │
-│  │  └──────────┘ └──────────┘ └────────┘ │ PriceAggregation │  │  │
-│  │                                       │ OrderExecutor     │  │  │
-│  │                                       │ PoolSnapshot      │  │  │
-│  │                                       └──────────────────┘  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                    Solver Engine                              │  │
-│  │  Collect → Validate → Route → Batch → Net → Settle          │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────┘
-                   │
-                   ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                    Cardano Blockchain (Preprod)                     │
-│  ┌─────────────┐ ┌──────────────┐ ┌────────────────────────────┐  │
-│  │   Escrow     │ │    Pool      │ │     Factory / Settings     │  │
-│  │  Validator   │ │  Validator   │ │       Validators           │  │
-│  │  (Intents)   │ │  (AMM x·y=k)│ │   (Registry + Config)      │  │
-│  └─────────────┘ └──────────────┘ └────────────────────────────┘  │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                    Frontend (Next.js)                  │
+│  ┌────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐ │
+│  │ Swap   │  │ Pools    │  │ Orders  │  │ Admin   │ │
+│  │ Page   │  │ Page     │  │ Page    │  │ Panel   │ │
+│  └────┬───┘  └────┬─────┘  └────┬────┘  └────┬────┘ │
+│       └────────────┴─────────────┴─────────────┘      │
+│                    CIP-30 Wallet                       │
+└──────────────────────┬───────────────────────────────┘
+                       │ REST + WebSocket
+┌──────────────────────▼───────────────────────────────┐
+│                Backend (Express + TypeScript)          │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │              Interface Layer                     │ │
+│  │  HTTP Routes │ WebSocket │ Validation │ Errors   │ │
+│  └──────────────┴───────────┴────────────┴─────────┘ │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │            Application Layer                     │ │
+│  │  Use Cases │ Services │ DTOs                     │ │
+│  └──────────────┴───────────┴──────────────────────┘ │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │              Domain Layer                        │ │
+│  │  Entities │ Value Objects │ Ports │ Errors       │ │
+│  └──────────────┴───────────────┴──────┴───────────┘ │
+│  ┌─────────────────────────────────────────────────┐ │
+│  │          Infrastructure Layer                    │ │
+│  │  Prisma │ Blockfrost │ Lucid │ Redis │ Crons    │ │
+│  └─────────┴────────────┴───────┴───────┴──────────┘ │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│                 Cardano Blockchain                     │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │ Escrow   │  │  Pool    │  │  Settings/Factory │  │
+│  │Validator │  │Validator │  │    Validators      │  │
+│  └──────────┘  └──────────┘  └───────────────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────────┐  │
+│  │  Intent  │  │ Pool NFT │  │   LP Token        │  │
+│  │  Policy  │  │  Policy  │  │    Policy          │  │
+│  └──────────┘  └──────────┘  └───────────────────┘  │
+└──────────────────────────────────────────────────────┘
 ```
 
-## Subsystem Overview
+## Core Subsystems
 
-| Subsystem | Technology | Purpose |
-|---|---|---|
-| **Smart Contracts** | Aiken v1.1.19, Plutus V3 | On-chain validators for escrow, pools, orders, factory, settings |
-| **Backend** | Express 4.21, TypeScript 5.7, Prisma 6.2 | API server, solver engine, chain synchronization, cron jobs |
-| **Frontend** | Next.js 16.1, React 19.2, Tailwind CSS 4 | Trading UI with charts, wallet integration, pool management |
-| **Infrastructure** | Supabase, Upstash Redis, Blockfrost | Database, caching, Cardano chain data |
+| Subsystem | Technology | Role |
+|-----------|-----------|------|
+| **Frontend** | Next.js 16, React 19, Tailwind CSS | User interface & wallet integration |
+| **Backend** | Express, TypeScript, Prisma | API server, business logic, TX building |
+| **Solver Engine** | TypeScript (background service) | Monitors intents, routes through AMM, settles on-chain |
+| **Smart Contracts** | Aiken (Plutus V3) | On-chain escrow, AMM pool, token minting |
+| **Database** | PostgreSQL (Supabase) | State persistence, analytics, history |
+| **Cache** | Upstash Redis | Quote caching, rate limiting, session data |
+| **Chain Indexer** | Blockfrost API | On-chain data queries, TX submission |
 
 ## Design Principles
 
-### 1. Intent-Based, Not Transaction-Based
-Users don't build raw Cardano transactions. They express **what they want** (swap intent) and the system handles **how to execute** it optimally.
+1. **Intent-Based Architecture** — Users express trade intentions; solvers compete to fulfill them optimally
+2. **Clean Architecture** — Domain logic is independent of frameworks and infrastructure
+3. **Hexagonal Ports & Adapters** — All external dependencies are behind interfaces (ports)
+4. **Event-Driven** — WebSocket events propagate real-time state changes
+5. **BigInt Arithmetic** — All financial computations use integer math to avoid floating-point errors
+6. **On-Chain Settlement** — All trades settle through Plutus V3 validators for trustless execution
 
-### 2. Separation via eUTxO
-Each intent is a separate UTxO — no shared state, no conturrency conflicts. Multiple solvers can work simultaneously on different intents.
+## Sections
 
-### 3. Solver Competition (Future)
-The architecture is designed for multiple competing solvers. Better execution quality attracts more intents — market-driven optimization.
-
-### 4. Non-Custodial Always
-User funds are locked in on-chain validator scripts with cryptographic guarantees. Users can **always** cancel and reclaim their funds, even if all off-chain infrastructure goes down.
-
-### 5. Clean Architecture
-Business logic is isolated from infrastructure. The domain layer has zero dependencies on frameworks, databases, or external services.
+- [System Design](/docs/architecture/system-design) — Intent lifecycle, TX flows, background services
+- [Clean Architecture](/docs/architecture/clean-architecture) — Layer structure and dependency rules
+- [Domain Model](/docs/architecture/domain-model) — Core entities, value objects, and enums
+- [Data Flow](/docs/architecture/data-flow) — End-to-end data flow for swaps, LP, and orders

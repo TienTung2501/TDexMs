@@ -2,104 +2,163 @@
 
 import { Callout } from 'nextra/components'
 
-All errors return a consistent JSON structure with an error code, message, and optional details.
+All API errors follow a consistent format with an HTTP status code and structured error body.
 
 ## Error Response Format
 
 ```json
 {
-  "success": false,
-  "error": {
-    "code": "ERROR_CODE",
-    "message": "Human-readable description",
-    "details": { ... }
+  "status": "error",
+  "code": "ERROR_CODE",
+  "message": "Human-readable error description",
+  "details": {}
+}
+```
+
+---
+
+## HTTP Status Mapping
+
+| HTTP Status | Domain Error | Description |
+|-------------|-------------|-------------|
+| 400 | Various | Bad request / validation error |
+| 401 | `UNAUTHORIZED` | Authentication required |
+| 404 | `NOT_FOUND` | Resource not found |
+| 429 | `RATE_LIMIT_EXCEEDED` | Too many requests |
+| 502 | `EXTERNAL_SERVICE_ERROR` | Blockfrost / external service failure |
+| 500 | `INTERNAL_ERROR` | Unexpected server error |
+
+---
+
+## Validation Errors
+
+Validation errors use Zod schemas and return detailed field-level information.
+
+```json
+{
+  "status": "error",
+  "code": "VALIDATION_ERROR",
+  "message": "Request validation failed",
+  "details": {
+    "fieldErrors": [
+      {
+        "field": "inputAmount",
+        "message": "Expected string, received number",
+        "code": "invalid_type"
+      },
+      {
+        "field": "inputAsset",
+        "message": "Required",
+        "code": "invalid_type"
+      }
+    ]
   }
 }
 ```
 
-## HTTP Status Codes
+---
 
-| Status | Meaning |
-|---|---|
-| `200` | Success |
-| `201` | Created |
-| `400` | Bad Request — invalid input |
-| `401` | Unauthorized — invalid admin auth |
-| `403` | Forbidden — not admin |
-| `404` | Not Found |
-| `409` | Conflict — duplicate resource |
-| `422` | Unprocessable — business rule violation |
-| `429` | Rate Limited |
-| `500` | Internal Server Error |
-| `503` | Service Unavailable — dependency down |
+## Error Code Reference
 
-## Error Codes
+### Intent Errors
 
-### Validation Errors (400)
-
-| Code | Description |
-|---|---|
-| `VALIDATION_ERROR` | Request body/query params failed Zod validation |
-| `INVALID_ADDRESS` | Invalid Cardano bech32 address |
-| `INVALID_ASSET` | Invalid asset unit format |
-| `INVALID_AMOUNT` | Amount is not a valid positive integer |
-| `INVALID_SLIPPAGE` | Slippage must be between 0 and 100 |
-
-### Intent Errors (4xx)
-
-| Code | Status | Description |
-|---|---|---|
+| Code | HTTP | Description |
+|------|------|-------------|
 | `INTENT_NOT_FOUND` | 404 | Intent ID does not exist |
-| `INTENT_NOT_ACTIVE` | 422 | Intent is not in ACTIVE state |
-| `INTENT_EXPIRED` | 422 | Intent has passed its expiry time |
-| `INTENT_ALREADY_CANCELLED` | 409 | Intent was already cancelled |
-| `INTENT_NOT_CANCELLABLE` | 422 | Intent is in a state that cannot be cancelled (e.g., FILLING) |
-| `INSUFFICIENT_OUTPUT` | 422 | Calculated output is below minimum |
+| `INTENT_ALREADY_FILLED` | 400 | Intent has already been settled |
+| `INTENT_EXPIRED` | 400 | Intent deadline has passed |
+| `INTENT_CANCELLED` | 400 | Intent was already cancelled |
+| `INTENT_CREATION_FAILED` | 400 | Failed to build escrow transaction |
+| `INTENT_CANCEL_FAILED` | 400 | Failed to build cancel transaction |
+| `INSUFFICIENT_FUNDS` | 400 | Wallet has insufficient balance for the intent |
 
-### Pool Errors (4xx)
+### Pool Errors
 
-| Code | Status | Description |
-|---|---|---|
+| Code | HTTP | Description |
+|------|------|-------------|
 | `POOL_NOT_FOUND` | 404 | Pool ID does not exist |
-| `POOL_INACTIVE` | 422 | Pool is not in ACTIVE state |
-| `POOL_ALREADY_EXISTS` | 409 | A pool for this asset pair already exists |
-| `INSUFFICIENT_LIQUIDITY` | 422 | Pool has insufficient reserves for this swap |
-| `INVALID_DEPOSIT_RATIO` | 422 | Deposit amounts don't match pool ratio |
-| `BELOW_MIN_LIQUIDITY` | 422 | Initial deposit would produce less than 1000 LP tokens |
+| `POOL_INACTIVE` | 400 | Pool is not in ACTIVE state |
+| `POOL_CREATION_FAILED` | 400 | Failed to create pool transaction |
+| `DEPOSIT_FAILED` | 400 | Failed to build deposit transaction |
+| `WITHDRAW_FAILED` | 400 | Failed to build withdrawal transaction |
+| `INSUFFICIENT_LIQUIDITY` | 400 | Pool lacks sufficient reserves for the operation |
+| `INVALID_POOL_PARAMS` | 400 | Invalid pool creation parameters |
 
-### Order Errors (4xx)
+### Order Errors
 
-| Code | Status | Description |
-|---|---|---|
+| Code | HTTP | Description |
+|------|------|-------------|
 | `ORDER_NOT_FOUND` | 404 | Order ID does not exist |
-| `ORDER_NOT_ACTIVE` | 422 | Order is not in ACTIVE state |
-| `INVALID_ORDER_TYPE` | 400 | Order type must be LIMIT, DCA, or STOP_LOSS |
-| `INVALID_PRICE_TARGET` | 400 | Price numerator/denominator invalid |
-| `DCA_INTERVAL_TOO_SHORT` | 400 | DCA interval must be at least 60 seconds |
+| `ORDER_ALREADY_FILLED` | 400 | Order has been fully executed |
+| `ORDER_EXPIRED` | 400 | Order deadline has passed |
+| `ORDER_CANCELLED` | 400 | Order was already cancelled |
+| `ORDER_CREATION_FAILED` | 400 | Failed to build order transaction |
+| `ORDERS_DISABLED` | 400 | Order routes not enabled (`ORDER_ROUTES_ENABLED=false`) |
+| `INVALID_ORDER_TYPE` | 400 | Unsupported order type |
 
-### Chain Errors (5xx)
+### Chain / Transaction Errors
 
-| Code | Status | Description |
-|---|---|---|
-| `CHAIN_SUBMIT_FAILED` | 500 | Transaction submission to Cardano failed |
-| `CHAIN_TIMEOUT` | 503 | Blockfrost request timed out |
-| `UTXO_ALREADY_CONSUMED` | 409 | The target UTxO was consumed by another TX |
-| `INSUFFICIENT_FUNDS` | 422 | Wallet has insufficient funds for this TX |
-| `TX_BUILD_FAILED` | 500 | Transaction building failed (Lucid error) |
+| Code | HTTP | Description |
+|------|------|-------------|
+| `TX_SUBMIT_FAILED` | 400 | Transaction rejected by Cardano node |
+| `TX_BUILD_FAILED` | 400 | Failed to construct transaction |
+| `TX_NOT_FOUND` | 404 | Transaction hash not found on-chain |
+| `UTXO_NOT_FOUND` | 400 | Required UTxO not found |
+| `SCRIPT_EVALUATION_FAILED` | 400 | Plutus script execution failed |
+| `BLOCKFROST_ERROR` | 502 | Blockfrost API returned an error |
+| `CHAIN_SYNC_ERROR` | 502 | Failed to sync chain state |
 
-### Admin Errors (4xx)
+### Admin Errors
 
-| Code | Status | Description |
-|---|---|---|
-| `UNAUTHORIZED` | 401 | Not authenticated |
-| `FORBIDDEN` | 403 | Not admin address |
-| `SETTINGS_NOT_FOUND` | 404 | Protocol settings UTxO not deployed |
+| Code | HTTP | Description |
+|------|------|-------------|
+| `UNAUTHORIZED` | 401 | Wallet is not an admin |
+| `SETTINGS_NOT_FOUND` | 404 | Settings UTxO not found on-chain |
+| `FACTORY_NOT_FOUND` | 404 | Factory UTxO not found |
+| `FEE_COLLECTION_FAILED` | 400 | Failed to build fee collection transaction |
+| `INVALID_CONFIRMATION` | 400 | Reset confirmation string does not match |
 
-### System Errors (5xx)
+### System Errors
 
-| Code | Status | Description |
-|---|---|---|
-| `INTERNAL_ERROR` | 500 | Unexpected server error |
-| `DATABASE_ERROR` | 503 | Database connection or query failure |
-| `CACHE_ERROR` | 503 | Redis connection failure (non-fatal, falls back to memory) |
-| `BLOCKFROST_ERROR` | 503 | Blockfrost API unreachable |
+| Code | HTTP | Description |
+|------|------|-------------|
+| `INTERNAL_ERROR` | 500 | Unexpected internal error |
+| `DATABASE_ERROR` | 500 | Database operation failed |
+| `CACHE_ERROR` | 500 | Redis cache operation failed |
+| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests in the current window |
+| `EXTERNAL_SERVICE_ERROR` | 502 | External service (Blockfrost, etc.) unavailable |
+
+---
+
+## Error Handling Best Practices
+
+<Callout type="info">
+**Retry Strategy:** For `502` (external service) errors, implement exponential backoff with 3 retries.
+For `429` (rate limit) errors, wait for the `Retry-After` header value before retrying.
+</Callout>
+
+```typescript
+async function apiCall(url: string, options?: RequestInit) {
+  const MAX_RETRIES = 3;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const res = await fetch(url, options);
+
+    if (res.ok) return res.json();
+
+    if (res.status === 429) {
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '60');
+      await new Promise(r => setTimeout(r, retryAfter * 1000));
+      continue;
+    }
+
+    if (res.status === 502 && attempt < MAX_RETRIES - 1) {
+      await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 1000));
+      continue;
+    }
+
+    const error = await res.json();
+    throw new ApiError(error.code, error.message, res.status);
+  }
+}
+```

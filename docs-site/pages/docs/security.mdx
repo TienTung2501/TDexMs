@@ -30,11 +30,13 @@ The Aiken smart contracts enforce critical invariants on-chain:
 | Guarantee | Enforced By | How |
 |-----------|-------------|-----|
 | **User can always reclaim** | Escrow Validator | Owner signature check on `Reclaim` redeemer |
-| **Minimum output enforced** | Escrow Validator | `min_receive` checked against actual output |
+| **Minimum output enforced** | Escrow Validator | `min_output` checked against actual output (proportional for partial fills) |
 | **Pool reserves conserved** | Pool Validator | Constant-product formula verified: `x' × y' ≥ x × y` |
 | **LP tokens correctly minted** | LP Token Policy | Mint amount = `√(Δx × Δy)` for initial, proportional thereafter |
 | **One Pool NFT per pool** | Pool NFT Policy | Mint quantity exactly 1, only by factory |
-| **Settings immutable w/o authority** | Settings Validator | Admin NFT must be present for updates |
+| **Settings immutable w/o authority** | Settings Validator | Script-hash-based admin via withdrawal check |
+| **Anti-double-satisfaction** | Escrow Validator | InlineDatum with intent token name prevents output reuse |
+| **Manipulation resistance** | Pool Validator | `last_root_k` tracking prevents reserve manipulation |
 
 ### Validator Security Properties
 
@@ -42,7 +44,7 @@ The Aiken smart contracts enforce critical invariants on-chain:
 // Escrow: Only owner can reclaim
 fn validate_reclaim(datum: EscrowDatum, ctx: ScriptContext) -> Bool {
   // Signer must be the original intent owner
-  list.has(ctx.transaction.extra_signatories, datum.owner_pkh)
+  list.has(ctx.transaction.extra_signatories, datum.creator)
 }
 
 // Pool: Constant product invariant
@@ -64,8 +66,8 @@ fn validate_swap(old_x: Int, old_y: Int, new_x: Int, new_y: Int) -> Bool {
 | **Datum hijacking** | Output datum verified against expected values in validator |
 | **Oracle manipulation** | No external price oracle — prices derived from on-chain pool reserves |
 | **Sandwich attack** | Netting engine matches intents off-chain, reducing MEV exposure |
-| **Unbounded computation** | Batch size capped at `MAX_BATCH_SIZE` (default: 30) |
-| **Token name collision** | Intent tokens use sha3_256 hash of tx input as unique identifier |
+| **Unbounded computation** | Batch size capped at `MAX_BATCH_SIZE` (default: 15) |
+| **Token name collision** | Intent tokens use blake2b_256 hash of tx input as unique identifier |
 
 ## Backend Security
 
@@ -153,7 +155,7 @@ const intentSchema = z.object({
 ### Solver Key Management
 
 <Callout type="error">
-The solver private key (`SOLVER_PRIVATE_KEY`) has the ability to submit transactions using the solver's own UTxOs for fees. Protect it carefully.
+The solver seed phrase (`SOLVER_SEED_PHRASE`) has the ability to submit transactions using the solver's own UTxOs for fees. Protect it carefully.
 </Callout>
 
 **Best Practices:**

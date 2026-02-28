@@ -14,18 +14,10 @@
   "how-it-works": {
     "title": "How It Works"
   },
-  "---": {
-    "type": "separator"
-  },
   "docs": {
-    "title": "Documentation",
-    "type": "page"
-  },
-  "--- 2": {
-    "type": "separator"
+    "title": "📖 Documentation"
   },
   "changelog": {
-    "title": "Changelog",
-    "type": "page"
+    "title": "Changelog"
   }
 }

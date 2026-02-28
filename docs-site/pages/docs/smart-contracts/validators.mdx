@@ -2,152 +2,204 @@
 
 import { Callout } from 'nextra/components'
 
+Detailed reference for all 5 SolverNet validators.
+
 ## Escrow Validator
 
-**File:** `smartcontract/validators/escrow_validator.ak`  
-**Parameters:** None  
-**Purpose:** Holds user swap intents as individual UTxOs.
+**File**: `validators/escrow_validator.ak` (299 lines)
+**Parameters**: None (unparameterized)
+**Purpose**: Holds user funds during a swap intent.
 
-### Datum
+### Datum: EscrowDatum
 
 ```aiken
 type EscrowDatum {
-  owner: Address,              // User who can cancel
-  input_asset: AssetClass,     // What the user is selling
-  output_asset: AssetClass,    // What the user wants to receive
-  min_output: Int,             // Minimum acceptable amount
-  intent_token: AssetClass,    // Auth token for this escrow
-  expiry_time: POSIXTime,      // TTL timestamp
+  creator: VerificationKeyHash,       // Owner who can cancel
+  input_policy_id: PolicyId,          // Input token policy
+  input_asset_name: AssetName,        // Input token name
+  output_policy_id: PolicyId,         // Desired output token policy
+  output_asset_name: AssetName,       // Desired output token name
+  min_output: Int,                    // Minimum acceptable output
+  deadline: POSIXTime,                // Expiry timestamp
+  escrow_token: AssetName,            // Intent token name (thread)
+  input_amount: Int,                  // Original input amount
+  max_partial_fills: Int,             // Max allowed partial fills (default: 5)
+  fill_count: Int,                    // Current fill count (starts at 0)
+  remaining_input: Int,               // Remaining input to be filled
 }
 ```
 
+<Callout>
+The datum has **12 fields**, not 6 as in simplified docs. Fields like `fill_count`, `remaining_input`, and `max_partial_fills` enable partial fill functionality.
+</Callout>
+
 ### Redeemers
 
-| Redeemer | Who | Conditions |
-|---|---|---|
-| `Cancel` | Owner only | TX signed by datum's `owner` address |
-| `Fill` | Solver | Output delivered to owner ≥ `min_output`; intent token burned |
-| `Reclaim` | Anyone | Current time > `expiry_time`; funds returned to owner |
+#### Cancel
+Owner reclaims funds before deadline.
 
-### Validation Rules (Fill)
+```
+Checks:
+1. Creator signature present (check_signer)
+2. Intent token burned (check_burn_one)
+3. Funds returned to creator address
+```
 
-1. The output going to the `owner` address must contain ≥ `min_output` of `output_asset`
-2. The `intent_token` must be burned in the transaction (prevents double-fill)
-3. The escrow UTxO is consumed (spent)
-4. Partial fills create a new escrow UTxO with reduced `min_output`
+#### Fill
+Solver settles the intent (fully or partially).
 
-```aiken
-validator escrow {
-  spend(datum: EscrowDatum, redeemer: EscrowRedeemer, ctx: ScriptContext) {
-    when redeemer is {
-      Cancel -> {
-        // Verify owner signature
-        must_be_signed_by(ctx.transaction, datum.owner)
-      }
-      Fill -> {
-        // Verify output to owner >= min_output
-        let owner_output = get_output_to(ctx.transaction, datum.owner)
-        let received = quantity_of(owner_output.value, datum.output_asset)
-        expect received >= datum.min_output
-        // Verify intent token is burned
-        expect token_burned(ctx.transaction, datum.intent_token)
-      }
-      Reclaim -> {
-        // Verify expired
-        let valid_range = ctx.transaction.validity_range
-        expect after(valid_range, datum.expiry_time)
-        // Verify funds returned to owner
-        expect output_to_owner(ctx.transaction, datum.owner, datum.input_asset)
-      }
-    }
-  }
-}
+```
+Checks:
+1. Before deadline (check_before_deadline)
+2. Output ≥ proportional minOutput:
+   output ≥ (fill_amount × min_output) / input_amount
+3. Complete fill:
+   - Intent token burned
+   - Output sent to creator via check_payment_output_secure
+4. Partial fill:
+   - fill_amount ≥ 10% of remaining_input
+   - fill_count < max_partial_fills
+   - Continuing UTxO with updated datum:
+     - remaining_input -= fill_amount
+     - fill_count += 1
+   - Continuing UTxO has InlineDatum (anti-double-satisfaction)
+   - Intent token continues to new UTxO
+5. Anti-double-satisfaction:
+   - check_payment_output_secure verifies InlineDatum contains
+     the escrow_token name, preventing solver from using one
+     output to satisfy two different intents
+```
+
+#### Reclaim
+Owner reclaims after deadline expiry.
+
+```
+Checks:
+1. After deadline (check_after_deadline: tx_valid_from > deadline)
+2. Intent token burned
+3. Funds returned to creator
 ```
 
 ---
 
 ## Pool Validator
 
-**File:** `smartcontract/validators/pool_validator.ak`  
-**Parameters:** `admin_vkh: VerificationKeyHash`  
-**Purpose:** AMM constant-product pool with fee collection.
+**File**: `validators/pool_validator.ak` (459 lines)
+**Parameters**: `admin_vkh: VerificationKeyHash`
+**Purpose**: Constant-product AMM pool with fee accrual.
 
-### Datum
+### Datum: PoolDatum
 
 ```aiken
 type PoolDatum {
-  asset_a: AssetClass,         // First asset (canonically ordered)
-  asset_b: AssetClass,         // Second asset
-  total_lp_tokens: Int,        // Total LP supply
-  fee_numerator: Int,          // Fee basis points (30 = 0.3%)
-  fee_denominator: Int,        // Always 10000
-  protocol_fee_a: Int,         // Accumulated protocol fees
-  protocol_fee_b: Int,         //   for asset A and B
-  pool_nft: AssetClass,        // Thread token (identity)
+  asset_a: AssetClass,             // First token (canonically ordered)
+  asset_b: AssetClass,             // Second token
+  reserve_a: Int,                  // Active reserve of token A
+  reserve_b: Int,                  // Active reserve of token B
+  total_lp_tokens: Int,            // Total outstanding LP tokens
+  fee_numerator: Int,              // Trading fee (e.g., 30 = 0.30%)
+  protocol_fee_a: Int,             // Accumulated protocol fees (token A)
+  protocol_fee_b: Int,             // Accumulated protocol fees (token B)
+  pool_nft: AssetClass,            // Thread token identifying this pool
+  last_root_k: Int,                // √(reserveA × reserveB) pre-swap
 }
 ```
 
 ### Redeemers
 
-| Redeemer | Who | Conditions |
-|---|---|---|
-| `Swap` | Anyone | Constant-product invariant maintained after fee |
-| `Deposit` | Anyone | LP tokens minted proportionally |
-| `Withdraw` | Anyone | LP tokens burned, proportional reserves returned |
-| `CollectFees` | Admin only | Protocol fees sent to admin address |
-| `ClosePool` | Admin only | All liquidity withdrawn, pool NFT burned |
+#### Swap
+Execute a token swap against the pool.
 
-### Swap Validation (Constant Product)
+```
+Active reserves = physical_value - protocol_fees
 
-The core invariant enforced on every swap:
+Checks:
+1. Pool NFT continuity (thread token stays in pool UTxO)
+2. Swap output = calculate_swap_output(input, reserves, fee)
+3. Protocol fee accrued: fee × protocol_fee_share (1/6)
+4. Constant product maintained:
+   √(newReserveA × newReserveB) ≥ last_root_k
+5. Datum updated: new reserves, fees, last_root_k
+6. Physical value matches reserves + protocol_fees
+```
 
-$$
-(R_{\text{in}} + \Delta_{\text{in}} \times (1 - f)) \times (R_{\text{out}} - \Delta_{\text{out}}) \geq R_{\text{in}} \times R_{\text{out}}
-$$
+**Swap formula** (integer arithmetic):
+```
+fee = input_amount × fee_numerator / fee_denominator
+input_after_fee = input_amount - fee
+output = (reserve_out × input_after_fee) / (reserve_in + input_after_fee)
+```
 
-Where:
-- $R_{\text{in}}$ = input reserve before swap
-- $R_{\text{out}}$ = output reserve before swap
-- $\Delta_{\text{in}}$ = input amount
-- $\Delta_{\text{out}}$ = output amount
-- $f$ = fee rate (fee_numerator / fee_denominator)
+#### Deposit
+Add proportional liquidity.
 
-In integer arithmetic (no floating point):
+```
+Checks:
+1. Pool NFT continuity
+2. Deposit is proportional (within tolerance)
+3. LP tokens minted:
+   min(amountA × totalLP / reserveA, amountB × totalLP / reserveB)
+4. LP token minting verified (forwarding to LP Token policy)
+5. Datum updated: new reserves, totalLpTokens
+```
 
-```aiken
-// Verify constant product invariant
-let new_reserve_in = reserve_in * D + input_amount * (D - fee_numerator)
-let new_reserve_out = reserve_out * D - output_amount * D
-expect new_reserve_in * new_reserve_out >= reserve_in * reserve_out * D * D
+#### Withdraw
+Remove liquidity by burning LP tokens.
+
+```
+Checks:
+1. Pool NFT continuity
+2. LP tokens burned
+3. Output proportional:
+   outputA = lpBurned × reserveA / totalLP
+   outputB = lpBurned × reserveB / totalLP
+4. Datum updated
+```
+
+#### CollectFees
+Admin collects accumulated protocol fees.
+
+```
+Checks:
+1. Admin signature (admin_vkh)
+2. Fees reset to zero in datum
+3. Physical value reduced by collected fee amount
+4. Reserves unchanged
+```
+
+#### ClosePool
+Admin permanently closes the pool.
+
+```
+Checks:
+1. Admin signature
+2. Pool NFT burned
+3. All remaining funds withdrawable
 ```
 
 ---
 
 ## Order Validator
 
-**File:** `smartcontract/validators/order_validator.ak`  
-**Parameters:** `intent_token_policy_id: PolicyId`  
-**Purpose:** Advanced order types (Limit, DCA, Stop-Loss).
+**File**: `validators/order_validator.ak` (371 lines)
+**Parameters**: `intent_token_policy_id: PolicyId`
+**Purpose**: Handles limit, DCA, and stop-loss orders.
 
-### Datum
+### Datum: OrderDatum
 
 ```aiken
 type OrderDatum {
-  creator: Address,
-  order_type: OrderType,       // Limit | DCA | StopLoss
+  creator: VerificationKeyHash,
   input_asset: AssetClass,
   output_asset: AssetClass,
-  total_budget: Int,
-  remaining_budget: Int,
-  price_numerator: Int,        // Target price
-  price_denominator: Int,
-  // DCA fields
-  dca_interval: Option<Int>,
-  dca_amount: Option<Int>,
-  last_executed: Option<POSIXTime>,
-  // Common
-  intent_token: AssetClass,
-  expiry_time: POSIXTime,
+  budget: Int,                     // Total input budget
+  min_output: Int,                 // Minimum acceptable output
+  deadline: POSIXTime,
+  order_type: OrderType,           // LIMIT | DCA | STOP_LOSS
+  order_params: OrderParams,       // Type-specific parameters
+  filled_amount: Int,              // Total filled so far
+  fill_count: Int,
+  escrow_token: AssetName,         // Intent token (thread)
 }
 
 type OrderType {
@@ -155,71 +207,130 @@ type OrderType {
   DCA
   StopLoss
 }
+
+type OrderParams {
+  amount_per_interval: Int,        // DCA: amount per execution
+  interval: Int,                   // DCA: seconds between fills
+  last_fill_time: Int,             // DCA: timestamp of last fill
+}
 ```
 
 ### Redeemers
 
-| Redeemer | Who | Conditions |
-|---|---|---|
-| `CancelOrder` | Creator only | TX signed by creator |
-| `ExecuteOrder` | Solver | Price condition met, correct output delivered |
-| `ReclaimOrder` | Anyone | Expired, funds returned to creator |
+#### CancelOrder
+Creator cancels and reclaims budget.
 
-### Price Condition Checks
-
-**Limit Order:** Execute when market price reaches target
 ```
-output × price_denominator ≥ consumed × price_numerator
+1. Creator signature
+2. Intent token burned
+3. Remaining budget returned
 ```
 
-**DCA Order:** Execute at interval regardless of price (with optional price cap)
+#### ExecuteOrder
+Solver fills the order (dispatches by type).
+
+**Limit Order:**
 ```
-current_time - last_executed ≥ dca_interval
-execution_amount = min(dca_amount, remaining_budget)
+1. Before deadline
+2. meets_limit_price: output × budget ≥ min_output × input
+3. Partial fill → continuing UTxO with updated filled_amount
+4. Full fill → intent token burned
 ```
 
-**Stop-Loss:** Execute when price drops below threshold
+**DCA Order:**
 ```
-current_price ≤ stop_loss_price
+1. Before deadline
+2. Fill amount = min(amount_per_interval, remaining_budget)
+3. Timing check: tx_valid_from ≥ last_fill_time + interval
+4. Continuing UTxO with updated last_fill_time, filled_amount
+5. Full budget consumed → intent token burned
+```
+
+**Stop-Loss Order:**
+```
+1. Before deadline
+2. Full budget converted (no partial fills)
+3. Output ≥ min_output
+4. Intent token burned
+```
+
+#### ReclaimOrder
+After deadline, creator reclaims remaining budget.
+
+```
+1. After deadline (tx_valid_from > deadline)
+2. Intent token burned
+3. Remaining budget returned
 ```
 
 ---
 
 ## Factory Validator
 
-**Parameters:** `pool_validator_hash: ScriptHash`  
-**Purpose:** Registry ensuring no duplicate pools.
+**File**: `validators/factory_validator.ak` (212 lines)
+**Parameters**: `pool_validator_hash: ScriptHash`
+**Purpose**: Creates new pools with proper initialization.
 
-### Key Rules
+### Redeemers
 
-1. **Canonical ordering:** `asset_a < asset_b` (hexadecimal comparison)
-2. **Uniqueness:** No two pools with the same asset pair
-3. **Pool NFT:** Each registered pool must have exactly 1 pool NFT
+#### CreatePool
+
+```
+Checks:
+1. Assets canonically ordered (asset_a < asset_b by policy then name)
+2. Pool NFT minted (exactly 1)
+3. LP tokens minted (√(amountA × amountB) - minimum_liquidity)
+4. Pool UTxO created at pool_validator address with correct datum:
+   - reserve_a = amountA
+   - reserve_b = amountB
+   - total_lp_tokens = minted LP amount
+   - fee_numerator within bounds
+   - protocol_fees = 0
+   - last_root_k = √(amountA × amountB)
+5. Pool NFT in the pool UTxO value
+```
+
+#### UpdateSettings
+
+```
+Checks:
+1. Admin signature
+2. Settings datum version incremented
+```
 
 ---
 
 ## Settings Validator
 
-**Parameters:** `settings_nft: AssetClass`  
-**Purpose:** Singleton global configuration UTxO.
+**File**: `validators/settings_validator.ak` (98 lines)
+**Parameters**: `settings_nft: AssetClass`
+**Purpose**: Stores and controls protocol-wide configuration.
 
-### Datum
+### Datum: SettingsDatum
 
 ```aiken
 type SettingsDatum {
-  protocol_fee_percent: Int,   // Protocol fee percentage
-  min_liquidity: Int,          // Minimum initial liquidity (1000)
-  admin_address: Address,
-  version: Int,                // Schema version for upgrades
+  admin: ScriptHash,               // Admin script hash (multi-sig pattern)
+  fee_numerator: Int,              // Default trading fee
+  protocol_fee_share: Int,         // Protocol's share (1/N)
+  min_liquidity: Int,              // Minimum locked LP
+  version: Int,                    // Config version (must increment)
 }
 ```
 
 ### Redeemers
 
-| Redeemer | Who | Conditions |
-|---|---|---|
-| `UpdateSettings` | Admin only | New datum with incremented version |
+#### UpdateProtocolSettings
+
+```
+Checks:
+1. Admin authorization via withdrawal check (script-hash admin)
+2. Settings NFT continuity
+3. Version incremented
+4. Fee within bounds (min_fee_numerator..max_fee_numerator)
+5. min_liquidity ≥ minimum_liquidity constant
+```
 
 <Callout type="info">
-The settings UTxO is identified by a unique NFT. Only one settings UTxO can exist at a time, enforced by the NFT. The admin can update settings by consuming and recreating the UTxO with new parameters.
+The settings validator uses a **script-hash-based admin** pattern. Instead of checking a simple VKH signature, it checks that the admin script (which can be a multi-sig) appears in the transaction's withdrawals. This enables flexible admin governance.
 </Callout>

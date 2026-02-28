@@ -2,171 +2,172 @@
 
 import { Callout } from 'nextra/components'
 
+Key UI components in the SolverNet DEX frontend.
+
 ## Component Architecture
 
-SolverNet DEX follows a layered component architecture:
-
 ```
-components/
-├── ui/              # Base components (shadcn/ui)
-│   ├── button.tsx
-│   ├── card.tsx
-│   ├── dialog.tsx
-│   ├── input.tsx
-│   ├── tabs.tsx
-│   ├── select.tsx
-│   ├── toast.tsx
-│   └── ...
-├── common/          # Shared business components
-│   ├── AssetSelector.tsx
-│   ├── AmountInput.tsx
-│   ├── TransactionStatus.tsx
-│   └── ...
-├── features/        # Feature-specific components
-│   ├── trading/
-│   ├── wallet/
-│   ├── liquidity/
-│   └── admin/
-└── layout/          # App shell
-    ├── Header.tsx
-    ├── Sidebar.tsx
-    └── Footer.tsx
+Layout Components
+├── Header          # Navigation, wallet connect, network badge
+├── Footer          # Links, credits
+└── Sidebar         # Mobile navigation
+
+Trading Components
+├── SwapCard        # Main swap interface
+│   ├── TokenSelect # Token picker with search
+│   ├── AmountInput # Token amount input with balance
+│   └── SwapButton  # Sign & submit swap
+├── PriceChart      # TradingView candlestick chart
+├── RecentTrades    # Live trade feed from pool
+└── QuoteDisplay    # Price impact, fees, route info
+
+Pool Components
+├── PoolTable       # Pool list with sorting
+├── PoolCard        # Individual pool summary
+├── LiquidityForm   # Add/remove liquidity
+├── PoolChart       # TVL & volume history
+└── PoolSwaps       # Recent swaps for a pool
+
+Order Components
+├── OrderEntry      # Create limit/DCA/stop-loss orders
+├── OrderList       # Active orders with cancel
+└── OrderHistory    # Completed/cancelled orders
+
+Portfolio Components
+├── PortfolioSummary    # Total balance, allocation chart
+├── OpenPositions       # Active intents & orders
+├── TradeHistory        # Completed trades
+├── LPPositions         # Liquidity provider positions
+└── PerformanceChart    # Portfolio value over time
+
+Admin Components
+├── AdminDashboard      # Metrics, TVL, volume cards
+├── ProtocolDeploy      # Deploy settings/factory
+├── SettingsPanel       # Update protocol settings
+├── FeeCollector        # Collect protocol fees
+├── SolverControl       # Start/stop/trigger solver
+└── PoolManager         # Admin pool operations
 ```
 
-## Trading Components
+## Key Components
 
 ### SwapCard
 
-The primary swap interface component.
+The primary trading interface. Handles the full swap flow:
+
+1. **Token Selection** — User picks input/output tokens from dynamic registry
+2. **Amount Input** — Enter amount with real-time quote fetching
+3. **Quote Display** — Shows output amount, price impact, fees, route
+4. **Swap Execution** — Builds escrow TX → wallet signs → submit to chain
 
 ```tsx
-// components/features/trading/SwapCard.tsx
-interface SwapCardProps {
-  pools: Pool[]
-  onSwapComplete?: (intent: Intent) => void
-}
-
-function SwapCard({ pools, onSwapComplete }: SwapCardProps) {
-  // State: input/output assets, amounts, quote
-  // 1. User selects input asset and enters amount
-  // 2. Auto-fetches quote from backend
-  // 3. Displays: output amount, price impact, fees, rate
-  // 4. On confirm: creates intent → returns unsigned TX
-  // 5. User signs with wallet → submits to chain
-  // 6. Real-time status updates via WebSocket
-}
+<SwapCard>
+  <TokenInput
+    label="You Pay"
+    token={inputToken}
+    amount={inputAmount}
+    balance={walletBalance}
+    onTokenChange={handleTokenChange}
+    onAmountChange={handleAmountChange}
+  />
+  <SwapDirectionButton onClick={handleReverse} />
+  <TokenInput
+    label="You Receive"
+    token={outputToken}
+    amount={quote?.outputAmount}
+    readOnly
+  />
+  <QuoteDetails
+    priceImpact={quote?.priceImpact}
+    minimumOutput={quote?.minOutput}
+    fees={quote?.estimatedFees}
+    route={quote?.route}
+  />
+  <SwapButton
+    disabled={!quote || !connected}
+    loading={isSwapping}
+    onClick={handleSwap}
+  />
+</SwapCard>
 ```
 
-**Features:**
-- Asset selector with search
-- Real-time quote updates (debounced)
-- Slippage tolerance settings
-- Price impact warnings (yellow > 1%, red > 5%)
-- Transaction status tracking
+### TokenSelect
+
+Token picker with search, filtering, and Uniswap-style UX:
+
+- Fetches available tokens from `GET /v1/tokens`
+- Groups tokens into "Popular" and "All Tokens"
+- Search by ticker, name, or policy ID
+- Shows wallet balance for each token
+- Prevents selecting the same token for both input and output
 
 ### PriceChart
 
-TradingView-style price chart using `lightweight-charts`.
+TradingView-style candlestick chart with:
 
-```tsx
-// components/features/trading/PriceChart.tsx
-interface PriceChartProps {
-  poolId: string
-  interval: 'H4' | 'D1' | 'W1'
-}
-```
-
-**Features:**
-- Candlestick chart with OHLCV data
-- Volume overlay
-- Multiple timeframes (4h, 1d, 1w)
+- Multiple timeframes (1m, 5m, 15m, 1h, 4h, 1D, 1W)
+- OHLCV data from `GET /v1/chart/candles`
 - Real-time price updates via WebSocket
-- Responsive, resizable container
+- Volume bars overlay
+- Responsive sizing
 
-### PseudoOrderbook
+### LiquidityForm
 
-Visual display of pending intents as an orderbook-style view.
+Dual-input form for adding/removing liquidity:
 
-```tsx
-// components/features/trading/PseudoOrderbook.tsx
-interface PseudoOrderbookProps {
-  poolId: string
-  depth: number
-}
 ```
-
-### OrderEntryCard
-
-Advanced order creation (Limit, DCA, Stop-Loss).
-
-```tsx
-// components/features/trading/OrderEntryCard.tsx
-interface OrderEntryCardProps {
-  pools: Pool[]
-  selectedPool?: Pool
-}
-```
-
-## Wallet Components
-
-### WalletConnect
-
-Handles Cardano wallet connection via CIP-30.
-
-```tsx
-// components/features/wallet/WalletConnect.tsx
-function WalletConnect() {
-  // Detect available wallets (Nami, Eternl, Flint, Lace)
-  // Connect and initialize Lucid
-  // Display connected address and balance
-  // Handle disconnection
-}
-```
-
-**Supported wallets:**
-- Nami
-- Eternl
-- Flint
-- Lace
-- GeroWallet
-
-## Liquidity Components
-
-### AddLiquidity
-
-```tsx
-// components/features/liquidity/AddLiquidity.tsx
-interface AddLiquidityProps {
-  pool: Pool
-  onDepositComplete?: () => void
-}
-```
-
-### RemoveLiquidity
-
-```tsx
-// components/features/liquidity/RemoveLiquidity.tsx
-interface RemoveLiquidityProps {
-  pool: Pool
-  lpBalance: bigint
-  onWithdrawComplete?: () => void
-}
+┌─────────────────────────────┐
+│  Add Liquidity              │
+│  ┌───────────────────────┐  │
+│  │ ADA: [      100     ] │  │
+│  └───────────────────────┘  │
+│  ┌───────────────────────┐  │
+│  │ TOKEN: [     50     ] │  │
+│  └───────────────────────┘  │
+│                             │
+│  LP Tokens to receive: 70.7 │
+│  Share of pool: 5.2%        │
+│                             │
+│  [    Add Liquidity    ]    │
+└─────────────────────────────┘
 ```
 
 ## UI Components (shadcn/ui)
 
-Based on Radix UI primitives with Tailwind CSS styling:
+The frontend uses [shadcn/ui](https://ui.shadcn.com) for accessible, customizable UI primitives:
 
-| Component | Base | Description |
-|---|---|---|
-| `Button` | Radix | Action buttons with variants (default, destructive, outline, ghost) |
-| `Card` | — | Container with header, content, footer |
-| `Dialog` | Radix Dialog | Modal overlays |
-| `Tabs` | Radix Tabs | Tab navigation (Swap/Limit/DCA/Stop-Loss) |
-| `Select` | Radix Select | Dropdown selection (Asset picker) |
-| `Input` | — | Text/number input fields |
-| `Toast` | Radix Toast | Notification toasts |
-| `Tooltip` | Radix Tooltip | Hover information |
-| `Badge` | — | Status badges (Active, Filled, etc.) |
-| `Table` | — | Data tables (pools list, order history) |
-| `Skeleton` | — | Loading placeholders |
+| Component | Usage |
+|-----------|-------|
+| `Button` | All action buttons with variants |
+| `Card` | Content containers and widgets |
+| `Dialog` | Token select modal, confirmations |
+| `Input` | Amount inputs, search fields |
+| `Select` | Dropdowns for timeframes, filters |
+| `Table` | Pool lists, trade history |
+| `Tabs` | Section switching (Swap/Limit/DCA) |
+| `Badge` | Status indicators, network labels |
+| `Skeleton` | Loading states |
+| `Toast` | Success/error notifications |
+
+## Theming
+
+Dark mode is the default theme, managed via `next-themes`:
+
+```tsx
+// providers/theme-provider.tsx
+<ThemeProvider attribute="class" defaultTheme="dark">
+  {children}
+</ThemeProvider>
+```
+
+Custom theme colors extend Tailwind's palette:
+
+```css
+:root {
+  --primary: 210 100% 50%;     /* Blue */
+  --background: 222 47% 11%;   /* Dark navy */
+  --card: 223 47% 14%;         /* Slightly lighter */
+  --accent: 142 76% 36%;       /* Green for positive values */
+  --destructive: 0 84% 60%;    /* Red for negative values */
+}
+```

@@ -1,79 +1,90 @@
 # Smart Contracts
 
-import { Callout } from 'nextra/components'
+import { Cards, Card, Callout } from 'nextra/components'
 
-SolverNet DEX's on-chain logic is implemented in **Aiken** — a modern smart contract language for Cardano, compiling to **Plutus V3** (PlutusCore).
+SolverNet's on-chain logic is written in **Aiken** (Plutus V3) and compiled to UPLC for Cardano.
 
-## Overview
-
-| Property | Value |
-|---|---|
-| **Language** | Aiken v1.1.19 |
-| **Plutus Version** | V3 |
-| **Standard Library** | aiken-lang/stdlib v2.2.0 |
-| **Validators** | 5 (Escrow, Pool, Order, Factory, Settings) |
-| **Minting Policies** | 3 (Intent Token, Pool NFT, LP Token) |
-
-## Contract Architecture
+## Architecture
 
 ```
-                    ┌──────────────────────┐
-                    │   Factory Validator   │
-                    │  Pool Registry (no   │
-                    │  duplicate pairs)     │
-                    └──────────┬───────────┘
-                               │ references
-               ┌───────────────┼───────────────┐
-               ▼               ▼               ▼
-    ┌──────────────┐ ┌──────────────┐ ┌────────────────┐
-    │   Escrow     │ │    Pool      │ │   Settings     │
-    │  Validator   │ │  Validator   │ │   Validator     │
-    │             │ │  (AMM x·y=k) │ │  (Protocol     │
-    │  User swap  │ │             │ │   config)       │
-    │  intents    │ │  Liquidity   │ │                │
-    └──────┬──────┘ └──────┬──────┘ └────────────────┘
-           │               │
-           │               │ validates via
-           ▼               ▼
-    ┌──────────────┐ ┌──────────────┐ ┌────────────────┐
-    │Intent Token  │ │  Pool NFT    │ │   LP Token     │
-    │   Policy     │ │   Policy     │ │    Policy       │
-    │  (auth NFT)  │ │ (thread NFT) │ │ (forwarding)   │
-    └──────────────┘ └──────────────┘ └────────────────┘
-
-    ┌──────────────┐
-    │    Order     │
-    │  Validator   │
-    │  (Limit/DCA/ │
-    │  Stop-Loss)  │
-    └──────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Smart Contract Suite                       │
+│                                                              │
+│  Validators (5)                  Minting Policies (3)        │
+│  ┌──────────────────┐           ┌──────────────────────┐    │
+│  │ Escrow Validator  │           │ Intent Token Policy   │   │
+│  │ (swap intents)    │           │ (one-shot, no params) │   │
+│  ├──────────────────┤           ├──────────────────────┤    │
+│  │ Pool Validator    │           │ Pool NFT Policy       │   │
+│  │ (AMM logic)       │           │ (thread token)        │   │
+│  ├──────────────────┤           ├──────────────────────┤    │
+│  │ Order Validator   │           │ LP Token Policy       │   │
+│  │ (limit/DCA/stop)  │           │ (forwarding mint)     │   │
+│  ├──────────────────┤           └──────────────────────┘    │
+│  │ Factory Validator │                                       │
+│  │ (pool creation)   │                                       │
+│  ├──────────────────┤                                       │
+│  │ Settings Validator│                                       │
+│  │ (protocol config) │                                       │
+│  └──────────────────┘                                       │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-<Callout type="info">
-The compiled contract bytecode is stored in `smartcontract/plutus.json`. The backend loads these scripts at startup and derives addresses for each network.
-</Callout>
+## Key Design Principles
 
-## Validators
-
-- [Escrow Validator →](/docs/smart-contracts/validators#escrow-validator)
-- [Pool Validator →](/docs/smart-contracts/validators#pool-validator)
-- [Order Validator →](/docs/smart-contracts/validators#order-validator)
-- [Factory Validator →](/docs/smart-contracts/validators#factory-validator)
-- [Settings Validator →](/docs/smart-contracts/validators#settings-validator)
-
-## Minting Policies
-
-- [Intent Token Policy →](/docs/smart-contracts/minting-policies#intent-token-policy)
-- [Pool NFT Policy →](/docs/smart-contracts/minting-policies#pool-nft-policy)
-- [LP Token Policy →](/docs/smart-contracts/minting-policies#lp-token-policy)
+| Principle | Implementation |
+|-----------|---------------|
+| **Non-custodial** | Users retain ownership via escrow; only creator can cancel |
+| **Parameterized scripts** | Scripts reference each other via DAG for composability |
+| **Thread tokens** | Pool NFT ensures UTxO continuity across state transitions |
+| **One-shot tokens** | Intent tokens prevent replay and enable batch burns |
+| **Anti-double-satisfaction** | InlineDatum with token name prevents one output serving two intents |
+| **Integer arithmetic** | All math uses BigInt — no floating point on-chain |
 
 ## Security Properties
 
-| Property | Guarantee |
-|---|---|
-| **Non-custodial** | User funds locked in validators, always cancellable by owner |
-| **No admin override** | Admin cannot move user funds from escrow |
-| **One-shot tokens** | Auth tokens are unique (hash of consumed UTxO), preventing replay |
-| **Constant product** | Pool invariant (`x·y ≥ k`) enforced on every swap |
-| **Canonical ordering** | Factory ensures `assetA < assetB`, preventing duplicate pools |
-| **Min liquidity lock** | 1000 LP tokens locked forever, preventing empty pool exploits |
+| Property | How Enforced |
+|----------|-------------|
+| Funds safety | Escrow validator requires creator signature for cancel |
+| Price protection | `minOutput` check on every fill |
+| Deadline enforcement | Validity intervals checked on-chain |
+| Pool integrity | Constant product invariant + root K tracking |
+| Admin authority | Script-hash-based admin via withdrawal check |
+| LP token accuracy | Forwarding mint delegates to pool/factory validator |
+
+## Constants
+
+From `lib/solvernet/constants.ak`:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `fee_denominator` | 10,000 | Fee precision base |
+| `min_fee_numerator` | 1 | Minimum 0.01% fee |
+| `max_fee_numerator` | 300 | Maximum 3% fee |
+| `protocol_fee_share` | 6 | 1/6 of trading fee goes to protocol |
+| `minimum_liquidity` | 1,000 | Locked LP tokens on pool creation |
+| `min_utxo_lovelace` | 1,500,000 | Minimum ADA in UTxOs |
+| `default_max_partial_fills` | 5 | Max partial fills per intent |
+| `min_fill_percent` | 10 | Minimum 10% fill threshold |
+| `min_dca_interval` | 180 | Minimum 3 minutes between DCA fills |
+
+<Callout type="info">
+All smart contracts are in the `smartcontract/` directory. Build with `aiken build` and find compiled output in `smartcontract/plutus.json`.
+</Callout>
+
+## Sections
+
+<Cards>
+  <Card title="Validators" href="/docs/smart-contracts/validators">
+    Escrow, Pool, Order, Factory, and Settings validators
+  </Card>
+  <Card title="Minting Policies" href="/docs/smart-contracts/minting-policies">
+    Intent Token, Pool NFT, and LP Token policies
+  </Card>
+  <Card title="Script Resolution" href="/docs/smart-contracts/script-resolution">
+    Parameterized script DAG and address derivation
+  </Card>
+  <Card title="Datum & Redeemer" href="/docs/smart-contracts/datum-redeemer">
+    Complete Aiken type reference for all on-chain data
+  </Card>
+</Cards>

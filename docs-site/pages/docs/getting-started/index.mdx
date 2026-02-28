@@ -1,60 +1,79 @@
 # Getting Started
 
-Welcome to **SolverNet DEX** — the intent-based decentralized exchange built on Cardano.
+import { Cards, Card, Callout } from 'nextra/components'
 
-import { Callout, Steps } from 'nextra/components'
+Welcome to SolverNet DEX — an intent-based decentralized exchange built on Cardano with Plutus V3 smart contracts.
 
 <Callout type="info">
-SolverNet DEX is currently deployed on the **Cardano Preprod Testnet**. All addresses and configurations in this documentation reference the preprod network.
+SolverNet DEX is currently live on **Cardano Preprod Testnet**. All operations use test ADA.
 </Callout>
 
 ## What is SolverNet DEX?
 
-SolverNet DEX is a next-generation DEX that replaces the traditional "user vs pool" swap model with an **intent-based architecture**:
+SolverNet DEX introduces an **intent-based trading model** to Cardano:
 
-1. **Users express intents** — "I want to swap X amount of Token A for at least Y amount of Token B"
-2. **Intents are locked on-chain** — Each intent is a separate UTxO at the escrow validator address
-3. **Solvers aggregate and settle** — Off-chain solver bots collect intents, cross-match opposing trades (netting), and settle them in optimized batched transactions
+1. **Users submit trade intentions** (intents) instead of executing swaps directly
+2. **A solver engine** monitors these intents and finds optimal execution routes through AMM liquidity pools
+3. **On-chain settlement** happens through Plutus V3 validators, ensuring trustless, verifiable execution
 
-This design eliminates eUTxO concurrency issues, reduces price impact through netting, and provides MEV protection.
+This architecture enables features like **trade netting** (matching opposing trades), **multi-hop routing**, and **advanced order types** (Limit, DCA, Stop-Loss) — all settled on-chain.
 
 ## Key Concepts
 
 | Concept | Description |
-|---|---|
-| **Intent** | A signed swap request locked in an escrow UTxO. Contains: input asset, output asset, minimum output, owner address, expiry |
-| **Solver** | An off-chain bot that collects intents, finds optimal routes, and submits settlement transactions |
-| **Netting** | Cross-matching opposing intents (A→B vs B→A) to reduce the amount that needs to go through the AMM pool |
-| **Escrow** | The on-chain validator that holds user funds until settlement or cancellation |
-| **Pool** | A constant-product AMM pool (x·y=k) that handles the residual after netting |
-| **Settlement** | A batched transaction that consumes multiple escrow UTxOs, interacts with the pool, and delivers outputs |
+|---------|-------------|
+| **Intent** | A user's declared desire to swap tokens, locked in an on-chain escrow |
+| **Solver** | An automated engine that matches intents and executes optimal trades |
+| **Pool** | A constant-product AMM liquidity pool (x * y = k) |
+| **Escrow** | On-chain UTxO holding user's tokens until the intent is filled or cancelled |
+| **LP Token** | Proportional ownership token for liquidity providers |
+| **Settlement** | On-chain transaction that fulfills an intent and transfers tokens |
 
 ## Project Structure
 
 ```
 decentralize/
-├── smartcontract/        # Aiken validators & minting policies (Plutus V3)
-│   ├── validators/       # Escrow, Pool, Order, Factory, Settings validators
-│   └── lib/              # Shared Aiken types and utilities
-├── backend/              # Express + TypeScript API server
+├── frontend/           # Next.js 16 + React 19 trading UI
+├── backend/            # Express + TypeScript API server
 │   ├── src/
-│   │   ├── domain/       # Entities, value objects, ports (interfaces)
-│   │   ├── application/  # Use cases and services
-│   │   ├── infrastructure/ # DB, chain, cache, cron implementations
-│   │   ├── interface/    # HTTP routes and WebSocket handlers
-│   │   └── solver/       # Solver engine pipeline
-│   └── prisma/           # Database schema
-├── frontend/             # Next.js 16 trading UI
-│   └── src/
-│       ├── app/          # App Router pages
-│       ├── components/   # React components
-│       └── lib/          # API client and utilities
-└── docs-site/            # This documentation (Nextra)
+│   │   ├── domain/     # Core business logic (entities, ports)
+│   │   ├── application/ # Use cases and services
+│   │   ├── infrastructure/ # DB, Blockfrost, cache, crons
+│   │   ├── interface/  # HTTP routes, WebSocket, middleware
+│   │   ├── solver/     # Solver engine
+│   │   └── config/     # Environment & network config
+│   └── prisma/         # Database schema
+├── smartcontract/      # Aiken validators and minting policies
+├── docs-site/          # This documentation (Nextra)
+└── docker-compose.yml  # Container orchestration
 ```
 
-## Next Steps
+## Quick Links
 
-- [Quick Start →](/docs/getting-started/quickstart)
-- [Installation →](/docs/getting-started/installation)
-- [Configuration →](/docs/getting-started/configuration)
-- [Architecture Overview →](/docs/architecture)
+<Cards>
+  <Card title="Quickstart" href="/docs/getting-started/quickstart">
+    Get the full stack running in 5 minutes
+  </Card>
+  <Card title="Installation" href="/docs/getting-started/installation">
+    Detailed setup for each service and dependency
+  </Card>
+  <Card title="Configuration" href="/docs/getting-started/configuration">
+    Complete environment variable reference
+  </Card>
+  <Card title="Architecture" href="/docs/architecture">
+    System design, clean architecture, and data flows
+  </Card>
+</Cards>
+
+## Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| **Frontend** | Next.js 16, React 19, Tailwind CSS | Trading interface |
+| **Backend** | Express, TypeScript, Prisma | API & business logic |
+| **Smart Contracts** | Aiken (Plutus V3) | On-chain validators |
+| **Database** | PostgreSQL (Supabase) | State persistence |
+| **Cache** | Upstash Redis | Performance optimization |
+| **Chain Access** | Blockfrost API | Cardano data + TX submission |
+| **TX Builder** | @lucid-evolution/lucid | Cardano TX construction |
+| **Wallet** | CIP-30 (Nami, Eternl, Lace) | User authentication & signing |

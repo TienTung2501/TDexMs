@@ -2,149 +2,227 @@
 
 import { Callout } from 'nextra/components'
 
-## Complete Swap Data Flow
+End-to-end data flows for the core operations in SolverNet DEX.
 
-This page traces the complete path of a swap from user action through to on-chain settlement.
+## Swap (Intent) Flow
 
-### Phase 1: Quote
-
-```
-User → Frontend → GET /v1/quote → GetQuote UseCase → Pool.calculateSwapOutput() → Response
-```
-
-The quote calculates:
-- Expected output amount
-- LP fee (0.3% default)
-- Protocol fee (1/6 of LP fee)
-- Price impact
-- Best route (direct or multi-hop)
-
-### Phase 2: Intent Creation
+The complete lifecycle of a token swap from user action to on-chain settlement.
 
 ```
-User → Frontend → POST /v1/intents
-  → CreateIntent UseCase
-    → Validate input parameters (Zod)
-    → Find pool for trading pair
-    → Calculate minimum output with slippage
-    → ITxBuilder.buildEscrowTx()
-      → Lucid: build TX that locks funds at escrow validator
-      → Include inline datum: { owner, input, output, minOutput, expiry }
-      → Mint intent_token (one-shot auth NFT)
-    → IIntentRepository.save(intent) [status: CREATED]
-    → Return unsigned TX CBOR
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  User    │     │ Frontend │     │ Backend  │     │ Cardano  │
+└────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │                │
+     │ 1. Enter swap  │                │                │
+     │ parameters     │                │                │
+     │───────────────>│                │                │
+     │                │ 2. GET /quote  │                │
+     │                │───────────────>│                │
+     │                │                │ 3. Calculate   │
+     │                │                │ route + impact │
+     │                │  quote result  │                │
+     │                │<───────────────│                │
+     │ show quote     │                │                │
+     │<───────────────│                │                │
+     │                │                │                │
+     │ 4. Confirm     │                │                │
+     │───────────────>│                │                │
+     │                │ 5. POST       │                │
+     │                │ /intents      │                │
+     │                │───────────────>│                │
+     │                │                │ 6. Build escrow│
+     │                │                │ TX (Lucid)    │
+     │                │  unsignedTx   │                │
+     │                │<───────────────│                │
+     │                │                │                │
+     │ 7. Sign TX     │                │                │
+     │ (CIP-30 wallet)│                │                │
+     │<───────────────│                │                │
+     │ signature      │                │                │
+     │───────────────>│                │                │
+     │                │ 8. POST       │                │
+     │                │ /tx/submit    │                │
+     │                │───────────────>│                │
+     │                │                │ 9. Submit to   │
+     │                │                │───────────────>│
+     │                │                │                │ 10. TX confirmed
+     │                │                │<───────────────│
+     │                │                │                │
+     │                │                │ 11. Solver     │
+     │                │                │ detects intent │
+     │                │                │ (ChainSync)   │
+     │                │                │                │
+     │                │                │ 12. Route      │
+     │                │                │ through pool   │
+     │                │                │                │
+     │                │                │ 13. Build &    │
+     │                │                │ submit settle  │
+     │                │                │───────────────>│
+     │                │                │                │ 14. Settlement TX
+     │                │                │<───────────────│
+     │                │                │                │
+     │                │ 15. WS:       │                │
+     │                │ intentUpdate  │                │
+     │                │<───────────────│                │
+     │ Swap complete  │                │                │
+     │<───────────────│                │                │
 ```
 
-### Phase 3: Signing & Submission
+## Liquidity Flow
+
+### Add Liquidity (Deposit)
 
 ```
-Frontend
-  → User signs TX with wallet (Nami, Eternl, etc.)
-  → POST /v1/tx/submit { signedTx: "84..." }
-    → IChainProvider.submitTx(cbor)
-    → Update intent status: CREATED → PENDING
-    → POST /v1/tx/confirm { txHash, intentId }
-      → ChainSync confirms on-chain
-      → Update intent status: PENDING → ACTIVE
-      → WebSocket broadcast: { channel: 'intent', type: 'intentUpdate' }
+1. User selects pool & amounts
+2. Frontend: POST /pools/:poolId/deposit
+3. Backend: Calculate LP tokens to mint
+   - lpTokens = min(amountA * totalLP / reserveA, amountB * totalLP / reserveB)
+4. Backend: Build deposit TX with Lucid
+   - Consume pool UTxO
+   - Add user's tokens to pool reserves
+   - Mint LP tokens (LP Token Policy)
+   - Produce new pool UTxO with updated reserves
+5. User signs TX → Submit to chain
+6. ChainSync detects pool state change → Update DB
 ```
 
-### Phase 4: Solver Settlement
+### Remove Liquidity (Withdraw)
 
 ```
-SolverEngine loop (every 5s):
-  → IntentCollector.collect()
-    → IChainProvider.getUtxosAtAddress(escrowAddress)
-    → Parse inline datums from each UTxO
-    → Cross-reference with database intents
-    → Filter: only ACTIVE, not expired, has matching pool
+1. User specifies LP tokens to burn
+2. Frontend: POST /pools/:poolId/withdraw
+3. Backend: Calculate proportional share
+   - amountA = lpTokens * reserveA / totalLP
+   - amountB = lpTokens * reserveB / totalLP
+4. Backend: Build withdraw TX
+   - Consume pool UTxO
+   - Burn LP tokens (LP Token Policy)
+   - Return proportional assets to user
+   - Produce new pool UTxO with reduced reserves
+5. User signs TX → Submit to chain
+```
 
-  → RouteOptimizer.findBestRoute(intent)
-    → Check direct pool
-    → Check multi-hop routes
-    → Select route with best output
+## Order Flow (Limit/DCA/Stop-Loss)
 
-  → BatchBuilder.groupByPool(intents)
-    → Group intents by target pool
-    → Create batch per pool
-
-  → NettingEngine.netBatch(batch)
-    → Separate AToB vs BToA intents
-    → Calculate gross flows
-    → Net opposing flows → residual
-    → Only residual goes through AMM
-    → Allocate outputs proportionally
-
-  → Settlement TX building:
-    → Consume escrow UTxOs (Fill redeemer)
-    → Interact with pool UTxO (Swap redeemer)
-    → Deliver outputs to intent owners
-    → Pay solver fee
-    → Sign with solver wallet
-    → Submit to chain
-
-  → Post-settlement:
-    → Update intent status: ACTIVE → FILLED
-    → Record Swap entries in database
-    → Create PriceTick records
-    → Update pool reserves
-    → WebSocket broadcast: intentUpdate, poolUpdate, price
+```
+┌────────────────────────────────────────────────────────────┐
+│ 1. User creates order → POST /orders                      │
+│ 2. Backend builds escrow TX → User signs                  │
+│ 3. Order goes ACTIVE on-chain                             │
+│                                                            │
+│ ┌──────────────── Monitoring Loop ──────────────────┐     │
+│ │ OrderExecutorCron runs every 60s:                  │     │
+│ │                                                    │     │
+│ │ For each ACTIVE order:                             │     │
+│ │   LIMIT:     Check if pool price >= target price   │     │
+│ │   DCA:       Check if interval elapsed             │     │
+│ │   STOP_LOSS: Check if pool price <= trigger price  │     │
+│ │                                                    │     │
+│ │ If condition met:                                  │     │
+│ │   → Build execution TX against pool                │     │
+│ │   → Submit settlement                              │     │
+│ │   → Update order status (FILLED/PARTIALLY_FILLED)  │     │
+│ └────────────────────────────────────────────────────┘     │
+│                                                            │
+│ ReclaimKeeperCron:                                        │
+│   → If deadline passed → Mark EXPIRED                     │
+│   → Build reclaim TX → Return funds to creator            │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ## WebSocket Event Flow
 
 ```
-Client                     Server
-  │                          │
-  │── { type: 'subscribe',   │
-  │    channel: 'prices',    │
-  │    params: { pair: '*' }}│
-  │                          │
-  │◄── { type: 'price',     │ ◄── Solver settles a batch
-  │     data: {              │
-  │       poolId: '...',     │
-  │       price: '1.234',    │
-  │       change24h: '+2.5%' │
-  │     }}                   │
-  │                          │
-  │── { type: 'subscribe',   │
-  │    channel: 'intent',    │
-  │    params: { id: '...' }}│
-  │                          │
-  │◄── { type: 'intentUpdate'│ ◄── Intent status changes
-  │     data: {              │
-  │       id: '...',         │
-  │       status: 'FILLED',  │
-  │       actualOutput: '...'│
-  │     }}                   │
-  │                          │
-  │── { type: 'ping' }      │ ◄── Every 30s heartbeat
-  │◄── { type: 'pong' }     │
+Client                    Server
+  │                         │
+  │── connect ────────────>│
+  │<── connected ──────────│
+  │                         │
+  │── subscribe prices ──>│
+  │<── subscribed ─────────│
+  │                         │
+  │   (Swap occurs in pool) │
+  │                         │
+  │<── price update ───────│ ← Triggered by PriceAggregation cron
+  │<── pool update ────────│ ← Triggered by ChainSync
+  │<── intent update ──────│ ← Triggered by Solver settlement
+  │                         │
+  │── unsubscribe ────────>│
+  │<── unsubscribed ───────│
 ```
 
-## Cron Job Data Flow
+## Cron Job Data Flows
 
-### ChainSync (Every 30s)
-
-```
-ChainSync
-  → Query Blockfrost for pool UTxOs
-  → Parse inline datums
-  → Compare with database state
-  → Update pool reserves, TVL
-  → Promote PENDING → ACTIVE intents (confirmed on-chain)
-  → Promote PENDING → ACTIVE orders
-  → Detect and mark missing UTxOs (cancelled/consumed)
-```
-
-### Price Aggregation (Every 60s)
+### ChainSync (every 120s)
 
 ```
-PriceAggregation
-  → Query PriceTick table (since last run)
-  → Group by pool + interval (H4/D1/W1)
-  → For each group:
-    → Calculate OHLCV (Open, High, Low, Close, Volume)
-    → Upsert into Candle table
-  → Update Redis cache for recent candles
+Blockfrost API
+  │ Query pool script UTxOs
+  ▼
+Parse UTxO datums (Pool datum)
+  │ Extract reserves, fees, state
+  ▼
+Compare with DB state
+  │ If changed:
+  ▼
+Update Pool record in DB
+  │
+  ▼
+Emit poolUpdate via WebSocket
+  │
+  ▼
+Create PriceTick record
 ```
+
+### PriceAggregation (every 60s)
+
+```
+PriceTick records (new since last run)
+  │
+  ▼
+Group by poolId + interval
+  │
+  ▼
+For each group:
+  ├── Find/create Candle record
+  ├── Update OHLCV values:
+  │   open  = first tick price
+  │   high  = max(existing high, tick prices)
+  │   low   = min(existing low, tick prices)
+  │   close = last tick price
+  │   volume += sum(tick volumes)
+  │   txCount += count(ticks)
+  └── Save Candle
+```
+
+### PoolSnapshot (every 1 hour)
+
+```
+All ACTIVE pools
+  │
+  ▼
+For each pool:
+  └── Create PoolHistory record
+      (reserveA, reserveB, tvlAda, volume, fees, price)
+  │
+  ▼
+Compute ProtocolStats
+  (aggregate TVL, volume, fees, pool count, etc.)
+  │
+  ▼
+Save ProtocolStats record
+```
+
+## Error Recovery
+
+<Callout type="info">
+All TX-building operations are idempotent. If a TX fails to submit, the system can safely retry without double-spending.
+</Callout>
+
+| Failure | Recovery |
+|---------|----------|
+| TX submission fails | Retry with fresh UTxO set (max 3 retries) |
+| Solver TX fails | Intent remains ACTIVE, retried next batch |
+| ChainSync fails | Stale data until next successful sync |
+| DB write fails | TX still on-chain; ChainSync reconciles |
+| Redis unavailable | Fallback to DB queries (slower) |

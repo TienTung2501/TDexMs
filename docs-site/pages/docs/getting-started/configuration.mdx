@@ -2,155 +2,200 @@
 
 import { Callout } from 'nextra/components'
 
-All configuration is managed through environment variables, validated at startup using **Zod**. The application fails fast if required variables are missing.
+Complete environment variable reference for the SolverNet DEX backend.
 
-## Environment Variables Reference
+## Environment File
 
-### Server
+Create a `.env` file in the `backend/` directory:
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NODE_ENV` | No | `development` | Environment: `development`, `production`, `test` |
-| `PORT` | No | `3001` | HTTP server port |
-| `HOST` | No | `0.0.0.0` | Server bind address |
-| `LOG_LEVEL` | No | `info` | Pino log level: `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
+```bash
+cd backend
+cp .env.example .env
+```
 
-### Database
+---
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string (with pgbouncer for Supabase) |
-| `DIRECT_URL` | No | — | Direct PostgreSQL connection (for Prisma migrations) |
+## Required Variables
 
-### Cache
+| Variable | Type | Description |
+|----------|------|-------------|
+| `DATABASE_URL` | string | PostgreSQL connection string |
+| `BLOCKFROST_PROJECT_ID` | string | Blockfrost API key for Cardano access |
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `UPSTASH_REDIS_URL` | No | — | Upstash Redis REST URL |
-| `UPSTASH_REDIS_TOKEN` | No | — | Upstash Redis auth token |
+## Server
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NODE_ENV` | `development` | Runtime environment (`development`, `production`, `test`) |
+| `PORT` | `3001` | HTTP server port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `LOG_LEVEL` | `info` | Logging level (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) |
+| `CORS_ORIGIN` | `http://localhost:3000` | Allowed CORS origins (comma-separated for multiple) |
+
+## Database
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | **required** | PostgreSQL connection string (Supabase or local) |
+
+## Cache (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `UPSTASH_REDIS_URL` | `''` | Upstash Redis REST URL |
+| `UPSTASH_REDIS_TOKEN` | `''` | Upstash Redis auth token |
 
 <Callout type="info">
-Redis is optional. Without it, the application falls back to in-memory caching with LRU eviction.
+Redis is optional. Without it, the system falls back to database queries with slightly higher latency.
 </Callout>
 
-### Cardano Network
+## Cardano Network
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CARDANO_NETWORK` | No | `preprod` | Network: `preprod`, `preview`, `mainnet` |
-| `BLOCKFROST_URL` | No | Auto from network | Blockfrost API base URL |
-| `BLOCKFROST_PROJECT_ID` | **Yes** | — | Blockfrost API project ID |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CARDANO_NETWORK` | `preprod` | Target network (`preprod`, `preview`, `mainnet`) |
+| `BLOCKFROST_URL` | `https://cardano-preprod.blockfrost.io/api/v0` | Blockfrost API base URL |
+| `BLOCKFROST_PROJECT_ID` | `''` | Blockfrost project API key |
 
-### Smart Contract Addresses
+## Smart Contract Addresses
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ESCROW_SCRIPT_ADDRESS` | **Yes** | — | Bech32 address of the escrow validator |
-| `POOL_SCRIPT_ADDRESS` | **Yes** | — | Bech32 address of the pool validator |
-| `FACTORY_SCRIPT_ADDRESS` | No | — | Bech32 address of the factory validator |
-| `SETTINGS_NFT_POLICY_ID` | **Yes** | — | Policy ID of the settings NFT |
-| `SETTINGS_NFT_ASSET_NAME` | **Yes** | — | Asset name of the settings NFT |
-
-### Admin
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ADMIN_ADDRESS` | **Yes** | — | Bech32 address of the protocol admin wallet |
-
-### Solver
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `SOLVER_ENABLED` | No | `false` | Enable/disable the solver loop |
-| `SOLVER_SEED_PHRASE` | Cond. | — | 24-word mnemonic for solver wallet (required if solver enabled) |
-| `SOLVER_ADDRESS` | No | Derived | Solver's Cardano address (auto-derived from seed if not set) |
-| `SOLVER_BATCH_WINDOW_MS` | No | `5000` | Solver loop interval in milliseconds |
-| `SOLVER_MAX_RETRIES` | No | `3` | Max retry attempts for failed settlements |
-| `SOLVER_MIN_PROFIT_LOVELACE` | No | `100000` | Minimum profit threshold per batch (lovelace) |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ESCROW_SCRIPT_ADDRESS` | `''` | Escrow validator Bech32 address |
+| `POOL_SCRIPT_ADDRESS` | `''` | Pool validator Bech32 address |
+| `SETTINGS_NFT_POLICY_ID` | `''` | Settings NFT minting policy ID |
+| `SETTINGS_NFT_ASSET_NAME` | `''` | Settings NFT asset name |
+| `ADMIN_ADDRESS` | `''` | Factory admin wallet address (Bech32) |
 
 <Callout type="warning">
-**Security:** Never commit `SOLVER_SEED_PHRASE` to version control. Use a `.env` file or secrets manager.
+These addresses are derived from the compiled Aiken smart contracts. Use the Admin panel's "Deploy Settings" and "Deploy Factory" to set them up automatically.
 </Callout>
 
-### Advanced Orders
+## Solver Engine
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `ORDER_EXECUTOR_ENABLED` | No | `false` | Enable automatic order execution cron |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SOLVER_ENABLED` | `false` | Enable the solver engine background service |
+| `SOLVER_SEED_PHRASE` | `''` | Solver wallet mnemonic (24 words) |
+| `SOLVER_ADDRESS` | `''` | Solver wallet Bech32 address |
+| `SOLVER_BATCH_WINDOW_MS` | `5000` | Batch collection window (milliseconds) |
+| `SOLVER_MAX_RETRIES` | `3` | Maximum TX submission retries |
+| `SOLVER_MIN_PROFIT_LOVELACE` | `100000` | Minimum profit threshold (lovelace) |
 
-### CORS & Rate Limiting
+<Callout type="error">
+**Security:** Never commit `SOLVER_SEED_PHRASE` to version control. Use environment variables or secrets management.
+</Callout>
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CORS_ORIGIN` | No | `*` | Allowed CORS origins (comma-separated) |
-| `RATE_LIMIT_WINDOW_MS` | No | `60000` | Rate limit window (ms) |
-| `RATE_LIMIT_MAX` | No | `100` | Max requests per window |
+## Order System
 
-### Authentication
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ORDER_ROUTES_ENABLED` | `false` | Enable order API routes (Limit/DCA/StopLoss) |
+| `ORDER_EXECUTOR_ENABLED` | `false` | Enable order execution cron job |
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `JWT_SECRET` | No | — | JWT signing secret (for admin endpoints) |
-| `JWT_EXPIRES_IN` | No | `24h` | JWT token expiry |
+## Rate Limiting
 
-### Chart & Analytics
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window (1 minute) |
+| `RATE_LIMIT_MAX` | `100` | Max requests per window (read endpoints) |
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `CHART_SNAPSHOT_INTERVAL_MS` | No | `3600000` | Pool snapshot interval (ms, default: 1 hour) |
-| `CHART_MAX_CANDLES` | No | `500` | Maximum candles returned per request |
+Write endpoints (POST/DELETE) are limited to `RATE_LIMIT_MAX / 5` per window.
 
-### Faucet (Testnet Only)
+## Authentication
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `FAUCET_TARGET_ADDRESS` | No | — | Address to receive testnet ADA |
-| `FAUCET_API_KEY` | No | — | Cardano faucet API key |
-| `FAUCET_INTERVAL_MS` | No | `86400000` | Faucet request interval (default: 24h) |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `JWT_SECRET` | `dev-secret-change-in-production` | JWT signing secret |
+| `JWT_EXPIRES_IN` | `24h` | JWT token TTL |
 
-## Example `.env` File
+## Chart & Analytics
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHART_SNAPSHOT_INTERVAL_MS` | `60000` | Price aggregation cron interval |
+| `CHART_MAX_CANDLES` | `500` | Max candles returned per query |
+| `CHAIN_SYNC_INTERVAL_MS` | `120000` | Pool chain sync polling interval |
+
+## Faucet (Testnet)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FAUCET_TARGET_ADDRESS` | `''` | Testnet faucet target address |
+| `FAUCET_API_KEY` | `''` | Faucet API key |
+| `FAUCET_INTERVAL_MS` | `86400000` | Faucet request interval (24h) |
+
+---
+
+## Example `.env` Files
+
+### Development (Preprod Testnet)
 
 ```env
-# Server
 NODE_ENV=development
 PORT=3001
-LOG_LEVEL=info
+HOST=0.0.0.0
+LOG_LEVEL=debug
 
-# Database (Supabase)
-DATABASE_URL="postgresql://postgres.xxxx:password@pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
-DIRECT_URL="postgresql://postgres.xxxx:password@pooler.supabase.com:5432/postgres"
+DATABASE_URL="postgresql://postgres:password@db.xxx.supabase.co:5432/postgres"
+UPSTASH_REDIS_URL=""
+UPSTASH_REDIS_TOKEN=""
 
-# Cache (Upstash)
-UPSTASH_REDIS_URL="https://xxxx.upstash.io"
-UPSTASH_REDIS_TOKEN="AXxxxxxxxxx"
-
-# Cardano
 CARDANO_NETWORK=preprod
-BLOCKFROST_PROJECT_ID=preprodXXXXXXXXXXXXXXXXXXXXXXXXX
+BLOCKFROST_URL="https://cardano-preprod.blockfrost.io/api/v0"
+BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXX"
 
-# Contract Addresses
-ESCROW_SCRIPT_ADDRESS=addr_test1wz...
-POOL_SCRIPT_ADDRESS=addr_test1wr...
-SETTINGS_NFT_POLICY_ID=abc123...
-SETTINGS_NFT_ASSET_NAME=53657474696e6773
+ESCROW_SCRIPT_ADDRESS=""
+POOL_SCRIPT_ADDRESS=""
+SETTINGS_NFT_POLICY_ID=""
+SETTINGS_NFT_ASSET_NAME=""
+ADMIN_ADDRESS="addr_test1qz..."
 
-# Admin
-ADMIN_ADDRESS=addr_test1qz...
-
-# Solver (disabled by default)
 SOLVER_ENABLED=false
-# SOLVER_SEED_PHRASE="word1 word2 ... word24"
+SOLVER_SEED_PHRASE=""
+SOLVER_ADDRESS=""
 
-# CORS
-CORS_ORIGIN=http://localhost:3000
+ORDER_ROUTES_ENABLED=false
+ORDER_EXECUTOR_ENABLED=false
+
+CORS_ORIGIN="http://localhost:3000"
+JWT_SECRET="dev-secret-change-in-production"
 ```
 
-## Validation
+### Production (Mainnet)
 
-Configuration is validated at startup using Zod schemas. If any required variable is missing or has an invalid format, the application exits with a clear error message:
+```env
+NODE_ENV=production
+PORT=3001
+HOST=0.0.0.0
+LOG_LEVEL=warn
 
-```
-❌ Invalid environment configuration:
-  - BLOCKFROST_PROJECT_ID: Required
-  - DATABASE_URL: Invalid url
+DATABASE_URL="postgresql://..."
+UPSTASH_REDIS_URL="https://xxxxx.upstash.io"
+UPSTASH_REDIS_TOKEN="AXxxxx..."
+
+CARDANO_NETWORK=mainnet
+BLOCKFROST_URL="https://cardano-mainnet.blockfrost.io/api/v0"
+BLOCKFROST_PROJECT_ID="mainnetXXXXXXXXXXXXX"
+
+ESCROW_SCRIPT_ADDRESS="addr1w..."
+POOL_SCRIPT_ADDRESS="addr1w..."
+SETTINGS_NFT_POLICY_ID="..."
+SETTINGS_NFT_ASSET_NAME="..."
+ADMIN_ADDRESS="addr1q..."
+
+SOLVER_ENABLED=true
+SOLVER_SEED_PHRASE="word1 word2 ... word24"
+SOLVER_ADDRESS="addr1q..."
+SOLVER_BATCH_WINDOW_MS=10000
+SOLVER_MAX_RETRIES=5
+SOLVER_MIN_PROFIT_LOVELACE=500000
+
+ORDER_ROUTES_ENABLED=true
+ORDER_EXECUTOR_ENABLED=true
+
+CORS_ORIGIN="https://yourdomain.com"
+JWT_SECRET="your-production-secret-min-32-chars"
+
+RATE_LIMIT_MAX=50
 ```

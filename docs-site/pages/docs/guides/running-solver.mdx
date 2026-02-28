@@ -1,19 +1,33 @@
 # Running a Solver
 
-import { Callout, Steps } from 'nextra/components'
+import { Steps, Callout, Tabs } from 'nextra/components'
 
-This guide explains how to set up and run your own solver bot for SolverNet DEX.
+How to set up and operate a SolverNet solver node that processes swap intents.
 
 <Callout type="warning">
-Running a solver requires a funded Cardano wallet. The solver wallet must have enough ADA to cover transaction fees for settlement transactions (~0.5-2 ADA per batch, depending on batch size).
+Running a solver requires a **funded Cardano wallet** with enough ADA to cover transaction fees and collateral.
+On preprod testnet, use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) to get tADA.
 </Callout>
 
-## Prerequisites
+## Architecture
 
-- SolverNet DEX backend installed and configured
-- A Cardano wallet with a 24-word seed phrase
-- Sufficient ADA for transaction fees (~50 ADA recommended for preprod)
-- Blockfrost API key
+```
+┌──────────────────────────────────────────────────────┐
+│                  Solver Engine                        │
+│                                                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
+│  │ Intent       │  │ Route        │  │ Batch      │ │
+│  │ Collector    │──▶│ Optimizer    │──▶│ Builder    │ │
+│  │ (Blockfrost) │  │ (direct/hop) │  │ (max 15)   │ │
+│  └──────────────┘  └──────────────┘  └────────────┘ │
+│                                            │         │
+│  ┌──────────────┐  ┌──────────────┐        ▼        │
+│  │ TX           │◀─│ Netting      │  ┌────────────┐ │
+│  │ Submitter    │  │ Engine       │◀─│ Settlement │ │
+│  │ (FIFO queue) │  │ (offset)     │  │ Builder    │ │
+│  └──────────────┘  └──────────────┘  └────────────┘ │
+└──────────────────────────────────────────────────────┘
+```
 
 ## Setup
 
@@ -21,131 +35,237 @@ Running a solver requires a funded Cardano wallet. The solver wallet must have e
 
 ### Generate Solver Wallet
 
-Create a new wallet for your solver. **Never reuse a personal wallet.**
+Create a new Cardano wallet for the solver:
 
 ```bash
-# Using cardano-cli
-cardano-cli address key-gen \
-  --verification-key-file solver.vkey \
-  --signing-key-file solver.skey
+# The solver uses a seed phrase stored in SOLVER_SEED_PHRASE env var
+# Generate a 24-word mnemonic using any CIP-1852 compatible tool
 
-# Or generate a seed phrase
-# Most wallet software can generate 24-word phrases
+# Or use the backend's built-in generation:
+pnpm exec tsx -e "
+  import { generateSeedPhrase } from '@lucid-evolution/lucid';
+  console.log(generateSeedPhrase());
+"
 ```
 
-### Fund the Wallet
+<Callout type="error">
+**Never** reuse your personal wallet as the solver wallet. The solver spends UTxOs automatically.
+Store the seed phrase securely — it controls the solver's funds.
+</Callout>
 
-On **Preprod testnet**, use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) to get test ADA.
+### Fund the Solver Wallet
+
+The solver needs ADA for:
+
+| Purpose | Amount |
+|---------|--------|
+| Transaction fees | ~0.3–0.8 ADA per settlement TX |
+| Collateral | 5 ADA (locked for Plutus script execution) |
+| Operating buffer | 50+ ADA recommended |
+
+For testnet:
+```bash
+# Get solver address
+pnpm exec tsx -e "
+  import { Lucid, Blockfrost } from '@lucid-evolution/lucid';
+  const lucid = await Lucid(
+    new Blockfrost('https://cardano-preprod.blockfrost.io/api', process.env.BLOCKFROST_API_KEY),
+    'Preprod'
+  );
+  lucid.selectWallet.fromSeed(process.env.SOLVER_SEED_PHRASE);
+  console.log(await lucid.wallet().address());
+"
+```
+
+Send tADA to this address from the faucet.
 
 ### Configure Environment
 
-Add solver configuration to your `.env`:
+Add these solver-specific variables to your `.env`:
 
 ```env
-# Enable the solver
-SOLVER_ENABLED=true
+# Solver wallet
+SOLVER_SEED_PHRASE="word1 word2 ... word24"
 
-# 24-word seed phrase (KEEP SECRET!)
-SOLVER_SEED_PHRASE="word1 word2 word3 ... word24"
+# Solver behavior
+SOLVER_INTERVAL=30000              # Run every 30 seconds
+SOLVER_ENABLED=true                # Enable/disable solver
+SOLVER_MAX_BATCH_SIZE=15           # Max intents per TX
+SOLVER_MIN_PROFIT_LOVELACE=0       # Min profit to process (0 = altruistic)
+SOLVER_PARTIAL_FILL_ENABLED=true   # Allow partial fills
 
-# Optional: override derived address
-# SOLVER_ADDRESS=addr_test1qz...
+# TX execution limits
+SOLVER_MAX_TX_CPU=14000000000      # 14 billion CPU units
+SOLVER_MAX_TX_MEM=10000000         # 10 million memory units
 
-# Batch window (how often to check for intents)
-SOLVER_BATCH_WINDOW_MS=5000
-
-# Max retries for failed settlements
-SOLVER_MAX_RETRIES=3
-
-# Minimum profit per batch (lovelace)
-SOLVER_MIN_PROFIT_LOVELACE=100000
+# Chain connection
+BLOCKFROST_API_KEY=preprodXXXXXXXXX
+CARDANO_NETWORK=Preprod
 ```
 
 ### Start the Backend
 
 ```bash
 cd backend
+pnpm install
 pnpm exec tsx src/index.ts
 ```
 
-The solver loop starts automatically when `SOLVER_ENABLED=true`:
+The solver starts automatically when `SOLVER_ENABLED=true`. Watch the logs:
 
 ```
-[INFO] Solver engine started
-[INFO] Solver loop running every 5000ms
-[INFO] Solver wallet address: addr_test1qz...
-[INFO] Solver wallet balance: 50000000 lovelace
+[SolverEngine] Starting solver iteration...
+[IntentCollector] Found 3 pending intents
+[RouteOptimizer] Routing 3 intents across 2 pools
+[NettingEngine] Netting analysis: 53% offset achieved
+[BatchBuilder] Created 1 batch with 3 intents
+[TxSubmitter] Settlement TX submitted: abc123...
+[TxSubmitter] TX confirmed in slot 12345678
+[SolverEngine] Iteration complete: 3 intents settled
 ```
 
 </Steps>
 
-## Solver Operation
+## Solver Pipeline
 
-### Loop Cycle
+Each iteration runs this 6-stage pipeline:
 
-Every `SOLVER_BATCH_WINDOW_MS` milliseconds:
+### Stage 1: Collect Intents
 
-1. **Collect** — Query Blockfrost for escrow UTxOs
-2. **Filter** — Cross-reference with database, skip expired/in-flight
-3. **Route** — Find best pool for each intent
-4. **Batch** — Group intents by pool
-5. **Net** — Cross-match opposing intents
-6. **Settle** — Build and submit settlement TX
+`IntentCollector` queries Blockfrost for all UTxOs at the escrow validator address:
 
-### Monitoring
+- Parses the 10-field `EscrowDatum` from each UTxO
+- Filters expired intents (past deadline)
+- Filters already-processing intents (prevents double-processing)
+- Returns validated intent list
 
-The solver logs detailed information:
+### Stage 2: Filter & Validate
 
+SolverEngine filters:
+- **Stale intents** — already being processed by another iteration
+- **Expired intents** — past deadline
+- **FILLING intents** — currently mid-settlement
+- **Invalid datums** — malformed or unparseable
+
+### Stage 3: Route Optimization
+
+`RouteOptimizer` finds the best execution path for each intent:
+
+- **Direct route**: Swap directly in the target pool (most common)
+- **Multi-hop route**: ADA → TOKEN_A → TOKEN_B (via ADA as intermediate)
+- Calculates expected output and price impact per route
+- Falls back to **partial fill** (binary search via `calculateMaxIntentFill`) if full fill causes too much impact
+
+### Stage 4: Batch Building
+
+`BatchBuilder` groups intents by pool and enforces constraints:
+
+| Constraint | Limit |
+|-----------|-------|
+| Max intents per TX | 15 |
+| Max CPU units | 14 billion |
+| Max memory units | 10 million |
+| Max TX size | ~16 KB |
+
+Oversized batches are split. Priority ordering: earliest expiry first (urgency), then FIFO.
+
+### Stage 5: Netting
+
+`NettingEngine.analyze()` optimizes each batch:
+
+1. Separates intents by direction (AToB vs BToA)
+2. Calculates gross flows in each direction
+3. Converts to common denomination using spot price
+4. Computes **net residual** = |flowAtoB - flowBtoA|
+5. Only the residual hits the AMM pool
+
+**Example:**
 ```
-[INFO] Solver cycle 42 started
-[INFO] Found 5 escrow UTxOs on-chain
-[INFO] 3 intents matched and validated
-[INFO] Batch 1: Pool ADA/USDT - 3 intents
-[INFO] Netting: 2 AToB + 1 BToA → 45% netted
-[INFO] Settlement TX submitted: abc123...
-[INFO] Settlement confirmed. Batch settled successfully.
-[INFO] Solver cycle 42 completed in 3.2s
+Intent 1: 100 ADA → TOKEN (buy)
+Intent 2:  50 TOKEN → ADA (sell, equivalent to ~80 ADA)
+
+Gross ADA→TOKEN: 100 ADA
+Gross TOKEN→ADA:  80 ADA equivalent
+
+Net residual: 20 ADA → TOKEN (only this hits AMM)
+Netting improvement: 80% (saved 80 ADA of pool impact)
 ```
 
-### Profit Model
+Output allocation is proportional:
+$$output_i = \frac{intent_i.amount}{\sum amounts} \times totalOutput$$
 
-Solvers earn from the residual between what users accept (minimum output) and what they actually receive:
+### Stage 6: Settlement
 
+The solver builds and submits the settlement TX:
+
+1. Consumes all escrow UTxOs in the batch
+2. Consumes the pool UTxO (for AMM swap)
+3. Burns all intent tokens
+4. Sends calculated outputs to each user
+5. Creates new pool UTxO with updated reserves
+6. Signs with solver wallet
+
+The `TxSubmitter` uses a singleton FIFO queue shared across 3 bot types (solver, chain sync, order monitor) to prevent UTxO contention.
+
+## Monitoring
+
+### Health Check
+
+```bash
+curl http://localhost:3001/v1/health
+# { "status": "ok", "solver": { "enabled": true, "lastRun": "..." } }
 ```
-User's minOutput:  49,000,000 (set via slippage tolerance)
-Actual output:     49,251,234
-Solver margin:        251,234 (goes to solver as incentive)
+
+### Admin Dashboard
+
+```bash
+# Solver status
+curl http://localhost:3001/v1/admin/solver/status \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Start/stop solver
+curl -X POST http://localhost:3001/v1/admin/solver/start \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+curl -X POST http://localhost:3001/v1/admin/solver/stop \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-<Callout type="info">
-Currently, the solver is cooperative — it delivers the full calculated output to users and earns from transaction fee rebates. Future versions will implement competitive solver auctions.
-</Callout>
+### Key Log Messages
+
+| Log | Meaning |
+|-----|---------|
+| `Found N pending intents` | Intents ready for processing |
+| `Netting analysis: X% offset` | Percentage of flow offset by counter-trades |
+| `Settlement TX submitted` | Batch settled successfully |
+| `TX confirmed in slot` | On-chain confirmation |
+| `No profitable batches` | No intents to process or min profit not met |
+| `Blockfrost API budget: N/50000` | Daily API calls remaining |
 
 ## Troubleshooting
 
-### Common Issues
-
 | Issue | Cause | Solution |
-|---|---|---|
-| "Insufficient funds" | Solver wallet low on ADA | Fund the wallet with more ADA |
-| "UTxO already consumed" | Intent was cancelled/filled by another process | Normal — the solver will skip it next cycle |
-| "TX too large" | Too many intents in one batch | Reduce `MAX_INTENTS_PER_BATCH` |
-| "Invalid CBOR" | Script version mismatch | Ensure `plutus.json` matches deployed contracts |
+|-------|-------|----------|
+| `INSUFFICIENT_FUNDS` | Solver wallet low on ADA | Add more tADA to solver address |
+| `COLLATERAL_NOT_SET` | No collateral UTxO | Send 5+ ADA to solver, restart |
+| `BLOCKFROST_RATE_LIMIT` | API calls exhausted | Wait or use a dedicated API key |
+| `TX_SUBMIT_FAILED` | UTxO already spent | Normal during concurrency — auto-retries |
+| `SCRIPT_EXECUTION_FAILED` | Validator rejection | Check datum/redeemer construction |
+| `Iteration timeout` | TX took too long | Increase timeout, check network |
 
-### Health Checks
+## Profit Model
 
-```bash
-# Check solver status
-curl http://localhost:3001/v1/health | jq '.solver'
+The solver can earn profit from the **spread** between netting offset and AMM execution:
 
-# Check solver wallet balance
-curl http://localhost:3001/v1/admin/dashboard | jq '.solverBalance'
+```
+User wants: 100 ADA → at least 4.95 TOKEN (minOutput)
+AMM gives:  100 ADA → 5.10 TOKEN (actual output)
+
+Surplus: 0.15 TOKEN (solver can keep or pass to user)
 ```
 
-## Security Best Practices
+Currently, the solver passes all surplus to users. Set `SOLVER_MIN_PROFIT_LOVELACE` to require minimum profit per batch.
 
-1. **Dedicated wallet** — Never use a personal wallet as the solver wallet
-2. **Minimal balance** — Keep only enough ADA for operations (~50 ADA)
-3. **Secrets management** — Use environment variables or a secrets manager, never hardcode seed phrases
-4. **Monitoring** — Set up alerts for low balance and failed settlements
-5. **Rate limiting** — The solver already has built-in rate limiting, but monitor for unusual activity
+<Callout type="info">
+In the future, solver competition will allow multiple solvers to compete for intent batches, driving better execution for users.
+</Callout>

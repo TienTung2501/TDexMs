@@ -2,79 +2,107 @@
 
 import { Callout, Steps, Tabs } from 'nextra/components'
 
+Detailed setup instructions for each component of SolverNet DEX.
+
 ## System Requirements
 
-| Component | Minimum | Recommended |
-|---|---|---|
-| **Node.js** | 20.0.0 | 20 LTS (latest) |
-| **pnpm** | 9.15.0 | 9.15.0+ |
-| **PostgreSQL** | 15 | 16 (via Supabase or Docker) |
-| **Memory** | 2 GB | 4 GB+ |
-| **Disk** | 1 GB | 5 GB (with Cardano node: 60 GB+) |
+| Requirement | Minimum | Recommended |
+|------------|---------|-------------|
+| **Node.js** | 18.x | 20.x LTS |
+| **pnpm** | 8.x | 9.x |
+| **PostgreSQL** | 14 | 15+ |
+| **RAM** | 2 GB | 4 GB |
+| **Disk** | 1 GB | 5 GB |
 
-## Package Manager Setup
+## Installation
 
-SolverNet DEX uses **pnpm** with workspaces. Enable corepack:
+<Steps>
 
-```bash
-corepack enable
-corepack prepare pnpm@9.15.0 --activate
-```
-
-## Monorepo Structure
-
-The project uses a monorepo managed by **Turborepo**:
-
-```
-decentralize/
-├── package.json          # Root workspace config
-├── pnpm-workspace.yaml   # Workspace packages
-├── turbo.json            # Turborepo pipeline
-├── backend/              # Express API + Solver
-├── frontend/             # Next.js UI
-└── docs-site/            # Documentation (Nextra)
-```
-
-## Install Dependencies
+### Install Node.js & pnpm
 
 ```bash
-# From the project root
+# Install Node.js (via nvm)
+nvm install 20
+nvm use 20
+
+# Install pnpm
+npm install -g pnpm
+```
+
+### Clone Repository
+
+```bash
+git clone https://github.com/TienTung2501/decentralize.git
+cd decentralize
+```
+
+### Install Dependencies
+
+```bash
+# Install all workspace dependencies
 pnpm install
 ```
 
-This performs a recursive install across all workspace packages.
+The monorepo uses pnpm workspaces with three packages:
+- `frontend/` — Next.js trading UI
+- `backend/` — Express API server
+- `docs-site/` — Documentation (Nextra)
+
+</Steps>
 
 ## Database Setup
 
-<Tabs items={['Supabase (Recommended)', 'Docker PostgreSQL', 'Local PostgreSQL']}>
+<Tabs items={['Supabase', 'Docker', 'Local PostgreSQL']}>
   <Tabs.Tab>
-1. Create a project at [supabase.com](https://supabase.com)
-2. Copy the connection strings from **Settings → Database**:
-   - `DATABASE_URL` — Pooled connection (with `?pgbouncer=true&connection_limit=1`)
-   - `DIRECT_URL` — Direct connection (for migrations)
+### Supabase (Recommended for Development)
+
+1. Go to [supabase.com](https://supabase.com) and create a free account
+2. Create a new project (choose a region close to you)
+3. Wait for the project to initialize (~2 minutes)
+4. Navigate to **Settings → Database → Connection string**
+5. Copy the **URI** connection string
+6. Set it as `DATABASE_URL` in your backend `.env`
 
 ```env
-DATABASE_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
-DIRECT_URL="postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:5432/postgres"
+DATABASE_URL="postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres"
 ```
+
+<Callout type="info">
+Supabase free tier includes 500 MB storage and 2 GB bandwidth — sufficient for development.
+</Callout>
   </Tabs.Tab>
+
   <Tabs.Tab>
+### Docker PostgreSQL
+
 ```bash
-docker run -d \
-  --name solvernet-db \
-  -e POSTGRES_USER=solvernet \
-  -e POSTGRES_PASSWORD=solvernet \
-  -e POSTGRES_DB=solvernet \
-  -p 5432:5432 \
-  postgres:16-alpine
+# Start PostgreSQL container
+docker compose -f docker-compose.dev.yml up -d postgres
 ```
+
+The dev compose file creates:
+- PostgreSQL 15 on port 5432
+- Database: `solvernet`
+- User/Password: `solvernet/solvernet`
 
 ```env
 DATABASE_URL="postgresql://solvernet:solvernet@localhost:5432/solvernet"
 ```
   </Tabs.Tab>
+
   <Tabs.Tab>
+### Local PostgreSQL
+
 ```bash
+# macOS (Homebrew)
+brew install postgresql@15
+brew services start postgresql@15
+
+# Ubuntu/Debian
+sudo apt install postgresql-15
+sudo systemctl start postgresql
+
+# Create database
 createdb solvernet
 ```
 
@@ -84,61 +112,107 @@ DATABASE_URL="postgresql://localhost:5432/solvernet"
   </Tabs.Tab>
 </Tabs>
 
-After configuring the database URL, run migrations:
+### Initialize Schema
 
 ```bash
 cd backend
-pnpm exec prisma migrate dev
+pnpm exec prisma db push
 pnpm exec prisma generate
 ```
 
-## Redis Setup (Optional)
+<Callout type="info">
+`prisma db push` creates/updates tables without generating migration files. For production, use `prisma migrate dev` to create versioned migrations.
+</Callout>
 
-SolverNet DEX uses **Upstash Redis** for caching. It's optional but recommended for performance.
+## Redis Cache (Optional)
+
+Redis is optional but recommended for performance. Without Redis, the system falls back to database queries.
+
+<Tabs items={['Upstash (Recommended)', 'Docker', 'Local Redis']}>
+  <Tabs.Tab>
+### Upstash Redis
+
+1. Create an account at [upstash.com](https://upstash.com)
+2. Create a new Redis database
+3. Copy the REST URL and token
 
 ```env
-UPSTASH_REDIS_URL="https://xxxx.upstash.io"
-UPSTASH_REDIS_TOKEN="AXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+UPSTASH_REDIS_URL="https://xxxxx.upstash.io"
+UPSTASH_REDIS_TOKEN="AXxxxx..."
 ```
+  </Tabs.Tab>
 
-Without Redis, the application falls back to in-memory caching.
-
-## Blockfrost Setup
-
-1. Sign up at [blockfrost.io](https://blockfrost.io)
-2. Create a project for **Cardano Preprod**
-3. Copy the Project ID
+  <Tabs.Tab>
+```bash
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+```
 
 ```env
-BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXXXXXXXXXXXXXX"
-BLOCKFROST_URL="https://cardano-preprod.blockfrost.io/api"
+UPSTASH_REDIS_URL="http://localhost:6379"
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+```bash
+# macOS
+brew install redis
+brew services start redis
+
+# Ubuntu
+sudo apt install redis-server
+sudo systemctl start redis
+```
+  </Tabs.Tab>
+</Tabs>
+
+## Blockfrost API Key
+
+1. Go to [blockfrost.io](https://blockfrost.io)
+2. Create a free account
+3. Create a new project for **Cardano Preprod**
+4. Copy the project ID
+
+```env
+BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXX"
+BLOCKFROST_URL="https://cardano-preprod.blockfrost.io/api/v0"
 ```
 
-## Smart Contract Compilation (Optional)
+<Callout type="warning">
+The free Blockfrost tier allows 50,000 requests/day. Monitor usage on the dashboard.
+</Callout>
 
-If you need to modify smart contracts:
+## Smart Contracts (Optional)
+
+To compile the Aiken smart contracts:
 
 ```bash
 # Install Aiken
 curl -sSfL https://install.aiken-lang.org | bash
 
-# Compile validators
+# Build contracts
 cd smartcontract
 aiken build
+
+# Output: build/packages/ and plutus.json
 ```
 
-<Callout type="warning">
-Smart contract compilation requires **Aiken v1.1.19**. The compiled `plutus.json` is already included in the repository. You only need to recompile if you modify the validator logic.
-</Callout>
+The compiled Plutus scripts are already included in the repository. You only need to recompile if modifying validator logic.
 
 ## Verify Installation
 
 ```bash
-# Backend
-cd backend && pnpm exec tsx src/index.ts
-# Should output: Server listening on port 3001
+# Backend health check
+cd backend
+pnpm exec tsx src/index.ts &
+curl http://localhost:3001/v1/health
 
-# Frontend (new terminal)
-cd frontend && pnpm dev
-# Should output: Ready on http://localhost:3000
+# Frontend
+cd frontend
+pnpm dev
+# Open http://localhost:3000
+
+# Docs site
+cd docs-site
+pnpm dev
+# Open http://localhost:3002
 ```

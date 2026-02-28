@@ -1,56 +1,104 @@
 # Liquidity Provision
 
-import { Callout, Steps } from 'nextra/components'
+import { Steps, Callout, Tabs } from 'nextra/components'
 
-This guide explains how to provide and manage liquidity in SolverNet DEX pools.
+How to provide liquidity to SolverNet pools and earn trading fees.
 
-## Understanding LP Tokens
+## How Liquidity Pools Work
 
-When you deposit liquidity, you receive **LP tokens** representing your proportional share of the pool. These tokens can be burned to withdraw your share at any time.
+SolverNet uses **constant-product AMM** pools (x × y = k):
 
-**Key formulas:**
+```
+┌──────────────────────────────────┐
+│          Pool UTxO               │
+│  ┌───────────┐  ┌───────────┐   │
+│  │ Reserve A  │  │ Reserve B  │  │
+│  │ (e.g. ADA)│  │ (e.g. MIN)│   │
+│  └───────────┘  └───────────┘   │
+│  Pool NFT (thread token)         │
+│  Protocol Fees (accumulated)     │
+│  PoolDatum { reserveA, reserveB, │
+│    totalLpTokens, feeNumerator,  │
+│    protocolFees, lastRootK }     │
+└──────────────────────────────────┘
+```
 
-- Initial deposit: $LP = \sqrt{A \times B} - 1000$
-- Subsequent: $LP = \min\left(\frac{\text{totalLP} \times A}{R_A}, \frac{\text{totalLP} \times B}{R_B}\right)$
-- Withdrawal: $A_{out} = \frac{R_A \times LP_{\text{burned}}}{\text{totalLP}}$
+The pool invariant after every swap:
+
+$$\sqrt{reserveA' \times reserveB'} \geq \sqrt{reserveA \times reserveB}$$
+
+Where `lastRootK` tracks the pre-swap root to prevent manipulation.
+
+## LP Tokens
+
+When you deposit liquidity, you receive **LP tokens** proportional to your share:
+
+**Initial deposit** (empty pool):
+
+$$LP_{initial} = \sqrt{amountA \times amountB} - minimumLiquidity$$
+
+Where `minimumLiquidity = 1000` is permanently locked to prevent zero-liquidity attacks.
+
+**Subsequent deposits**:
+
+$$LP_{minted} = min\left(\frac{amountA \times totalLP}{reserveA}, \frac{amountB \times totalLP}{reserveB}\right)$$
+
+<Callout type="info">
+Deposits must be **proportional** to current reserves. If you provide disproportionate amounts, you receive LP tokens based on the lesser ratio.
+</Callout>
 
 ## Adding Liquidity
 
 <Steps>
 
-### Select Pool
+### Navigate to Pool
 
-Navigate to `/pools` and find the pool you want to provide liquidity for. Click **Deposit**.
+Go to **Pools** page → click on the pool you want to provide liquidity for.
 
 ### Enter Amounts
 
-Enter the amount for one asset. The other amount auto-calculates to maintain the pool ratio:
+Enter the amount for one token. The other token auto-fills to maintain the current ratio:
 
 ```
-Pool ratio: 1 ADA = 0.5 USDT
-You enter: 1000 ADA
-Auto-fill: 500 USDT
-```
+Current pool: 1,000,000 ADA / 500,000 TOKEN (ratio 2:1)
 
-<Callout type="info">
-You must deposit both assets in the current pool ratio. Depositing off-ratio means the excess of one asset won't earn LP tokens.
-</Callout>
+You enter: 10,000 ADA
+Auto-fills: 5,000 TOKEN
+```
 
 ### Review Details
 
-- **LP tokens to receive** — Your share of the pool
-- **Pool share** — Your percentage of the total pool
-- **Slippage** — Price may move slightly between quote and execution
+The UI shows:
+- **LP tokens** you'll receive
+- **Share of pool** (your LP / total LP)
+- **Current pool reserves** and total value
+- **Price per token** from reserves ratio
 
-### Sign & Submit
+### Sign Transaction
 
-1. Click **Deposit**
-2. Backend builds a deposit transaction:
-   - Sends both assets to the pool validator
-   - Mints LP tokens to your address
-   - Updates pool datum with new reserves
-3. Sign with your wallet
-4. Wait for on-chain confirmation
+Click **"Add Liquidity"**. The backend builds a TX via `POST /v1/pools/:id/deposit`:
+
+```json
+{
+  "amountA": "10000000000",
+  "amountB": "5000000000",
+  "depositorAddress": "addr_test1...",
+  "changeAddress": "addr_test1..."
+}
+```
+
+The transaction:
+1. Sends your tokens to the Pool UTxO
+2. Mints LP tokens to your wallet (via LP Token forwarding mint)
+3. Updates the PoolDatum with new reserves and `totalLpTokens`
+4. The Pool NFT (thread token) ensures continuity
+
+### Confirm
+
+After TX confirmation, you'll see:
+- LP tokens in your wallet
+- Your position in **Portfolio → Liquidity**
+- Updated pool reserves
 
 </Steps>
 
@@ -58,67 +106,124 @@ You must deposit both assets in the current pool ratio. Depositing off-ratio mea
 
 <Steps>
 
-### Select Position
+### Go to Your Position
 
-Go to `/portfolio` → **LP Positions** or the pool's detail page. Click **Withdraw**.
+Navigate to **Portfolio → Liquidity** or the pool detail page.
 
-### Enter LP Amount
+### Enter LP Tokens
 
-Enter the amount of LP tokens to burn. The UI shows how much of each asset you'll receive:
+Specify how many LP tokens to burn (partial or full withdrawal).
 
+Your output is proportional to your LP share:
+
+$$outputA = \frac{lpTokensBurned}{totalLP} \times reserveA$$
+
+$$outputB = \frac{lpTokensBurned}{totalLP} \times reserveB$$
+
+### Sign Transaction
+
+Click **"Remove Liquidity"**. Uses `POST /v1/pools/:id/withdraw`:
+
+```json
+{
+  "lpTokensToBurn": "500000",
+  "withdrawerAddress": "addr_test1...",
+  "changeAddress": "addr_test1..."
+}
 ```
-LP tokens to burn: 50,000
-You receive:
-  500 ADA
-  250 USDT
-```
 
-### Set Minimums
-
-Set minimum amounts for slippage protection. If the pool ratio changes significantly before your TX confirms, the transaction will fail rather than giving you a bad deal.
-
-### Sign & Submit
-
-1. Click **Withdraw**
-2. Backend builds a withdraw transaction:
-   - Burns your LP tokens
-   - Returns proportional reserves to your address
-   - Updates pool datum
-3. Sign with your wallet
-4. Receive your assets
+The transaction:
+1. Burns your LP tokens (via LP Token policy)
+2. Sends proportional share of both tokens to your wallet
+3. Updates PoolDatum with reduced reserves and `totalLpTokens`
 
 </Steps>
 
 ## Impermanent Loss
 
+When you provide liquidity, you're exposed to **impermanent loss** (IL). This occurs when the price ratio changes from when you deposited.
+
+### IL Formula
+
+$$IL = \frac{2\sqrt{r}}{1 + r} - 1$$
+
+Where $r = \frac{P_{new}}{P_{old}}$ (price ratio change).
+
+### IL Table
+
+| Price Change | Impermanent Loss |
+|-------------|-----------------|
+| 1.25x (25% up) | -0.6% |
+| 1.50x (50% up) | -2.0% |
+| 2x (100% up) | -5.7% |
+| 3x (200% up) | -13.4% |
+| 5x (400% up) | -25.5% |
+
 <Callout type="warning">
-Like all AMM pools, SolverNet DEX pools are subject to **impermanent loss**. If the price ratio of the two assets changes significantly from when you deposited, you may receive less value upon withdrawal than if you had simply held the assets.
+Impermanent loss is called "impermanent" because it reverses if the price returns to the original ratio.
+However, if you withdraw while the ratio has changed, the loss is **realized**.
 </Callout>
 
-**When is IL minimal?**
-- Stable pairs (e.g., USDT/USDC)
-- When price returns to your entry ratio
-- When trading fees earned exceed IL
+### When Is It Worth It?
 
-**LP fee earnings:**
-- 0.3% fee on every swap through the pool
-- Distributed proportionally to LP holders
-- Earned continuously, compounding with each swap
-- 1/6 of the fee goes to the protocol; 5/6 goes to LPs
+Providing liquidity is profitable when **trading fees earned > impermanent loss**.
 
-## Pool Creation (Admin)
+SolverNet's 0.3% fee (configurable per pool via `feeNumerator / 10000`) accrues directly into pool reserves, increasing the value of your LP tokens over time.
 
-Only the protocol admin can create new pools:
+## Fee Accrual
 
-```bash
-curl -X POST http://localhost:3001/v1/pools/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "assetA": "lovelace",
-    "assetB": "abc123def456.TOKEN",
-    "amountA": "1000000000",
-    "amountB": "500000000",
-    "fee": 30,
-    "creatorAddress": "addr_test1qz..."
-  }'
+Every swap through the pool:
+
+1. **Trading fee** = `inputAmount × feeNumerator / feeDenominator`
+2. A portion goes to **protocol fees** (stored separately in PoolDatum)
+3. The rest increases **pool reserves** → increases LP token value
+
 ```
+Protocol Fee Share = 1/6 of trading fee
+LP Fee Share = 5/6 of trading fee
+
+Example: 0.3% fee on 100 ADA swap
+  Total fee: 0.3 ADA
+  Protocol: 0.05 ADA (collected by admin)
+  LPs earn: 0.25 ADA (added to reserves)
+```
+
+## Pool Creation
+
+<Callout>
+Pool creation is currently an **admin-only** operation. New pools are created via the admin API.
+</Callout>
+
+The admin creates pools through the Factory validator:
+
+```
+POST /v1/admin/pools/create
+{
+  "assetA": { "policyId": "", "assetName": "" },     // ADA
+  "assetB": { "policyId": "abc...", "assetName": "TOKEN" },
+  "amountA": "1000000000",
+  "amountB": "500000000",
+  "feeNumerator": 30       // 0.30%
+}
+```
+
+This TX:
+1. Invokes the **Factory validator** (`CreatePool` redeemer)
+2. Mints a **Pool NFT** (one-shot thread token)
+3. Mints initial **LP tokens** to the admin
+4. Creates the Pool UTxO with initial reserves
+5. Assets are canonically ordered (policy ID then asset name)
+
+## Monitoring Your Position
+
+Track your LP positions at:
+
+- **Portfolio → Liquidity** tab in the UI
+- API: `GET /v1/portfolio/liquidity?wallet_address=addr_test1...`
+- Pool history: `GET /v1/pools/:id/history?days=30`
+
+The portfolio shows:
+- Current value of your LP tokens
+- Fees earned since deposit
+- Your share percentage
+- Impermanent loss estimation

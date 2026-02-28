@@ -2,242 +2,308 @@
 
 import { Callout } from 'nextra/components'
 
-This page provides a complete reference for all on-chain datum and redeemer types used across SolverNet DEX smart contracts.
+Complete type reference for all on-chain data structures defined in `lib/solvernet/types.ak`.
 
-## Type Definitions (Aiken)
-
-### Common Types
+## Asset Types
 
 ```aiken
+/// Represents a native Cardano asset (policy ID + asset name)
 type AssetClass {
-  policy_id: PolicyId,
-  asset_name: AssetName,
+  policy_id: PolicyId,       // 28-byte policy ID ("" for ADA)
+  asset_name: AssetName,     // Asset name bytes ("" for ADA)
 }
-
-type Address {
-  payment_credential: Credential,
-  stake_credential: Option<Credential>,
-}
-
-type POSIXTime = Int  // Milliseconds since Unix epoch
 ```
 
-## Escrow Validator
+ADA is represented as `AssetClass { policy_id: "", asset_name: "" }`.
 
-### Datum
+---
+
+## Escrow Types
+
+### EscrowDatum
 
 ```aiken
 type EscrowDatum {
-  /// Wallet address that created this intent
-  owner: Address,
-  /// Asset being sold by the user
-  input_asset: AssetClass,
-  /// Asset desired by the user
-  output_asset: AssetClass,
-  /// Minimum amount of output_asset the user will accept
-  min_output: Int,
-  /// One-shot authentication token
-  intent_token: AssetClass,
-  /// Unix timestamp (ms) after which the intent expires
-  expiry_time: POSIXTime,
+  creator: VerificationKeyHash,     // 28 bytes — owner pubkey hash
+  input_policy_id: PolicyId,
+  input_asset_name: AssetName,
+  output_policy_id: PolicyId,
+  output_asset_name: AssetName,
+  min_output: Int,                  // Minimum acceptable output amount
+  deadline: POSIXTime,              // UNIX timestamp in milliseconds
+  escrow_token: AssetName,          // Intent token asset name (blake2b hash)
+  input_amount: Int,                // Original input amount
+  max_partial_fills: Int,           // Maximum partial fills allowed
+  fill_count: Int,                  // Number of fills completed
+  remaining_input: Int,             // Input remaining to be filled
 }
 ```
 
-### Redeemers
+### EscrowRedeemer
 
 ```aiken
 type EscrowRedeemer {
-  /// Owner cancels their intent, funds returned
-  Cancel
-  /// Solver fills the intent (full or partial)
-  Fill { 
-    /// Amount of output_asset delivered
-    output_amount: Int 
-  }
-  /// Anyone reclaims expired intent funds to the owner
-  Reclaim
+  Cancel                             // Owner cancels (before fill)
+  Fill                               // Solver fills (fully or partially)
+  Reclaim                            // Owner reclaims (after deadline)
 }
 ```
 
-## Pool Validator
+### CBOR Encoding
 
-### Datum
+```
+Datum:  Constr(0, [creator, in_pid, in_an, out_pid, out_an,
+                   min_output, deadline, escrow_token,
+                   input_amount, max_partial_fills,
+                   fill_count, remaining_input])
+
+Cancel:  Constr(0, [])
+Fill:    Constr(1, [])
+Reclaim: Constr(2, [])
+```
+
+---
+
+## Pool Types
+
+### PoolDatum
 
 ```aiken
 type PoolDatum {
-  /// First asset in the pair (canonical: A < B)
-  asset_a: AssetClass,
-  /// Second asset in the pair
-  asset_b: AssetClass,
-  /// Total LP tokens ever minted (minus burned)
-  total_lp_tokens: Int,
-  /// Swap fee numerator (e.g., 30)
-  fee_numerator: Int,
-  /// Swap fee denominator (always 10000)
-  fee_denominator: Int,
-  /// Accumulated protocol fees in asset A
-  protocol_fee_a: Int,
-  /// Accumulated protocol fees in asset B
-  protocol_fee_b: Int,
-  /// Pool identity NFT
-  pool_nft: AssetClass,
+  asset_a: AssetClass,              // First token (canonically ordered)
+  asset_b: AssetClass,              // Second token
+  reserve_a: Int,                   // Active reserve of asset A
+  reserve_b: Int,                   // Active reserve of asset B
+  total_lp_tokens: Int,             // Total LP tokens outstanding
+  fee_numerator: Int,               // Fee rate (e.g., 30 = 0.30%)
+  protocol_fee_a: Int,              // Accumulated protocol fees (asset A)
+  protocol_fee_b: Int,              // Accumulated protocol fees (asset B)
+  pool_nft: AssetClass,             // Thread token identity
+  last_root_k: Int,                 // √(reserveA × reserveB) before swap
 }
 ```
 
-### Redeemers
+### PoolRedeemer
 
 ```aiken
 type PoolRedeemer {
-  /// Swap asset A for B or B for A
-  Swap {
-    direction: SwapDirection,
-    input_amount: Int,
-    min_output: Int,
-  }
-  /// Add liquidity to the pool
-  Deposit {
-    amount_a: Int,
-    amount_b: Int,
-    min_lp: Int,
-  }
-  /// Remove liquidity from the pool
-  Withdraw {
-    lp_amount: Int,
-    min_a: Int,
-    min_b: Int,
-  }
-  /// Admin collects accumulated protocol fees
-  CollectFees
-  /// Admin closes the pool
-  ClosePool
+  Swap { direction: SwapDirection }  // Execute swap
+  Deposit                            // Add liquidity
+  Withdraw                           // Remove liquidity
+  CollectFees                        // Admin collects protocol fees
+  ClosePool                          // Admin closes pool
 }
 
 type SwapDirection {
-  AToB
-  BToA
+  AToB                               // Swap asset A for asset B
+  BToA                               // Swap asset B for asset A
 }
 ```
 
-## Order Validator
+### CBOR Encoding
 
-### Datum
+```
+Datum:  Constr(0, [asset_a, asset_b, reserve_a, reserve_b,
+                   total_lp, fee_num, proto_fee_a, proto_fee_b,
+                   pool_nft, last_root_k])
+
+Swap:           Constr(0, [direction])
+Deposit:        Constr(1, [])
+Withdraw:       Constr(2, [])
+CollectFees:    Constr(3, [])
+ClosePool:      Constr(4, [])
+
+SwapDirection:
+  AToB: Constr(0, [])
+  BToA: Constr(1, [])
+```
+
+---
+
+## Order Types
+
+### OrderDatum
 
 ```aiken
 type OrderDatum {
-  /// Wallet address that created the order
-  creator: Address,
-  /// Order type
-  order_type: OrderType,
-  /// Asset being sold
+  creator: VerificationKeyHash,
   input_asset: AssetClass,
-  /// Asset being bought
   output_asset: AssetClass,
-  /// Total budget allocated to this order
-  total_budget: Int,
-  /// Budget remaining (decreases with partial executions)
-  remaining_budget: Int,
-  /// Target price (numerator / denominator)
-  price_numerator: Int,
-  price_denominator: Int,
-  /// DCA: interval between executions (ms)
-  dca_interval: Option<Int>,
-  /// DCA: amount to swap per interval
-  dca_amount: Option<Int>,
-  /// DCA: timestamp of last execution
-  last_executed: Option<POSIXTime>,
-  /// Authentication token
-  intent_token: AssetClass,
-  /// Expiry timestamp
-  expiry_time: POSIXTime,
+  budget: Int,                      // Total input budget
+  min_output: Int,                  // Minimum total output
+  deadline: POSIXTime,
+  order_type: OrderType,
+  order_params: OrderParams,
+  filled_amount: Int,               // Total input filled so far
+  fill_count: Int,
+  escrow_token: AssetName,          // Intent token (thread)
 }
 
 type OrderType {
-  Limit
-  DCA
-  StopLoss
+  Limit                              // Constr(0, [])
+  DCA                                // Constr(1, [])
+  StopLoss                           // Constr(2, [])
+}
+
+type OrderParams {
+  amount_per_interval: Int,          // DCA: amount per execution
+  interval: Int,                     // DCA: seconds between fills
+  last_fill_time: Int,               // DCA: timestamp of last fill
 }
 ```
 
-### Redeemers
+### OrderRedeemer
 
 ```aiken
 type OrderRedeemer {
-  /// Creator cancels the order
-  CancelOrder
-  /// Solver executes (partially or fully) 
-  ExecuteOrder {
-    input_consumed: Int,
-    output_delivered: Int,
-  }
-  /// Anyone reclaims expired order
-  ReclaimOrder
+  CancelOrder                        // Creator cancels
+  ExecuteOrder                       // Solver executes
+  ReclaimOrder                       // Creator reclaims after deadline
 }
 ```
 
-## Factory Validator
+### CBOR Encoding
 
-### Datum
+```
+Datum:  Constr(0, [creator, input_asset, output_asset, budget,
+                   min_output, deadline, order_type, order_params,
+                   filled_amount, fill_count, escrow_token])
+
+CancelOrder:    Constr(0, [])
+ExecuteOrder:   Constr(1, [])
+ReclaimOrder:   Constr(2, [])
+```
+
+---
+
+## Factory Types
+
+### FactoryDatum
 
 ```aiken
 type FactoryDatum {
-  /// List of registered pool identities
-  pools: List<PoolEntry>,
-}
-
-type PoolEntry {
-  asset_a: AssetClass,
-  asset_b: AssetClass,
-  pool_nft: AssetClass,
+  pool_count: Int,                   // Number of pools created
 }
 ```
 
-### Redeemers
+### FactoryRedeemer
 
 ```aiken
 type FactoryRedeemer {
-  /// Register a new pool
-  RegisterPool {
-    asset_a: AssetClass,
-    asset_b: AssetClass,
-    pool_nft: AssetClass,
-  }
+  CreatePool                         // Constr(0, [])
+  UpdateSettings                     // Constr(1, [])
 }
 ```
 
-## Settings Validator
+---
 
-### Datum
+## Settings Types
+
+### SettingsDatum
 
 ```aiken
 type SettingsDatum {
-  /// Protocol fee (basis points)
-  protocol_fee_percent: Int,
-  /// Minimum liquidity locked on pool creation
-  min_liquidity: Int,
-  /// Admin address for governance
-  admin_address: Address,
-  /// Schema version (incremented on update)
-  version: Int,
+  admin: ScriptHash,                 // Admin script hash (multi-sig)
+  fee_numerator: Int,                // Default trading fee
+  protocol_fee_share: Int,           // Protocol's share (1/N)
+  min_liquidity: Int,                // Minimum locked LP
+  version: Int,                      // Config version (increment-only)
 }
 ```
 
-### Redeemers
+### SettingsRedeemer
 
 ```aiken
 type SettingsRedeemer {
-  /// Update settings (admin only)
-  UpdateSettings
+  UpdateProtocolSettings             // Constr(0, [])
 }
 ```
 
-## Serialization
+---
 
-All datums use **inline datums** (Plutus V3 feature) — the datum is embedded directly in the UTxO output, not referenced by hash. This means:
+## Minting Policy Redeemers
 
-- No datum witness needed in transactions
-- Datums are immediately readable by anyone querying the UTxO
-- ChainSync service can parse pool/escrow state directly from Blockfrost
+### IntentTokenRedeemer
+
+```aiken
+type IntentTokenRedeemer {
+  MintIntentToken {
+    utxo_ref: OutputReference        // UTxO to consume for one-shot
+  }
+  BurnIntentToken                    // Allows batch burns
+}
+```
+
+### PoolNFTRedeemer
+
+```aiken
+type PoolNFTRedeemer {
+  MintPoolNFT {
+    utxo_ref: OutputReference
+  }
+  BurnPoolNFT                       // Admin only
+}
+```
+
+### LPRedeemer
+
+```aiken
+type LPRedeemer {
+  MintLP                             // Forwarding: pool/factory must be invoked
+  BurnLP                             // Forwarding: pool must be invoked
+}
+```
+
+---
+
+## Serialization Notes
 
 <Callout type="info">
-The backend uses Lucid Evolution's `Data.to()` and `Data.from()` for serialization between TypeScript objects and on-chain CBOR-encoded Plutus Data.
+All types use **CBOR** serialization via Plutus Data encoding. The `Constr(index, fields)` encoding maps Aiken constructors to Plutus Data.
 </Callout>
+
+### Constructor Index Mapping
+
+Each variant in a sum type gets an incrementing constructor index:
+
+```
+type MyRedeemer {
+  First    → Constr(0, [])
+  Second   → Constr(1, [])
+  Third    → Constr(2, [])
+}
+```
+
+### Integer Encoding
+
+All integers are arbitrary-precision `Integer` in Plutus. The backend uses JavaScript `BigInt` for all on-chain calculations to prevent overflow.
+
+### ByteString Encoding
+
+- `PolicyId` → 28-byte hex string (empty for ADA)
+- `AssetName` → variable-length hex string (empty for ADA lovelace)
+- `VerificationKeyHash` → 28-byte hex string
+- `ScriptHash` → 28-byte hex string
+
+### Parsing in Backend
+
+The `IntentCollector` parses on-chain datums:
+
+```typescript
+// Example: parsing EscrowDatum from Constr(0, [...])
+const fields = datum.fields; // Array of 12 Plutus Data fields
+const escrowDatum = {
+  creator: fields[0],              // ByteString
+  inputPolicyId: fields[1],        // ByteString
+  inputAssetName: fields[2],       // ByteString
+  outputPolicyId: fields[3],       // ByteString
+  outputAssetName: fields[4],      // ByteString
+  minOutput: BigInt(fields[5]),     // Integer
+  deadline: BigInt(fields[6]),      // Integer
+  escrowToken: fields[7],          // ByteString
+  inputAmount: BigInt(fields[8]),   // Integer
+  maxPartialFills: Number(fields[9]),
+  fillCount: Number(fields[10]),
+  remainingInput: BigInt(fields[11]),
+};
+```

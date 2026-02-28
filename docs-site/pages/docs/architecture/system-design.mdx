@@ -4,113 +4,148 @@ import { Callout } from 'nextra/components'
 
 ## Intent Lifecycle
 
-The core concept of SolverNet DEX is the **intent lifecycle** — a state machine that tracks each swap request from creation to settlement.
+The core innovation of SolverNet DEX is the **intent-based trading model**. Users submit trade intentions (intents) rather than executing trades directly.
+
+### State Machine
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │                                             │
-  User creates  ───►  CREATED  ──► PENDING ──► ACTIVE            │
-  swap intent      │     │            │          │                │
-                    │     │            │          ├──► FILLING     │
-                    │     │            │          │      │         │
-                    │     │            │          │      ├──► PARTIALLY_FILLED
-                    │     │            │          │      │         │
-                    │     │            │          │      └──► FILLED ──► Done!
-                    │     │            │          │                │
-                    │     ├──► CANCELLING ──► CANCELLED            │
-                    │     │                                       │
-                    │     └──► EXPIRED ──► RECLAIMED              │
-                    └─────────────────────────────────────────────┘
+                    ┌─────────┐
+                    │ CREATED │
+                    └────┬────┘
+                         │ TX submitted
+                    ┌────▼────┐
+                    │ PENDING │
+                    └────┬────┘
+                         │ On-chain confirmed
+                    ┌────▼────┐
+              ┌─────│  ACTIVE │─────┐
+              │     └────┬────┘     │
+              │          │          │
+         Cancel TX    Solver    Deadline passed
+              │       fills it      │
+         ┌────▼─────┐  │     ┌─────▼────┐
+         │CANCELLING│  │     │ EXPIRED  │
+         └────┬─────┘  │     └────┬─────┘
+              │        │          │
+         Confirmed  ┌──▼──┐   Reclaim TX
+              │     │FILL-│      │
+         ┌────▼───┐ │ ING │ ┌────▼─────┐
+         │CANCEL- │ └──┬──┘ │RECLAIMED │
+         │  LED   │    │    └──────────┘
+         └────────┘    │
+                  ┌────▼────────────┐
+                  │ PARTIALLY_FILLED│──→ FILLED
+                  └─────────────────┘
+                       or
+                  ┌────▼────┐
+                  │ FILLED  │
+                  └─────────┘
 ```
 
-### State Descriptions
+### Intent Flow
 
-| State | Description |
-|---|---|
-| `CREATED` | Intent record created in database, TX not yet submitted |
-| `PENDING` | Escrow TX submitted but not yet confirmed on-chain |
-| `ACTIVE` | Escrow UTxO confirmed on-chain, ready for solver settlement |
-| `FILLING` | Solver has selected this intent for the current batch |
-| `PARTIALLY_FILLED` | Intent partially settled (partial fill), remaining amount still active |
-| `FILLED` | Intent fully settled, user received output tokens |
-| `CANCELLING` | Cancel TX submitted but not yet confirmed |
-| `CANCELLED` | Intent cancelled, funds returned to user |
-| `EXPIRED` | Intent TTL expired, eligible for reclaim |
-| `RECLAIMED` | Expired intent reclaimed, funds returned |
+1. **User creates intent** → Backend builds escrow TX → User signs with wallet
+2. **Intent goes ACTIVE** → Solver detects it via chain sync
+3. **Solver matches** → Routes through AMM pool → Builds settlement TX
+4. **Settlement confirms** → Intent marked FILLED → User receives output tokens
 
-## Transaction Flow
+## Transaction Flows
 
-### Swap (Happy Path)
+### Swap Transaction
 
 ```
-User                    Frontend              Backend                 Cardano
- │                        │                     │                       │
- │── Connect Wallet ─────►│                     │                       │
- │── Enter swap params ──►│                     │                       │
- │                        │── GET /v1/quote ───►│                       │
- │                        │◄── quote response ──│                       │
- │── Confirm swap ───────►│                     │                       │
- │                        │── POST /v1/intents─►│                       │
- │                        │                     │── Build escrow TX ───►│
- │                        │◄── unsigned TX ─────│                       │
- │◄── Sign TX prompt ────│                     │                       │
- │── Sign with wallet ──►│                     │                       │
- │                        │── POST /v1/tx/submit►│                       │
- │                        │                     │── Submit to chain ───►│
- │                        │                     │◄── TX hash ──────────│
- │                        │◄── intent created ──│                       │
- │                        │                     │                       │
- │                        │   [Solver Loop]     │                       │
- │                        │                     │── Collect UTxOs ─────►│
- │                        │                     │── Net opposing ──────│
- │                        │                     │── Build batch TX ────►│
- │                        │                     │◄── Settlement TX ────│
- │                        │                     │                       │
- │                        │◄── WS: intentUpdate │                       │
- │◄── Swap complete ─────│                     │                       │
+User Wallet ──TX──→ Escrow Validator
+                        │
+                    (Intent UTxO)
+                        │
+Solver Wallet ──TX──→ Pool Validator ──→ User receives output
+                    (Pool UTxO)          Solver receives profit
+                                         Protocol receives fee
 ```
 
-### Pool Creation
+### Liquidity Transaction
 
 ```
-Admin                   Backend                 Cardano
- │                        │                       │
- │── POST /v1/pools/create►│                       │
- │                        │── Validate pair ──────│
- │                        │── Mint Pool NFT ──────│
- │                        │── Mint LP tokens ─────│
- │                        │── Build create TX ───►│
- │◄── unsigned TX ────────│                       │
- │── Sign & submit ──────►│                       │
- │                        │── Submit to chain ───►│
- │                        │◄── Confirmed ─────────│
- │◄── Pool created ───────│                       │
+User Wallet ──TX──→ Pool Validator ──→ User receives LP tokens
+                   (Deposit/Withdraw)   Pool reserves update
+                        │
+                   LP Token Policy
+                   (Mint/Burn LP tokens)
+```
+
+### Order Transaction (Limit/DCA/Stop-Loss)
+
+```
+User Wallet ──TX──→ Order Validator ──→ Order UTxO created
+                        │
+                    (Monitored by Cron)
+                        │
+                    Price condition met
+                        │
+Solver ──TX──→ Pool Validator ──→ User receives output
+              (Execute against pool)
 ```
 
 ## Background Services
 
-Six cron-based services run continuously to maintain system state:
+Six background services run as cron jobs within the backend process:
 
+| Service | Interval | Description |
+|---------|----------|-------------|
+| **SolverEngine** | 5s (`SOLVER_BATCH_WINDOW_MS`) | Collects active intents, routes through pools, builds and submits settlement TXs |
+| **ChainSync** | 120s (`CHAIN_SYNC_INTERVAL_MS`) | Polls Blockfrost for pool UTxO state, reconciles with database |
+| **PriceAggregation** | 60s (`CHART_SNAPSHOT_INTERVAL_MS`) | Aggregates PriceTick records into Candle OHLCV data |
+| **ReclaimKeeper** | 60s | Finds expired intents/orders and triggers on-chain reclaims |
+| **OrderExecutor** | 60s | Checks DCA/Limit/StopLoss conditions, executes ripe orders |
+| **PoolSnapshot** | 1 hour | Snapshots pool state → PoolHistory, computes ProtocolStats |
+
+### Startup Sequence
+
+```typescript
+// 1. Load environment & validate
+const config = loadConfig();
+
+// 2. Initialize infrastructure
+const db = new PrismaClient();
+const cache = new UpstashCache(config.redis);
+const blockfrost = new BlockfrostProvider(config.blockfrost);
+
+// 3. Initialize domain services
+const lucid = await Lucid.new(blockfrost, config.network);
+const solver = new SolverEngine(lucid, db, cache);
+
+// 4. Start HTTP server
+const app = createExpressApp(config, db, cache, solver);
+app.listen(config.port);
+
+// 5. Start background services
+solver.start();
+chainSync.start();
+priceAggregation.start();
+reclaimKeeper.start();
+orderExecutor.start();
+poolSnapshot.start();
 ```
-┌──────────────────────────────────────────────────────────┐
-│                   Background Services                     │
-│                                                          │
-│  ┌─────────────┐  ┌──────────────────┐  ┌────────────┐  │
-│  │ ChainSync   │  │PriceAggregation  │  │  Reclaim   │  │
-│  │ Every 30s   │  │   Every 60s      │  │ Every 60s  │  │
-│  │             │  │                  │  │            │  │
-│  │ Sync pool   │  │ PriceTick → OHLCV│  │ Expire &   │  │
-│  │ UTxOs from  │  │ candles (H4/D1/  │  │ reclaim    │  │
-│  │ Blockfrost  │  │ W1 intervals)    │  │ intents    │  │
-│  └─────────────┘  └──────────────────┘  └────────────┘  │
-│                                                          │
-│  ┌─────────────┐  ┌──────────────────┐  ┌────────────┐  │
-│  │OrderExecutor│  │  PoolSnapshot    │  │ FaucetBot  │  │
-│  │ Every 60s   │  │   Every 1h       │  │ Every 24h  │  │
-│  │             │  │                  │  │            │  │
-│  │ Execute ripe│  │ Snapshot pool    │  │ Request    │  │
-│  │ limit/DCA/  │  │ state for        │  │ testnet    │  │
-│  │ stop-loss   │  │ analytics        │  │ ADA        │  │
-│  └─────────────┘  └──────────────────┘  └────────────┘  │
-└──────────────────────────────────────────────────────────┘
-```
+
+## Security Model
+
+### Smart Contract Security
+
+- **Validator-enforced invariants** — All state transitions are verified by Plutus V3 scripts
+- **Datum-based authorization** — Only the intent creator can cancel their intent
+- **Pool NFT uniqueness** — Each pool has a unique NFT that prevents pool duplication
+- **Settings NFT thread** — Protocol settings are controlled by a thread NFT
+
+### API Security
+
+- **Rate limiting** — Per-IP rate limiting with stricter limits on write operations
+- **Input validation** — Zod schema validation on all request bodies and query parameters
+- **CORS** — Configurable origin whitelist
+- **Helmet** — Security headers (CSP, HSTS, etc.)
+- **Admin auth** — Admin endpoints verify wallet address matches `ADMIN_ADDRESS`
+
+### Operational Security
+
+- **Solver seed phrase** — Stored as environment variable, never logged
+- **Database** — Managed PostgreSQL with SSL (Supabase)
+- **Cache** — Encrypted Redis connections (Upstash)

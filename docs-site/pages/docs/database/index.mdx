@@ -1,277 +1,352 @@
-# Database
+# Database Schema
 
 import { Callout } from 'nextra/components'
 
 SolverNet DEX uses **PostgreSQL** (via Supabase) with **Prisma ORM** for type-safe database access.
 
-## Schema Overview
+<Callout type="info">
+All monetary values use `Decimal(38,0)` to represent Cardano lovelace amounts without precision loss. Prices use `Decimal(30,15)` for high-precision ratios.
+</Callout>
+
+---
+
+## Entity Relationship
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│    Intent    │     │     Pool     │     │    Order     │
-│              │     │              │     │              │
-│ status       │     │ reserveA     │     │ orderType    │
-│ inputAsset   │     │ reserveB     │     │ totalBudget  │
-│ outputAsset  │     │ totalLpTokens│     │ priceTarget  │
-│ inputAmount  │     │ fee          │     │ dcaInterval  │
-│ minOutput    │     │ tvl          │     │              │
-│ escrowTxHash │     │ volume24h    │     │              │
-└──────┬───────┘     └──────┬───────┘     └──────────────┘
-       │                    │
-       │                    │
-       │              ┌─────┴────────┐
-       │              │              │
-       │         ┌────┴────┐  ┌──────┴─────┐
-       │         │  Swap   │  │PoolHistory │
-       │         │         │  │            │
-       │         │direction│  │ snapshot   │
-       │         │ amount  │  │ hourly     │
-       │         │ fee     │  │            │
-       │         └─────────┘  └────────────┘
-       │
-  ┌────┴──────┐    ┌──────────────┐    ┌──────────────┐
-  │ PriceTick │    │   Candle     │    │ProtocolStats │
-  │           │    │              │    │              │
-  │ raw price │    │ OHLCV        │    │ tvl          │
-  │ per swap  │    │ H4/D1/W1    │    │ volume       │
-  └───────────┘    └──────────────┘    │ fees         │
-                                       └──────────────┘
+┌─────────┐     ┌─────────┐     ┌───────────────┐
+│  Pool   │────<│  Swap   │     │ ProtocolStats │
+│         │────<│PoolHist │     └───────────────┘
+│         │────<│ Candle  │
+│         │────<│PriceTick│     ┌─────────┐
+└─────────┘     └─────────┘     │  Order  │
+                                └─────────┘
+┌─────────┐
+│ Intent  │
+└─────────┘
 ```
+
+---
 
 ## Models
 
 ### Intent
 
-```prisma
-model Intent {
-  id                String       @id @default(cuid())
-  creatorAddress    String
-  inputAsset        String
-  outputAsset       String
-  inputAmount       BigInt
-  minimumOutput     BigInt
-  actualOutput      BigInt?
-  status            IntentStatus @default(CREATED)
-  escrowTxHash      String?
-  escrowTxIndex     Int?
-  settlementTxHash  String?
-  expiresAt         DateTime
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+Represents a swap intent (escrow) created by a user.
 
-  @@index([creatorAddress])
-  @@index([status])
-  @@index([escrowTxHash, escrowTxIndex])
-  @@map("intents")
-}
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `String` (cuid) | auto | Primary key |
+| `status` | `IntentStatus` | `CREATED` | Current lifecycle state |
+| `creator` | `String(200)` | — | Creator wallet address (Bech32) |
+| `inputPolicyId` | `String(64)` | — | Input token policy ID (empty for ADA) |
+| `inputAssetName` | `String(128)` | — | Input token asset name (hex) |
+| `inputAmount` | `Decimal(38,0)` | — | Input amount in lovelace/smallest unit |
+| `outputPolicyId` | `String(64)` | — | Output token policy ID |
+| `outputAssetName` | `String(128)` | — | Output token asset name (hex) |
+| `minOutput` | `Decimal(38,0)` | — | Minimum acceptable output amount |
+| `actualOutput` | `Decimal(38,0)?` | null | Actual output received on fill |
+| `deadline` | `BigInt` | — | Expiration slot number |
+| `partialFill` | `Boolean` | `false` | Whether partial fills are allowed |
+| `maxPartialFills` | `Int` | `1` | Maximum number of partial fills |
+| `fillCount` | `Int` | `0` | Number of fills executed |
+| `remainingInput` | `Decimal(38,0)` | — | Remaining input for partial fills |
+| `escrowTxHash` | `String(64)?` | null | Escrow creation TX hash |
+| `escrowOutputIdx` | `Int?` | null | Escrow UTxO output index |
+| `settlementTxHash` | `String(64)?` | null | Settlement TX hash |
+| `solverAddress` | `String(200)?` | null | Solver that filled the intent |
+| `createdAt` | `DateTime` | `now()` | Creation timestamp |
+| `updatedAt` | `DateTime` | auto | Last update timestamp |
+| `settledAt` | `DateTime?` | null | Settlement timestamp |
+
+#### IntentStatus Enum
+
 ```
+CREATED → PENDING → ACTIVE → FILLING → FILLED
+                           → PARTIALLY_FILLED → FILLED
+                  → CANCELLING → CANCELLED
+                  → EXPIRED → RECLAIMED
+```
+
+| Value | Description |
+|-------|-------------|
+| `CREATED` | Intent created in DB, TX not yet submitted |
+| `PENDING` | TX submitted, waiting for on-chain confirmation |
+| `ACTIVE` | Escrow confirmed on-chain, available for solver |
+| `FILLING` | Solver is building settlement TX |
+| `PARTIALLY_FILLED` | Some input consumed (partial fill enabled) |
+| `FILLED` | Fully settled by solver |
+| `CANCELLING` | Cancel TX submitted |
+| `CANCELLED` | Cancel confirmed on-chain |
+| `EXPIRED` | Deadline passed |
+| `RECLAIMED` | Expired funds reclaimed on-chain |
+
+---
 
 ### Pool
 
-```prisma
-model Pool {
-  id              String    @id @default(cuid())
-  nftPolicyId     String
-  nftAssetName    String
-  assetA          String
-  assetB          String
-  reserveA        BigInt    @default(0)
-  reserveB        BigInt    @default(0)
-  totalLpTokens   BigInt    @default(0)
-  feeNumerator    Int       @default(30)
-  protocolFeeA    BigInt    @default(0)
-  protocolFeeB    BigInt    @default(0)
-  tvl             Float     @default(0)
-  volume24h       Float     @default(0)
-  state           PoolState @default(CREATING)
-  poolTxHash      String?
-  poolTxIndex     Int?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+Represents an AMM liquidity pool.
 
-  history         PoolHistory[]
-  swaps           Swap[]
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `String` (cuid) | auto | Primary key |
+| `poolNftPolicyId` | `String(64)` | — | Pool NFT policy ID (unique identifier) |
+| `poolNftAssetName` | `String(128)` | — | Pool NFT asset name |
+| `assetAPolicyId` | `String(64)` | — | Asset A policy ID (empty for ADA) |
+| `assetAAssetName` | `String(128)` | — | Asset A asset name |
+| `assetADecimals` | `Int` | `0` | Asset A decimal places |
+| `assetATicker` | `String(32)?` | null | Asset A display ticker |
+| `assetBPolicyId` | `String(64)` | — | Asset B policy ID |
+| `assetBAssetName` | `String(128)` | — | Asset B asset name |
+| `assetBDecimals` | `Int` | `0` | Asset B decimal places |
+| `assetBTicker` | `String(32)?` | null | Asset B display ticker |
+| `reserveA` | `Decimal(38,0)` | — | Current reserve of asset A |
+| `reserveB` | `Decimal(38,0)` | — | Current reserve of asset B |
+| `totalLpTokens` | `Decimal(38,0)` | — | Total LP tokens in circulation |
+| `feeNumerator` | `Int` | — | Swap fee numerator (e.g., 30 = 0.30%) |
+| `protocolFeeAccA` | `Decimal(38,0)` | `0` | Accumulated protocol fees (asset A) |
+| `protocolFeeAccB` | `Decimal(38,0)` | `0` | Accumulated protocol fees (asset B) |
+| `tvlAda` | `Decimal(38,0)` | `0` | Total value locked in ADA |
+| `volume24h` | `Decimal(38,0)` | `0` | 24-hour trading volume |
+| `fees24h` | `Decimal(38,0)` | `0` | 24-hour fee revenue |
+| `txHash` | `String(64)` | — | Latest pool UTxO TX hash |
+| `outputIndex` | `Int` | — | Latest pool UTxO output index |
+| `lpPolicyId` | `String(64)?` | null | LP token minting policy ID |
+| `state` | `PoolState` | `ACTIVE` | Pool lifecycle state |
+| `createdAt` | `DateTime` | `now()` | Creation timestamp |
+| `updatedAt` | `DateTime` | auto | Last update timestamp |
 
-  @@unique([nftPolicyId, nftAssetName])
-  @@unique([assetA, assetB])
-  @@map("pools")
-}
-```
+#### PoolState Enum
+
+| Value | Description |
+|-------|-------------|
+| `ACTIVE` | Pool is operational and accepting trades |
+| `INACTIVE` | Pool is paused (admin action) |
+| `CREATING` | Pool creation TX pending |
+
+**Relations:** Pool → Swap[], PoolHistory[]
+
+---
 
 ### Swap
 
-```prisma
-model Swap {
-  id            String   @id @default(cuid())
-  poolId        String
-  pool          Pool     @relation(fields: [poolId], references: [id])
-  direction     String   // "AToB" or "BToA"
-  inputAmount   BigInt
-  outputAmount  BigInt
-  feeAmount     BigInt
-  protocolFee   BigInt
-  priceImpact   Float
-  txHash        String
-  traderAddress String
-  createdAt     DateTime @default(now())
+Records individual swap transactions within a pool.
 
-  @@index([poolId])
-  @@index([txHash])
-  @@index([traderAddress])
-  @@map("swaps")
-}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` (cuid) | Primary key |
+| `poolId` | `String` | FK → Pool |
+| `txHash` | `String(64)` | On-chain transaction hash |
+| `direction` | `String(4)` | `AToB` or `BToA` |
+| `inputAmount` | `Decimal(38,0)` | Input token amount |
+| `outputAmount` | `Decimal(38,0)` | Output token amount |
+| `fee` | `Decimal(38,0)` | Fee amount deducted |
+| `priceImpact` | `Float` | Price impact percentage |
+| `senderAddress` | `String(200)` | Sender wallet address |
+| `intentId` | `String?` | Associated intent ID (if from intent) |
+| `timestamp` | `DateTime` | Swap execution time |
+
+**Indexes:** `@@index([poolId, timestamp])` for efficient pool swap queries.
+
+---
 
 ### Order
 
-```prisma
-model Order {
-  id                  String      @id @default(cuid())
-  creatorAddress      String
-  orderType           OrderType
-  inputAsset          String
-  outputAsset         String
-  totalBudget         BigInt
-  remainingBudget     BigInt
-  priceNumerator      BigInt
-  priceDenominator    BigInt
-  dcaInterval         Int?
-  dcaAmountPerInterval BigInt?
-  lastExecutedAt      DateTime?
-  status              OrderStatus @default(CREATED)
-  escrowTxHash        String?
-  escrowTxIndex       Int?
-  expiresAt           DateTime
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+Represents advanced order types (Limit, DCA, Stop-Loss).
 
-  @@index([creatorAddress])
-  @@index([status])
-  @@map("orders")
-}
-```
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `id` | `String` (cuid) | auto | Primary key |
+| `type` | `OrderType` | — | Order type |
+| `creator` | `String(200)` | — | Creator wallet address |
+| `inputPolicyId` | `String(64)` | — | Input token policy ID |
+| `inputAssetName` | `String(128)` | — | Input token asset name |
+| `outputPolicyId` | `String(64)` | — | Output token policy ID |
+| `outputAssetName` | `String(128)` | — | Output token asset name |
+| `inputAmount` | `Decimal(38,0)?` | — | Input amount (Limit/StopLoss) |
+| `priceNumerator` | `Decimal(38,0)?` | — | Target price numerator |
+| `priceDenominator` | `Decimal(38,0)?` | — | Target price denominator |
+| `totalBudget` | `Decimal(38,0)?` | — | Total DCA budget |
+| `amountPerInterval` | `Decimal(38,0)?` | — | Amount per DCA interval |
+| `intervalSlots` | `Int?` | — | Slots between DCA executions |
+| `remainingBudget` | `Decimal(38,0)?` | — | Remaining DCA budget |
+| `executedIntervals` | `Int?` | `0` | Completed DCA intervals |
+| `deadline` | `BigInt` | — | Expiration slot number |
+| `status` | `OrderStatus` | `CREATED` | Current status |
+| `escrowTxHash` | `String(64)?` | null | Escrow TX hash |
+| `escrowOutputIdx` | `Int?` | null | Escrow output index |
+| `createdAt` | `DateTime` | `now()` | Creation timestamp |
+| `updatedAt` | `DateTime` | auto | Last update timestamp |
 
-### Candle (OHLCV)
+#### OrderType Enum
 
-```prisma
-model Candle {
-  id        String         @id @default(cuid())
-  poolId    String
-  interval  CandleInterval
-  timestamp DateTime
-  open      Float
-  high      Float
-  low       Float
-  close     Float
-  volume    Float
-  createdAt DateTime       @default(now())
+| Value | Description |
+|-------|-------------|
+| `LIMIT` | Execute when price reaches target |
+| `DCA` | Dollar-cost averaging over intervals |
+| `STOP_LOSS` | Sell when price drops below threshold |
 
-  @@unique([poolId, interval, timestamp])
-  @@index([poolId, interval])
-  @@map("candles")
-}
-```
+#### OrderStatus Enum
+
+| Value | Description |
+|-------|-------------|
+| `CREATED` | Order created, TX pending |
+| `PENDING` | TX submitted |
+| `ACTIVE` | Escrow confirmed on-chain |
+| `PARTIALLY_FILLED` | DCA partially executed |
+| `FILLED` | Fully executed |
+| `CANCELLED` | Cancelled by user |
+| `EXPIRED` | Deadline passed |
+
+---
 
 ### PoolHistory
 
-```prisma
-model PoolHistory {
-  id        String   @id @default(cuid())
-  poolId    String
-  pool      Pool     @relation(fields: [poolId], references: [id])
-  reserveA  BigInt
-  reserveB  BigInt
-  tvl       Float
-  volume    Float
-  price     Float
-  timestamp DateTime
-  createdAt DateTime @default(now())
+Hourly snapshots of pool state for historical charts.
 
-  @@index([poolId, timestamp])
-  @@map("pool_history")
-}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` (cuid) | Primary key |
+| `poolId` | `String` | FK → Pool |
+| `reserveA` | `Decimal(38,0)` | Reserve A at snapshot time |
+| `reserveB` | `Decimal(38,0)` | Reserve B at snapshot time |
+| `tvlAda` | `Decimal(38,0)` | TVL at snapshot time |
+| `volume` | `Decimal(38,0)` | Volume since last snapshot |
+| `fees` | `Decimal(38,0)` | Fees since last snapshot |
+| `price` | `Decimal(30,15)` | Price at snapshot time |
+| `timestamp` | `DateTime` | Snapshot timestamp |
+
+**Indexes:** `@@index([poolId, timestamp])`
+
+---
+
+### Candle
+
+OHLCV candlestick data aggregated from price ticks.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` (cuid) | Primary key |
+| `poolId` | `String(64)` | Pool identifier |
+| `interval` | `CandleInterval` | Time interval |
+| `openTime` | `DateTime` | Candle open time |
+| `closeTime` | `DateTime` | Candle close time |
+| `open` | `Decimal(30,15)` | Opening price |
+| `high` | `Decimal(30,15)` | Highest price |
+| `low` | `Decimal(30,15)` | Lowest price |
+| `close` | `Decimal(30,15)` | Closing price |
+| `volume` | `Decimal(38,0)` | Total volume |
+| `txCount` | `Int` | Number of transactions |
+
+#### CandleInterval Enum
+
+| Value | Description |
+|-------|-------------|
+| `M1` | 1 minute |
+| `M5` | 5 minutes |
+| `M15` | 15 minutes |
+| `H1` | 1 hour |
+| `H4` | 4 hours |
+| `D1` | 1 day |
+| `W1` | 1 week |
+
+**Unique Constraint:** `@@unique([poolId, interval, openTime])`
+
+---
+
+### PriceTick
+
+Raw price observations recorded from swaps.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` (cuid) | Primary key |
+| `poolId` | `String(64)` | Pool identifier |
+| `price` | `Decimal(30,15)` | Price at tick time |
+| `volume` | `Decimal(38,0)` | Trade volume at tick |
+| `timestamp` | `DateTime` | Tick timestamp |
+
+**Indexes:** `@@index([poolId, timestamp])`
+
+---
 
 ### ProtocolStats
 
-```prisma
-model ProtocolStats {
-  id            String   @id @default(cuid())
-  totalTvl      Float
-  totalVolume   Float
-  totalFees     Float
-  uniqueTraders Int
-  totalSwaps    Int
-  timestamp     DateTime
-  createdAt     DateTime @default(now())
+Periodic protocol-wide statistics snapshots.
 
-  @@index([timestamp])
-  @@map("protocol_stats")
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `String` (cuid) | Primary key |
+| `tvl` | `Decimal(38,0)` | Total value locked across all pools |
+| `volume24h` | `Decimal(38,0)` | 24-hour volume |
+| `volume7d` | `Decimal(38,0)` | 7-day volume |
+| `fees24h` | `Decimal(38,0)` | 24-hour fees |
+| `totalPools` | `Int` | Active pool count |
+| `totalIntents` | `Int` | Total intents created |
+| `intentsFilled` | `Int` | Successfully filled intents |
+| `uniqueTraders` | `Int` | Unique wallet addresses |
+| `timestamp` | `DateTime` | Snapshot timestamp |
+
+---
+
+## Prisma Configuration
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
 }
 ```
 
-## Enums
-
-```prisma
-enum IntentStatus {
-  CREATED
-  PENDING
-  ACTIVE
-  FILLING
-  PARTIALLY_FILLED
-  FILLED
-  CANCELLING
-  CANCELLED
-  EXPIRED
-  RECLAIMED
-}
-
-enum OrderType {
-  LIMIT
-  DCA
-  STOP_LOSS
-}
-
-enum OrderStatus {
-  CREATED
-  PENDING
-  ACTIVE
-  PARTIALLY_FILLED
-  FILLED
-  CANCELLED
-  EXPIRED
-}
-
-enum PoolState {
-  ACTIVE
-  INACTIVE
-  CREATING
-}
-
-enum CandleInterval {
-  H4
-  D1
-  W1
-}
-```
-
-## Migrations
+### Common Commands
 
 ```bash
-# Create a new migration
-cd backend
-pnpm exec prisma migrate dev --name add_new_field
-
-# Apply migrations in production
-pnpm exec prisma migrate deploy
-
-# Reset database (development only!)
-pnpm exec prisma migrate reset
-
-# Generate Prisma Client
+# Generate Prisma client
 pnpm exec prisma generate
+
+# Push schema changes to database
+pnpm exec prisma db push
+
+# Open Prisma Studio (GUI)
+pnpm exec prisma studio
+
+# Create a migration
+pnpm exec prisma migrate dev --name description
+
+# Reset database (development only)
+pnpm exec prisma migrate reset
 ```
 
-<Callout type="warning">
-Always use `prisma migrate deploy` in production. Never use `migrate dev` or `migrate reset` on production databases.
-</Callout>
+---
+
+## Database Setup Options
+
+### Supabase (Recommended)
+
+1. Create a project at [supabase.com](https://supabase.com)
+2. Copy the connection string from **Settings → Database**
+3. Set `DATABASE_URL` in your `.env` file
+
+### Docker (Local Development)
+
+```yaml
+# docker-compose.dev.yml
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: solvernet
+      POSTGRES_USER: solvernet
+      POSTGRES_PASSWORD: solvernet
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+```
+
+```bash
+DATABASE_URL="postgresql://solvernet:solvernet@localhost:5432/solvernet"
+```

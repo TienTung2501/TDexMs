@@ -2,112 +2,173 @@
 
 import { Callout } from 'nextra/components'
 
-SolverNet DEX integrates with Cardano wallets using **CIP-30** (dApp connector standard) via **Lucid Evolution**.
+SolverNet DEX integrates with Cardano wallets using the **CIP-30** standard for dApp connector.
 
 ## Supported Wallets
 
-| Wallet | ID | Status |
-|---|---|---|
-| **Nami** | `nami` | ✅ Supported |
-| **Eternl** | `eternl` | ✅ Supported |
-| **Flint** | `flint` | ✅ Supported |
-| **Lace** | `lace` | ✅ Supported |
-| **GeroWallet** | `gerowallet` | ✅ Supported |
+| Wallet | CIP-30 | Status |
+|--------|--------|--------|
+| **Nami** | ✅ | Fully supported |
+| **Eternl** | ✅ | Fully supported |
+| **Lace** | ✅ | Fully supported |
+| **Flint** | ✅ | Supported |
+| **Vespr** | ✅ | Supported |
+| **Typhon** | ✅ | Supported |
 
 ## Connection Flow
 
-```typescript
-import { Lucid, Blockfrost } from '@lucid-evolution/lucid'
-
-// 1. Initialize Lucid with Blockfrost provider
-const lucid = await Lucid.new(
-  new Blockfrost(
-    'https://cardano-preprod.blockfrost.io/api',
-    BLOCKFROST_PROJECT_ID
-  ),
-  'Preprod'
-)
-
-// 2. Detect available wallets
-const availableWallets = Object.keys(window.cardano || {})
-  .filter(key => window.cardano[key]?.enable)
-
-// 3. Connect to selected wallet
-const api = await window.cardano.nami.enable()
-lucid.selectWallet(api)
-
-// 4. Get wallet info
-const address = await lucid.wallet.address()
-const utxos = await lucid.wallet.getUtxos()
-const balance = utxos.reduce((sum, u) => sum + u.assets.lovelace, 0n)
+```
+1. User clicks "Connect Wallet"
+   │
+2. Frontend detects available CIP-30 wallets
+   │ (window.cardano.nami, window.cardano.eternl, etc.)
+   │
+3. User selects a wallet
+   │
+4. Frontend calls wallet.enable()
+   │ → Returns CIP-30 API handle
+   │
+5. Frontend reads wallet state:
+   │ ├── getUsedAddresses() → User's address
+   │ ├── getBalance() → ADA balance
+   │ ├── getUtxos() → Available UTxOs
+   │ └── getNetworkId() → Network (0=testnet, 1=mainnet)
+   │
+6. Frontend validates network matches CARDANO_NETWORK
+   │
+7. Wallet context updated → UI shows wallet info
 ```
 
-## Transaction Signing
-
-All transactions are built on the backend and signed by the user's wallet:
-
-```typescript
-// 1. Backend returns unsigned TX (CBOR hex)
-const { unsignedTx } = await api.createIntent({
-  creatorAddress: address,
-  inputAsset: 'lovelace',
-  outputAsset: tokenUnit,
-  inputAmount: '100000000',
-  minimumOutput: '49000000',
-})
-
-// 2. Deserialize and sign with wallet
-const tx = lucid.fromTx(unsignedTx)
-const signedTx = await tx.sign.withWallet().complete()
-
-// 3. Submit signed TX
-const txHash = await api.submitTx({
-  signedTx: signedTx.toCBOR(),
-  intentId: intentId,
-})
-
-// 4. Wait for confirmation
-await api.confirmTx({ txHash, intentId })
-```
-
-## React Context
+## Wallet Provider
 
 ```tsx
-// providers/WalletProvider.tsx
-interface WalletContextValue {
-  connected: boolean
-  address: string | null
-  balance: bigint
-  walletName: string | null
-  connect: (walletId: string) => Promise<void>
-  disconnect: () => void
-  lucid: Lucid | null
-  signTx: (unsignedTx: string) => Promise<string>
+// providers/wallet-provider.tsx
+'use client';
+
+import { createContext, useContext, useState, useCallback } from 'react';
+
+interface WalletContextType {
+  connected: boolean;
+  address: string | null;
+  balance: bigint;
+  walletApi: any; // CIP-30 API handle
+  connect: (walletName: string) => Promise<void>;
+  disconnect: () => void;
+  signTx: (unsignedTx: string) => Promise<string>;
 }
 
-const WalletContext = createContext<WalletContextValue>(...)
+const WalletContext = createContext<WalletContextType>(/* ... */);
 
-export function useWallet() {
-  return useContext(WalletContext)
+export function WalletProvider({ children }: { children: React.ReactNode }) {
+  const [walletApi, setWalletApi] = useState<any>(null);
+  const [address, setAddress] = useState<string | null>(null);
+
+  const connect = useCallback(async (walletName: string) => {
+    // 1. Get CIP-30 handle
+    const wallet = (window as any).cardano[walletName];
+    const api = await wallet.enable();
+
+    // 2. Read wallet state
+    const addresses = await api.getUsedAddresses();
+    const networkId = await api.getNetworkId();
+
+    // 3. Validate network
+    const expectedNetwork = process.env.NEXT_PUBLIC_CARDANO_NETWORK;
+    if (expectedNetwork === 'mainnet' && networkId !== 1) {
+      throw new Error('Please switch to Cardano Mainnet');
+    }
+
+    setWalletApi(api);
+    setAddress(addresses[0]);
+  }, []);
+
+  const signTx = useCallback(async (unsignedTx: string) => {
+    if (!walletApi) throw new Error('Wallet not connected');
+    const witness = await walletApi.signTx(unsignedTx, true);
+    return witness;
+  }, [walletApi]);
+
+  return (
+    <WalletContext.Provider value={{
+      connected: !!walletApi,
+      address,
+      balance: 0n,
+      walletApi,
+      connect,
+      disconnect: () => { setWalletApi(null); setAddress(null); },
+      signTx,
+    }}>
+      {children}
+    </WalletContext.Provider>
+  );
 }
+
+export const useWallet = () => useContext(WalletContext);
 ```
 
-<Callout type="info">
-The wallet connection state persists across page navigations using React Context. Auto-reconnect is attempted on page load if the user previously connected.
-</Callout>
+## Transaction Signing Flow
+
+```
+┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Frontend │     │ Backend  │     │  Wallet  │     │ Backend  │
+└────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘
+     │                │                │                │
+     │ POST /intents  │                │                │
+     │───────────────>│                │                │
+     │                │ Build escrow   │                │
+     │                │ TX (Lucid)    │                │
+     │  unsignedTx   │                │                │
+     │<───────────────│                │                │
+     │                │                │                │
+     │ signTx(cbor)   │                │                │
+     │───────────────────────────────>│                │
+     │                │                │ User approves  │
+     │  witness (cbor) │               │ in wallet UI   │
+     │<───────────────────────────────│                │
+     │                │                │                │
+     │ Assemble TX    │                │                │
+     │ (unsignedTx +  │                │                │
+     │  witness)      │                │                │
+     │                │                │                │
+     │ POST /tx/submit│                │                │
+     │───────────────>│                │                │
+     │                │ Submit to      │                │
+     │                │ Cardano node   │                │
+     │  { txHash }    │                │                │
+     │<───────────────│                │                │
+```
 
 ## Network Validation
 
-The frontend validates that the connected wallet is on the correct network:
+<Callout type="warning">
+The frontend validates that the connected wallet's network matches the backend's `CARDANO_NETWORK` setting. A mismatch prevents transactions from being submitted.
+</Callout>
 
 ```typescript
-async function validateNetwork(lucid: Lucid) {
-  const networkId = await lucid.wallet.networkId()
-  
-  if (networkId !== 0) { // 0 = testnet, 1 = mainnet
-    throw new Error(
-      'Please switch your wallet to the Preprod testnet'
-    )
-  }
+const networkId = await walletApi.getNetworkId();
+const isTestnet = networkId === 0; // 0 = testnet, 1 = mainnet
+
+if (process.env.NEXT_PUBLIC_CARDANO_NETWORK === 'preprod' && !isTestnet) {
+  toast.error('Please switch your wallet to Preprod Testnet');
+  return;
 }
 ```
+
+## UTxO Management
+
+The CIP-30 API provides access to wallet UTxOs for transaction building:
+
+```typescript
+// Get all available UTxOs
+const utxos = await walletApi.getUtxos();
+
+// Get collateral UTxOs (for Plutus scripts)
+const collateral = await walletApi.getCollateral();
+
+// Get ADA balance
+const balanceCbor = await walletApi.getBalance();
+```
+
+<Callout type="info">
+The backend handles all transaction building via Lucid. The frontend only needs to sign the pre-built CBOR transaction and submit it back.
+</Callout>

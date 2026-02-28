@@ -1,146 +1,262 @@
 # Advanced Orders
 
-import { Callout, Tabs } from 'nextra/components'
+import { Steps, Callout, Tabs } from 'nextra/components'
 
-SolverNet DEX supports three advanced order types beyond simple market swaps.
+SolverNet supports limit orders, DCA (Dollar-Cost Averaging), and stop-loss orders — all enforced on-chain.
 
 ## Order Types
 
-| Type | Description | Use Case |
-|---|---|---|
-| **Limit** | Execute when price reaches target | "Buy TOKEN at 0.45 ADA" |
-| **DCA** | Execute fixed amount at regular intervals | "Buy 100 ADA of TOKEN every hour" |
-| **Stop-Loss** | Execute when price drops below threshold | "Sell TOKEN if price drops below 0.40 ADA" |
+| Type | Description | Execution |
+|------|-------------|-----------|
+| **Limit** | Execute when price reaches target | Partial fills allowed, repeating |
+| **DCA** | Buy/sell fixed amount at intervals | Time-based, `amount_per_interval` |
+| **Stop-Loss** | Convert entire position at trigger | Full budget, single execution |
+
+All orders are locked on-chain in the **Order Validator** UTxO with an intent token as thread token.
 
 ## Limit Orders
 
-A limit order executes when the market price reaches your specified target price.
+Execute a swap only when the market price meets your target.
 
-**How it works:**
-1. You lock funds in an order escrow UTxO
-2. The order executor cron checks prices every 60 seconds
-3. When market price meets your target, the order is executed
-4. Output tokens are delivered to your wallet
+### How It Works
 
-**Price condition:**
-$$
-\frac{\text{outputAmount}}{\text{inputConsumed}} \geq \frac{\text{priceNumerator}}{\text{priceDenominator}}
-$$
+```
+┌──────────────┐          ┌───────────────────┐
+│ User creates │─────────▶│   Order UTxO      │
+│ limit order  │          │ OrderDatum {       │
+└──────────────┘          │   type: LIMIT,     │
+                          │   budget: 100 ADA, │
+                          │   targetPrice,     │
+                          │   filledAmount: 0  │
+                          │ }                  │
+                          └───────────────────┘
+                                    │
+                          Solver checks price
+                                    │
+                          ┌─────────▼─────────┐
+                          │ Price meets limit? │
+                          │ meets_limit_price  │
+                          └─────────┬─────────┘
+                             Yes    │    No
+                              ▼     │     ▼
+                          Execute   │  Wait
+                          partial   │
+                          fill      │
+```
 
-**Example — Buy TOKEN at 0.45 ADA:**
+### Price Condition
+
+The solver checks the on-chain AMM price satisfies your limit:
+
+$$\frac{outputAmount}{inputAmount} \geq \frac{minOutput}{budget}$$
+
+This is checked using integer arithmetic in the validator:
+
+```
+outputAmount × budget ≥ minOutput × inputAmount
+```
+
+### Creating a Limit Order
+
 ```json
+POST /v1/orders
 {
-  "orderType": "LIMIT",
-  "inputAsset": "lovelace",
-  "outputAsset": "abc123.TOKEN",
-  "totalBudget": "1000000000",
-  "priceNumerator": "2222222",
-  "priceDenominator": "1000000",
-  "expiresInSeconds": 86400
+  "type": "LIMIT",
+  "creator": "addr_test1...",
+  "inputAsset": { "policyId": "", "assetName": "" },
+  "outputAsset": { "policyId": "abc...", "assetName": "TOKEN" },
+  "budget": "100000000",
+  "minOutput": "5200000",
+  "deadline": 1720000000,
+  "senderAddress": "addr_test1...",
+  "changeAddress": "addr_test1..."
 }
 ```
 
-This means: I want at least 2.222 TOKEN per ADA (equivalent to buying at 0.45 ADA/TOKEN).
+### Partial Fills
 
-## DCA (Dollar-Cost Averaging)
+Limit orders support partial execution:
 
-DCA orders execute a fixed amount at regular intervals, spreading your entry across time to reduce timing risk.
+- If the pool can only absorb part of your order at the target price, the solver fills that portion
+- A new Order UTxO is created with updated `filledAmount` and reduced budget
+- Continues until fully filled or deadline
+- Same 10% minimum threshold as intents
 
-**How it works:**
-1. You lock a total budget in an order escrow
-2. Every `dcaInterval` seconds, the executor swaps `dcaAmountPerInterval`
-3. Partial fills create a new escrow with reduced budget
-4. Continues until budget is exhausted or order expires
+## DCA Orders
 
-**Example — Buy TOKEN with 10,000 ADA over 10 hours:**
+Automatically buy/sell a fixed amount at regular intervals.
+
+### How It Works
+
+```
+Budget: 300 ADA
+Interval: 1 hour (3600 seconds)
+Amount per interval: 100 ADA
+
+Hour 0: Swap 100 ADA → TOKEN  ✓
+Hour 1: Swap 100 ADA → TOKEN  ✓
+Hour 2: Swap 100 ADA → TOKEN  ✓ (budget exhausted)
+```
+
+### Time Enforcement
+
+The Order validator enforces interval timing:
+
+```
+min_dca_interval = 180 seconds (3 minutes)
+
+Validator checks:
+  tx_valid_from ≥ last_fill_time + interval
+```
+
+This uses Cardano's validity interval to enforce timing — the solver cannot submit a DCA fill transaction that claims to be before the interval has elapsed.
+
+### Creating a DCA Order
+
 ```json
+POST /v1/orders
 {
-  "orderType": "DCA",
-  "inputAsset": "lovelace",
-  "outputAsset": "abc123.TOKEN",
-  "totalBudget": "10000000000",
-  "dcaInterval": 3600,
-  "dcaAmountPerInterval": "1000000000",
-  "expiresInSeconds": 604800
+  "type": "DCA",
+  "creator": "addr_test1...",
+  "inputAsset": { "policyId": "", "assetName": "" },
+  "outputAsset": { "policyId": "abc...", "assetName": "TOKEN" },
+  "budget": "300000000",
+  "amountPerInterval": "100000000",
+  "interval": 3600,
+  "deadline": 1720086400,
+  "senderAddress": "addr_test1...",
+  "changeAddress": "addr_test1..."
 }
 ```
 
-This executes 1,000 ADA worth of TOKEN every hour for 10 hours.
+### DCA Lifecycle
 
-<Callout type="info">
-DCA orders don't have a target price by default — they execute at whatever the current market price is. You can optionally set a `priceCap` to skip execution when prices are too high.
-</Callout>
+```
+CREATED → ACTIVE → PARTIALLY_FILLED → ... → FILLED
+                                          → EXPIRED (reclaim)
+                                          → CANCELLED (cancel)
+```
+
+Each execution:
+1. Fills `amountPerInterval` from the remaining budget
+2. Sends output tokens to the creator
+3. Creates continuing UTxO with updated datum (`filledAmount`, `budget - amountPerInterval`)
+4. `fillCount` increments
 
 ## Stop-Loss Orders
 
-Stop-loss orders automatically sell your position when the price drops below a threshold, limiting your downside.
+Convert your entire position when price drops below a threshold.
 
-**How it works:**
-1. You lock your tokens in an order escrow
-2. The executor monitors the current price
-3. When price drops below your stop-loss price, the order executes
-4. Output (usually ADA) is delivered to your wallet
+### How It Works
 
-**Example — Sell TOKEN if price drops below 0.40 ADA:**
+```
+You hold: 1,000 TOKEN
+Stop price: 1 TOKEN = 18 ADA (current: 20 ADA)
+
+If price drops to 18 ADA or below:
+  → Sell all 1,000 TOKEN for ADA
+  → Receive at least minOutput ADA
+```
+
+### Stop-Loss vs Limit
+
+| Feature | Limit | Stop-Loss |
+|---------|-------|-----------|
+| Trigger | Price rises to target | Price drops to trigger |
+| Execution | Partial fills | Full budget, single execution |
+| Purpose | Buy low / Sell high | Protect against downside |
+| Continuation | Yes (repeating) | No (one-shot) |
+
+### Creating a Stop-Loss
+
 ```json
+POST /v1/orders
 {
-  "orderType": "STOP_LOSS",
-  "inputAsset": "abc123.TOKEN",
-  "outputAsset": "lovelace",
-  "totalBudget": "5000000000",
-  "priceNumerator": "400000",
-  "priceDenominator": "1000000",
-  "expiresInSeconds": 604800
+  "type": "STOP_LOSS",
+  "creator": "addr_test1...",
+  "inputAsset": { "policyId": "abc...", "assetName": "TOKEN" },
+  "outputAsset": { "policyId": "", "assetName": "" },
+  "budget": "1000000000",
+  "minOutput": "18000000000",
+  "deadline": 1720086400,
+  "senderAddress": "addr_test1...",
+  "changeAddress": "addr_test1..."
 }
 ```
 
-## Order Lifecycle
-
-```
-Created → Pending → Active → [Partially Filled →] Filled
-                      ↓
-                  Cancelled
-                      ↓
-                   Expired
-```
-
-| State | Description |
-|---|---|
-| `CREATED` | Order record created in DB |
-| `PENDING` | Escrow TX submitted, awaiting confirmation |
-| `ACTIVE` | On-chain, being monitored by executor |
-| `PARTIALLY_FILLED` | DCA order with some executions completed |
-| `FILLED` | Fully executed |
-| `CANCELLED` | User cancelled the order |
-| `EXPIRED` | TTL expired, funds reclaimable |
-
 ## Managing Orders
 
-### Via UI
+### View Orders
 
-Navigate to `/orders` to:
-- View all active orders
-- See execution history
-- Cancel pending orders
-- Track DCA progress
+- **UI**: Portfolio → Open Orders tab
+- **API**: `GET /v1/orders?creator=addr_test1...`
+- **API**: `GET /v1/portfolio/open-orders?wallet_address=addr_test1...`
 
-### Via API
+### Cancel an Order
 
-```bash
-# List your orders
-curl "http://localhost:3001/v1/orders?creator=addr_test1qz..."
+Cancel returns your remaining budget:
 
-# Cancel an order
-curl -X DELETE "http://localhost:3001/v1/orders/order_abc123" \
-  -H "Content-Type: application/json" \
-  -d '{"creatorAddress": "addr_test1qz..."}'
+```
+DELETE /v1/orders/:orderId
 ```
 
-## Security
+Or via portfolio:
 
-All order types share the same security properties as intents:
+```json
+POST /v1/portfolio/build-action
+{
+  "wallet_address": "addr_test1...",
+  "utxo_ref": "txhash#index",
+  "action_type": "cancel"
+}
+```
 
-- **Non-custodial** — Funds locked in a validator, not held by anyone
-- **Cancellable** — You can always cancel and get your funds back
-- **Minimum output** — On-chain enforcement prevents bad execution
-- **Expiry** — Orders automatically expire and funds are reclaimable
+Cancellation requires your signature (creator pubkey hash) and burns the intent token.
+
+### Reclaim After Deadline
+
+If an order expires without being fully filled:
+
+```json
+POST /v1/portfolio/build-action
+{
+  "wallet_address": "addr_test1...",
+  "utxo_ref": "txhash#index",
+  "action_type": "reclaim"
+}
+```
+
+<Callout type="warning">
+Reclaim is only available **after** the deadline. The on-chain validator enforces `tx_valid_from > deadline`.
+</Callout>
+
+## Order Status Flow
+
+```
+CREATED ─────────▶ SUBMITTED ─────────▶ ACTIVE
+                                          │
+                    ┌─────────────────────┤
+                    │                     │
+              CANCELLED             PARTIALLY_FILLED
+              (user cancel)               │
+                                    ┌─────┤
+                                    │     │
+                                 FILLED  EXPIRED
+                              (complete)  (deadline)
+                                          │
+                                       RECLAIMED
+                                    (user reclaim)
+```
+
+## On-Chain Guarantees
+
+All order types share these validator-enforced guarantees:
+
+| Guarantee | Enforcement |
+|-----------|-------------|
+| Price protection | `meets_limit_price` check on output vs budget ratio |
+| Timing (DCA) | Validity interval ≥ last fill + interval |
+| Ownership | Only creator can cancel (signature check) |
+| Deadline | Reclaim only after deadline, fills only before |
+| Token continuity | Intent token thread token pattern |
+| Anti-replay | One-shot intent token burned on completion |

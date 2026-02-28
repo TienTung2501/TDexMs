@@ -2,33 +2,78 @@
 
 import { Callout } from 'nextra/components'
 
-SolverNet DEX backend follows **Clean Architecture** principles, ensuring that business logic is independent of frameworks, databases, and external services.
+SolverNet DEX follows **Clean Architecture** (Hexagonal / Ports & Adapters) to ensure the domain logic is independent of frameworks, databases, and external services.
 
 ## Layer Diagram
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Interface Layer                      │
-│  HTTP Routes, WebSocket Handlers, Middleware      │
-│  Dependencies: Express, ws                        │
-├─────────────────────────────────────────────────┤
-│              Application Layer                    │
-│  Use Cases, Application Services                  │
-│  Dependencies: Domain only                        │
-├─────────────────────────────────────────────────┤
-│              Domain Layer (Core)                  │
-│  Entities, Value Objects, Ports                   │
-│  Dependencies: NONE                               │
-├─────────────────────────────────────────────────┤
-│              Infrastructure Layer                 │
-│  Database, Chain, Cache, Cron                     │
-│  Dependencies: Everything                         │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│          Interface Layer                 │
+│  Express Routes, WebSocket, Middleware   │
+│  (Depends on Application Layer)         │
+├─────────────────────────────────────────┤
+│         Application Layer                │
+│  Use Cases, Services, DTOs              │
+│  (Depends on Domain Layer)              │
+├─────────────────────────────────────────┤
+│           Domain Layer                   │
+│  Entities, Value Objects, Ports, Errors  │
+│  (No external dependencies)             │
+├─────────────────────────────────────────┤
+│       Infrastructure Layer               │
+│  Prisma, Blockfrost, Lucid, Redis, Cron │
+│  (Implements Domain Ports)              │
+└─────────────────────────────────────────┘
 ```
 
 ## Dependency Rule
 
-> Dependencies point **inward**. The Domain layer has zero external dependencies. The Application layer depends only on Domain. Infrastructure and Interface layers depend on everything above them.
+<Callout type="warning">
+Dependencies flow **inward only**. Inner layers NEVER import from outer layers. The Domain layer has ZERO external dependencies.
+</Callout>
+
+```
+Interface → Application → Domain ← Infrastructure
+```
+
+- **Interface** imports Application (use cases)
+- **Application** imports Domain (entities, ports)
+- **Infrastructure** implements Domain ports
+- **Domain** imports nothing external
+
+## Directory Structure
+
+```
+backend/src/
+├── domain/              # Core business logic (no deps)
+│   ├── entities/        # Intent, Pool, Order
+│   ├── value-objects/   # AssetUnit, Amount, Address
+│   ├── ports/           # Repository & service interfaces
+│   └── errors/          # Domain-specific error types
+│
+├── application/         # Use case orchestration
+│   ├── use-cases/       # CreateIntent, FillIntent, CreatePool, ...
+│   └── services/        # QuoteService, PortfolioService, ...
+│
+├── infrastructure/      # External implementations
+│   ├── database/        # Prisma repositories (implement ports)
+│   ├── cardano/         # Lucid TX builders, Blockfrost provider
+│   ├── cache/           # Upstash Redis adapter
+│   ├── cron/            # Background job schedulers
+│   └── faucet/          # Testnet faucet integration
+│
+├── interface/           # HTTP & WS entry points
+│   └── http/
+│       ├── routes/      # Express route handlers
+│       ├── middleware/  # Auth, validation, rate-limit, errors
+│       └── websocket/   # WS event handlers
+│
+├── solver/              # Solver engine (specialized infra)
+│
+├── config/              # Environment, network, logging config
+│
+└── shared/              # Cross-cutting utilities
+```
 
 ## Domain Layer
 
@@ -37,129 +82,119 @@ The innermost layer contains pure business logic with no framework dependencies.
 ### Entities
 
 ```typescript
-// backend/src/domain/entities/Intent.ts
-class Intent {
-  // Pure business logic
-  isExpired(): boolean
-  canBeFilled(): boolean
-  canBeCancelled(): boolean
-  markPending(): void
-  markActive(): void
-  markPartiallyFilled(filledAmount: bigint): void
-  markFilled(settlementTxHash: string): void
-}
-```
-
-```typescript
-// backend/src/domain/entities/Pool.ts
-class Pool {
-  // AMM calculations
-  calculateSwapOutput(inputAmount: bigint, direction: 'AToB' | 'BToA'): SwapResult
-  calculatePriceImpact(inputAmount: bigint, direction: string): number
-  calculateRequiredDeposit(amountA: bigint): DepositResult
-}
-```
-
-```typescript
-// backend/src/domain/entities/Order.ts
-class Order {
-  // Price condition checks
-  meetsLimitPrice(currentPrice: number): boolean
-  meetsDcaPriceCap(currentPrice: number): boolean
-  triggersStopLoss(currentPrice: number): boolean
-  canExecuteInterval(): boolean
+// domain/entities/intent.ts
+export interface Intent {
+  id: string;
+  status: IntentStatus;
+  creator: string;
+  inputPolicyId: string;
+  inputAssetName: string;
+  inputAmount: bigint;
+  outputPolicyId: string;
+  outputAssetName: string;
+  minOutput: bigint;
+  deadline: bigint;
+  partialFill: boolean;
+  // ...
 }
 ```
 
 ### Ports (Interfaces)
 
-Ports define **what** the domain needs from the outside world, without specifying **how**:
+```typescript
+// domain/ports/intent-repository.ts
+export interface IntentRepository {
+  findById(id: string): Promise<Intent | null>;
+  findActive(): Promise<Intent[]>;
+  findByCreator(address: string, options?: PaginationOptions): Promise<PaginatedResult<Intent>>;
+  create(intent: CreateIntentData): Promise<Intent>;
+  updateStatus(id: string, status: IntentStatus): Promise<Intent>;
+}
+```
+
+### Errors
 
 ```typescript
-// Ports are interfaces — the domain says WHAT it needs
-interface IChainProvider {
-  getUtxosAtAddress(address: string): Promise<UTxO[]>
-  getChainTip(): Promise<ChainTip>
-  submitTx(cbor: string): Promise<string>
-  awaitTx(txHash: string): Promise<boolean>
-}
-
-interface IIntentRepository {
-  findById(id: string): Promise<Intent | null>
-  findActive(): Promise<Intent[]>
-  findByUtxoRef(txHash: string, index: number): Promise<Intent | null>
-  save(intent: Intent): Promise<void>
-}
-
-interface IPoolRepository {
-  findById(id: string): Promise<Pool | null>
-  findByAssets(assetA: string, assetB: string): Promise<Pool | null>
-  findAll(options?: QueryOptions): Promise<Pool[]>
-  save(pool: Pool): Promise<void>
-}
-
-interface ITxBuilder {
-  buildEscrowTx(params: EscrowParams): Promise<UnsignedTx>
-  buildSettlementTx(batch: IntentBatch): Promise<UnsignedTx>
-  buildCancelTx(intent: Intent): Promise<UnsignedTx>
-  // ... more operations
+// domain/errors/domain-error.ts
+export class DomainError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+    public readonly httpStatus: number = 400
+  ) {
+    super(message);
+  }
 }
 ```
 
 ## Application Layer
 
-Use cases orchestrate domain entities and ports:
+Orchestrates use cases by calling domain ports.
 
 ```typescript
-// backend/src/application/use-cases/CreateIntent.ts
-class CreateIntentUseCase {
+// application/use-cases/create-intent.ts
+export class CreateIntent {
   constructor(
-    private intentRepo: IIntentRepository,  // Port
-    private poolRepo: IPoolRepository,      // Port
-    private txBuilder: ITxBuilder,          // Port
+    private intentRepo: IntentRepository,
+    private txBuilder: TransactionBuilder,
+    private quoteService: QuoteService,
   ) {}
 
   async execute(input: CreateIntentInput): Promise<CreateIntentOutput> {
     // 1. Validate input
-    // 2. Find pool for trading pair
-    // 3. Calculate quote
-    // 4. Build unsigned escrow TX
-    // 5. Save intent to database
-    // 6. Return unsigned TX for user to sign
+    // 2. Get quote
+    // 3. Build escrow transaction
+    // 4. Save intent to database
+    // 5. Return unsigned TX
   }
 }
 ```
 
 ## Infrastructure Layer
 
-Concrete implementations of domain ports:
+Implements domain ports with concrete technologies.
 
 ```typescript
-// backend/src/infrastructure/database/PrismaIntentRepository.ts
-class PrismaIntentRepository implements IIntentRepository {
+// infrastructure/database/prisma-intent-repository.ts
+export class PrismaIntentRepository implements IntentRepository {
   constructor(private prisma: PrismaClient) {}
+
+  async findById(id: string): Promise<Intent | null> {
+    const record = await this.prisma.intent.findUnique({ where: { id } });
+    return record ? this.toDomain(record) : null;
+  }
 
   async findActive(): Promise<Intent[]> {
     const records = await this.prisma.intent.findMany({
       where: { status: 'ACTIVE' }
-    })
-    return records.map(r => Intent.fromPersistence(r))
-  }
-}
-
-// backend/src/infrastructure/cardano/BlockfrostChainProvider.ts
-class BlockfrostChainProvider implements IChainProvider {
-  async getUtxosAtAddress(address: string): Promise<UTxO[]> {
-    // Calls Blockfrost API
+    });
+    return records.map(this.toDomain);
   }
 }
 ```
 
+## Interface Layer
+
+Maps HTTP requests to use case invocations.
+
+```typescript
+// interface/http/routes/intent-routes.ts
+router.post('/intents', validate(intentSchema), async (req, res, next) => {
+  try {
+    const result = await createIntentUseCase.execute(req.body);
+    res.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+```
+
 ## Benefits
 
-| Benefit | How |
-|---|---|
-| **Testability** | Domain and application layers can be tested with mock implementations of ports |
-| **Flexibility** | Swap Blockfrost for Ogmios/Kupo without touching business logic |
-| **Clarity** | Each layer has a clear responsibility and dependency direction |
-| **Maintainability** | Changes in one layer don't cascade to others |
+| Principle | Benefit |
+|-----------|---------|
+| **Testability** | Domain logic can be unit tested without infrastructure |
+| **Flexibility** | Swap PostgreSQL for MongoDB by implementing the same ports |
+| **Maintainability** | Changes to one layer don't cascade to others |
+| **Scalability** | Each layer can be scaled independently |
+| **Onboarding** | Clear boundaries make the codebase navigable |

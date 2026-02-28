@@ -2,104 +2,172 @@
 
 import { Callout } from 'nextra/components'
 
-The **Batch Builder** groups validated intents by their target pool to maximize netting efficiency.
+The batch builder groups routed intents into valid Cardano transactions.
 
-## Algorithm
+**Source**: `backend/src/solver/BatchBuilder.ts` (118 lines)
+
+## Grouping Algorithm
 
 ```typescript
-class BatchBuilder {
-  /**
-   * Groups intents by their target pool.
-   * Each batch will be settled in a single transaction.
-   */
-  groupByPool(intents: RoutedIntent[]): IntentBatch[] {
-    const batchMap = new Map<string, IntentBatch>()
-    
-    for (const intent of intents) {
-      const poolId = intent.route.pools[0].id
-      
-      if (!batchMap.has(poolId)) {
-        batchMap.set(poolId, {
-          pool: intent.route.pools[0],
-          intents: [],
-          totalInputA: 0n,
-          totalInputB: 0n,
-        })
-      }
-      
-      const batch = batchMap.get(poolId)!
-      batch.intents.push(intent)
-      
-      // Track totals for quick netting estimation
-      if (intent.direction === 'AToB') {
-        batch.totalInputA += intent.inputAmount
-      } else {
-        batch.totalInputB += intent.inputAmount
-      }
-    }
-    
-    return Array.from(batchMap.values())
-      .filter(b => b.intents.length > 0)
-      .sort((a, b) => b.intents.length - a.intents.length) // Largest batches first
+groupByPool(intents: RoutedIntent[]): Map<string, RoutedIntent[]> {
+  const groups = new Map<string, RoutedIntent[]>();
+
+  for (const intent of intents) {
+    const poolId = this.getPoolId(intent.inputAsset, intent.outputAsset);
+    const group = groups.get(poolId) || [];
+    group.push(intent);
+    groups.set(poolId, group);
   }
+
+  return groups;
 }
 ```
 
-## Batch Constraints
+Intents that target **the same pool** are grouped together because:
+- They share the same pool UTxO (consumed once per TX)
+- Netting only works within the same token pair
+- Each settlement TX interacts with exactly one pool
 
-Cardano transactions have size and execution unit limits. The batch builder respects these:
+## Constraints
 
-| Constraint | Limit | Impact |
-|---|---|---|
-| **TX size** | ~16 KB | Limits number of intents per batch |
-| **Execution units** | CPU: 10B, Mem: 14M | Limits validator computation |
-| **Max inputs** | ~20-30 | Practical limit on consumed UTxOs |
-| **Max outputs** | ~20-30 | One output per intent owner + pool + change |
+| Constraint | Value | Rationale |
+|-----------|-------|-----------|
+| `MAX_BATCH_SIZE` | 15 | Cardano TX size limit (~16 KB for CBOR) |
+| `MAX_TX_CPU` | 14,000,000,000 | Plutus V3 execution budget (per TX) |
+| `MAX_TX_MEM` | 10,000,000 | Plutus V3 memory budget (per TX) |
+
+### Per-Intent Estimates
 
 ```typescript
-const MAX_INTENTS_PER_BATCH = 15  // Conservative limit
+const ESTIMATED_CPU_PER_INTENT = 800_000_000n;  // ~800M CPU units
+const ESTIMATED_MEM_PER_INTENT = 500_000n;       // ~500K memory units
 
-groupByPool(intents: RoutedIntent[]): IntentBatch[] {
-  // ... group by pool ...
-  
-  // Split oversized batches
-  return batches.flatMap(batch => {
-    if (batch.intents.length <= MAX_INTENTS_PER_BATCH) {
-      return [batch]
+function estimateExecutionBudget(batchSize: number) {
+  return {
+    cpu: BigInt(batchSize) * ESTIMATED_CPU_PER_INTENT,
+    mem: BigInt(batchSize) * ESTIMATED_MEM_PER_INTENT,
+  };
+}
+```
+
+## Batch Splitting
+
+When a group exceeds constraints:
+
+```typescript
+splitBatch(group: RoutedIntent[]): RoutedIntent[][] {
+  const batches: RoutedIntent[][] = [];
+  let current: RoutedIntent[] = [];
+
+  for (const intent of group) {
+    current.push(intent);
+
+    const budget = this.estimateExecutionBudget(current.length);
+
+    if (
+      current.length >= MAX_BATCH_SIZE ||
+      budget.cpu > MAX_TX_CPU ||
+      budget.mem > MAX_TX_MEM
+    ) {
+      batches.push(current);
+      current = [];
     }
-    
-    // Split into chunks
-    const chunks: IntentBatch[] = []
-    for (let i = 0; i < batch.intents.length; i += MAX_INTENTS_PER_BATCH) {
-      chunks.push({
-        pool: batch.pool,
-        intents: batch.intents.slice(i, i + MAX_INTENTS_PER_BATCH),
-      })
-    }
-    return chunks
-  })
+  }
+
+  if (current.length > 0) {
+    batches.push(current);
+  }
+
+  return batches;
 }
 ```
 
 ## Priority Ordering
 
-Within each batch, intents are ordered for optimal execution:
+Within each batch, intents are ordered by:
 
-1. **Oldest first** — FIFO fairness
-2. **Largest first** — Maximum netting potential (alternative strategy)
-3. **Expiry-aware** — Intents close to expiry get priority
+1. **Urgency** — Earliest deadline first (intents close to expiring get priority)
+2. **FIFO** — Among equal deadlines, first-seen first-served
 
 ```typescript
-private prioritizeIntents(intents: ValidIntent[]): ValidIntent[] {
-  return intents.sort((a, b) => {
-    // Priority 1: Close to expiry
-    const expiryA = a.dbIntent.expiresAt.getTime()
-    const expiryB = b.dbIntent.expiresAt.getTime()
-    const urgencyDiff = expiryA - expiryB
-    if (Math.abs(urgencyDiff) > 60000) return urgencyDiff
-    
-    // Priority 2: Oldest first (FIFO)
-    return a.dbIntent.createdAt.getTime() - b.dbIntent.createdAt.getTime()
-  })
+sortByPriority(batch: RoutedIntent[]): RoutedIntent[] {
+  return batch.sort((a, b) => {
+    // Urgent intents first (closest to deadline)
+    const deadlineDiff = Number(a.deadline - b.deadline);
+    if (deadlineDiff !== 0) return deadlineDiff;
+
+    // Otherwise FIFO (by UTxO creation order)
+    return a.utxoRef.localeCompare(b.utxoRef);
+  });
 }
+```
+
+## Mixed-Direction Splitting
+
+The `SolverEngine` may split a batch into **sub-batches** by direction for optimal processing:
+
+```
+Original batch (same pool):
+  [ADA→TOKEN, ADA→TOKEN, TOKEN→ADA, ADA→TOKEN, TOKEN→ADA]
+
+If netting is beneficial:
+  → Process as single batch with netting
+
+If too many intents:
+  Sub-batch 1: [ADA→TOKEN × 3, TOKEN→ADA × 2] (netted)
+  Sub-batch 2: [remaining intents]
+```
+
+## Surplus Calculation
+
+After building a batch plan, the builder calculates potential surplus:
+
+```typescript
+static calculateSurplus(plan: NettingPlan, batch: Batch): bigint {
+  let totalSurplus = 0n;
+
+  for (let i = 0; i < batch.length; i++) {
+    const intent = batch[i];
+    const output = plan.outputs[i].amount;
+    const minExpected = (intent.fillAmount * intent.minOutput) / intent.inputAmount;
+
+    if (output > minExpected) {
+      totalSurplus += output - minExpected;
+    }
+  }
+
+  return totalSurplus;
+}
+```
+
+<Callout>
+Currently, all surplus is passed to users (better-than-expected execution). Set `SOLVER_MIN_PROFIT_LOVELACE > 0` to require minimum solver profit per batch.
+</Callout>
+
+## Full Build Pipeline
+
+```
+Input: 20 routed intents across 3 pools
+
+Step 1: Group by pool
+  Pool A: [8 intents]
+  Pool B: [7 intents]
+  Pool C: [5 intents]
+
+Step 2: Check constraints
+  Pool A: 8 < 15, CPU OK → 1 batch
+  Pool B: 7 < 15, CPU OK → 1 batch
+  Pool C: 5 < 15, CPU OK → 1 batch
+
+Step 3: Sort by urgency
+  Batch 1 (Pool A): sorted by deadline
+  Batch 2 (Pool B): sorted by deadline
+  Batch 3 (Pool C): sorted by deadline
+
+Step 4: Order batches by urgency
+  Process Pool C first (has intent expiring soonest)
+  Then Pool B
+  Then Pool A
+
+Output: 3 batches, submitted sequentially via TxSubmitter
 ```

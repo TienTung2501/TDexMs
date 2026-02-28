@@ -1,70 +1,90 @@
-# Quick Start
+# Quickstart
 
 import { Callout, Steps, Tabs } from 'nextra/components'
 
-Get SolverNet DEX running locally in under 5 minutes.
+Get the full SolverNet DEX stack running locally in 5 minutes.
 
-## Prerequisites
-
-- **Node.js** ≥ 20.0.0
-- **pnpm** 9.15.0+ (`corepack enable && corepack prepare pnpm@9.15.0 --activate`)
-- **Docker** (optional, for local Cardano node)
-- A **Blockfrost** API key (free at [blockfrost.io](https://blockfrost.io))
+<Callout type="warning">
+**Prerequisites:** Node.js 18+, pnpm 8+, Git, and a Blockfrost API key (free at [blockfrost.io](https://blockfrost.io)).
+</Callout>
 
 <Steps>
-### Clone the repository
+
+### Clone & Install
 
 ```bash
-git clone https://github.com/TienTung2501/TDexMs.git
-cd TDexMs
-```
-
-### Install dependencies
-
-```bash
+git clone https://github.com/TienTung2501/decentralize.git
+cd decentralize
 pnpm install
 ```
 
-This installs dependencies for all workspace packages (backend, frontend, docs-site) using pnpm workspaces.
+### Set Up Database
 
-### Set up environment variables
+<Tabs items={['Supabase (Recommended)', 'Docker', 'Local PostgreSQL']}>
+  <Tabs.Tab>
+    1. Create a free project at [supabase.com](https://supabase.com)
+    2. Go to **Settings → Database → Connection string**
+    3. Copy the connection string (use the "URI" format)
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```bash
+    docker compose -f docker-compose.dev.yml up -d postgres
+    # Connection: postgresql://solvernet:solvernet@localhost:5432/solvernet
+    ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+    ```bash
+    createdb solvernet
+    # Connection: postgresql://localhost:5432/solvernet
+    ```
+  </Tabs.Tab>
+</Tabs>
 
-```bash
-cp backend/.env.example backend/.env
-```
-
-Edit `backend/.env` with your configuration:
-
-```env
-# Required
-DATABASE_URL="postgresql://user:password@localhost:5432/solvernet"
-BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXXXXXXXXXXXXXX"
-CARDANO_NETWORK="preprod"
-
-# Solver (optional — only if running a solver)
-SOLVER_SEED_PHRASE="your twenty-four word mnemonic phrase ..."
-SOLVER_ENABLED=false
-```
-
-See [Configuration](/docs/getting-started/configuration) for the full list of environment variables.
-
-### Set up the database
+### Configure Environment
 
 ```bash
 cd backend
-pnpm exec prisma migrate dev
+cp .env.example .env
+```
+
+Edit `.env` with your values:
+
+```env
+# Required
+DATABASE_URL="postgresql://..."
+BLOCKFROST_PROJECT_ID="preprodXXXXXXXXXXXXX"
+
+# Network
+CARDANO_NETWORK="preprod"
+
+# Frontend connection
+CORS_ORIGIN="http://localhost:3000"
+```
+
+### Initialize Database
+
+```bash
+cd backend
+pnpm exec prisma db push
 pnpm exec prisma generate
 ```
 
-### Start the backend
+### Start Backend
 
 ```bash
+cd backend
 pnpm exec tsx src/index.ts
 ```
 
-The API server starts on `http://localhost:3001`.
+You should see:
+```
+[INFO] SolverNet DEX API starting...
+[INFO] Database connected
+[INFO] Server listening on http://0.0.0.0:3001
+[INFO] WebSocket server ready on /v1/ws
+```
 
-### Start the frontend
+### Start Frontend
 
 In a new terminal:
 
@@ -73,76 +93,27 @@ cd frontend
 pnpm dev
 ```
 
-The frontend starts on `http://localhost:3000`.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### Verify
+
+```bash
+# Health check
+curl http://localhost:3001/v1/health
+
+# Should return:
+# { "status": "healthy", "services": { "database": "connected", ... } }
+```
 
 </Steps>
 
-## Verify Installation
-
-<Tabs items={['Health Check', 'Get Pools', 'Get Quote']}>
-  <Tabs.Tab>
-```bash
-curl http://localhost:3001/v1/health
-```
-
-```json
-{
-  "status": "healthy",
-  "uptime": 12.345,
-  "database": "connected",
-  "blockfrost": "connected",
-  "cache": "connected"
-}
-```
-  </Tabs.Tab>
-  <Tabs.Tab>
-```bash
-curl http://localhost:3001/v1/pools
-```
-
-```json
-{
-  "success": true,
-  "data": [
-    {
-      "id": "pool_abc123",
-      "assetA": { "unit": "lovelace", "name": "ADA" },
-      "assetB": { "unit": "abc...policy.TOKEN", "name": "TOKEN" },
-      "reserveA": "1000000000",
-      "reserveB": "500000000",
-      "tvl": "2000.00",
-      "fee": 30
-    }
-  ]
-}
-```
-  </Tabs.Tab>
-  <Tabs.Tab>
-```bash
-curl "http://localhost:3001/v1/quote?inputAsset=lovelace&outputAsset=abc...TOKEN&amount=100000000"
-```
-
-```json
-{
-  "success": true,
-  "data": {
-    "inputAmount": "100000000",
-    "outputAmount": "49251234",
-    "priceImpact": "0.0050",
-    "fee": "300000",
-    "route": "direct"
-  }
-}
-```
-  </Tabs.Tab>
-</Tabs>
-
-<Callout type="info">
-If you're using the Cardano preprod testnet, you'll need test ADA. The backend includes an automatic faucet bot that requests testnet ADA periodically, or you can use the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/) directly.
-</Callout>
-
 ## Next Steps
 
-- [Configuration Guide](/docs/getting-started/configuration) — Full environment variable reference
-- [Architecture Overview](/docs/architecture) — Understand the system design
-- [Swap Flow Guide](/docs/guides/swap-flow) — Walk through a complete swap
+- **Deploy protocol on-chain:** Use the Admin panel to deploy Settings and Factory contracts
+- **Create your first pool:** Add liquidity to bootstrap trading
+- **Make your first swap:** Connect a Cardano wallet and trade
+- **Run the solver:** Enable `SOLVER_ENABLED=true` to start automated settlement
+
+<Callout type="info">
+See the [Configuration](/docs/getting-started/configuration) page for the complete environment variable reference.
+</Callout>

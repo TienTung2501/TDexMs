@@ -1,140 +1,216 @@
-# Swap Flow Guide
+# Swap Flow
 
-import { Callout, Steps } from 'nextra/components'
+import { Steps, Callout, Tabs } from 'nextra/components'
 
-This guide walks through a complete swap from start to finish.
+Complete walkthrough of performing a token swap on SolverNet.
 
 ## Overview
 
-A swap in SolverNet DEX follows these steps:
+Unlike a traditional AMM where you swap directly against a pool, SolverNet uses an **intent-based** model:
 
-1. User connects wallet
-2. User enters swap parameters
-3. Backend builds unsigned escrow TX
-4. User signs with their wallet
-5. TX is submitted to Cardano
-6. Solver collects and settles the intent
-7. User receives output tokens
+```
+┌─────────┐     ┌─────────────┐     ┌────────────┐     ┌──────────┐
+│  User    │────▶│ Create      │────▶│  Solver    │────▶│ Receive  │
+│  Wallet  │     │  Intent TX  │     │  Settles   │     │  Tokens  │
+└─────────┘     └─────────────┘     └────────────┘     └──────────┘
+                       │                   │
+                       ▼                   ▼
+                 ┌───────────┐     ┌──────────────┐
+                 │  Escrow   │     │ Netting +    │
+                 │  UTxO     │     │ AMM Pool     │
+                 └───────────┘     └──────────────┘
+```
+
+## Step-by-Step Guide
 
 <Steps>
 
 ### Connect Your Wallet
 
-Click the **Connect Wallet** button in the top navigation. Select your Cardano wallet (Nami, Eternl, etc.) and approve the connection.
+Click **"Connect Wallet"** in the top-right corner. Choose from:
 
-<Callout type="info">
-Make sure your wallet is set to the **Preprod Testnet**. You can get test ADA from the [Cardano Faucet](https://docs.cardano.org/cardano-testnets/tools/faucet/).
-</Callout>
+| Wallet | CIP-30 | Notes |
+|--------|--------|-------|
+| Nami | ✅ | Lightweight, single-account |
+| Eternl | ✅ | Multi-account, dApp connector |
+| Lace | ✅ | Cardano Foundation wallet |
+| Flint | ✅ | Multi-chain support |
 
-### Select Trading Pair
+The app verifies you're on the correct network (Preprod testnet). If you're on mainnet, you'll see a network mismatch warning.
 
-On the trading page (`/`), select your input and output assets:
+### Select Token Pair
 
-- **From:** The asset you want to sell (e.g., ADA)
-- **To:** The asset you want to receive (e.g., USDT)
+On the **Trading** page (`/`):
 
-The system will automatically fetch a quote showing:
-- Expected output amount
-- Price impact percentage
-- Trading fee
-- Effective exchange rate
+- **From token**: The token you want to sell (default: ADA)
+- **To token**: The token you want to buy
+
+Click the token selector to see available tokens pulled from the `/v1/tokens` endpoint. Each token shows:
+- Symbol and name
+- Your wallet balance
+- Current price (from pool reserves)
 
 ### Enter Amount
 
-Enter the amount you want to swap. The quote updates in real-time (debounced 300ms).
+Type the amount you want to swap. The UI automatically:
 
-**Check the details:**
-- **Price Impact** — Below 1% (green), 1-5% (yellow), above 5% (red)
-- **Minimum Output** — The least you'll receive (after slippage tolerance)
-- **Network Fee** — Cardano transaction fee (~0.2 ADA)
+1. Fetches a quote from `GET /v1/quote`
+2. Displays **expected output** based on current pool reserves
+3. Shows **price impact** (warning at >5%, blocking at >15%)
+4. Shows **minimum received** after slippage tolerance
+5. Shows **protocol fee** (0.3% default)
 
-### Adjust Slippage (Optional)
-
-Click the ⚙️ settings icon to adjust slippage tolerance:
-- **0.1%** — Very tight, may fail if price moves
-- **0.5%** — Default, good for most trades
-- **1.0%** — Recommended for volatile pairs
-- **Custom** — Set your own value
-
-### Confirm Swap
-
-Click **Swap**. The backend builds an unsigned transaction that:
-1. Locks your input tokens at the escrow validator address
-2. Attaches an inline datum with: your address, input/output assets, minimum output, expiry
-3. Mints a one-shot intent token (authentication NFT)
-
-### Sign Transaction
-
-Your wallet will prompt you to sign the transaction. Review the details:
-- Amount being sent to the escrow address
-- Network fee
-- No tokens are being sent to unknown addresses
-
-Click **Sign** in your wallet.
-
-### Wait for Confirmation
-
-After signing, the transaction is submitted to the Cardano network. You'll see:
-
-1. **Submitted** — TX sent to Blockfrost
-2. **Pending** — Waiting for on-chain confirmation (~20-40 seconds)
-3. **Active** — Escrow UTxO confirmed, intent is now active
-
-### Solver Settlement
-
-Once your intent is active, the solver will:
-1. Detect your escrow UTxO on the next batch cycle (every 5 seconds)
-2. Find opposing intents for netting (if available)
-3. Route through the best pool
-4. Build and submit a settlement transaction
-5. Deliver your output tokens directly to your wallet address
-
-You'll receive a WebSocket notification when your intent is filled:
-
-```json
+```
+Quote Response:
 {
-  "type": "intentUpdate",
-  "data": {
-    "id": "intent_xyz789",
-    "status": "FILLED",
-    "actualOutput": "49251234",
-    "settlementTxHash": "abc123..."
-  }
+  "inputAmount": "100000000",      // 100 ADA
+  "expectedOutput": "4950000",     // ~4.95 TOKEN
+  "minimumOutput": "4702500",      // After 5% slippage
+  "priceImpact": "0.98",           // 0.98%
+  "fee": "300000",                 // 0.3 ADA protocol fee
+  "poolId": "pool_abc123",
+  "route": "DIRECT"
 }
 ```
 
-### Verify Receipt
+### Adjust Slippage Tolerance
 
-Check your wallet — the output tokens should appear within 1-2 minutes of settlement confirmation.
+Click the ⚙️ settings icon to set slippage tolerance:
+
+| Setting | Use Case |
+|---------|----------|
+| 0.5% | Stable pairs, low volatility |
+| 1% | Default — works for most swaps |
+| 5% | Volatile tokens or large swaps |
+| Custom | Set any value 0.1%–50% |
+
+The `minOutput` in your intent is calculated as:
+
+$$minOutput = expectedOutput \times (1 - slippage)$$
+
+### Confirm and Sign Transaction
+
+Click **"Swap"**. The backend calls `POST /v1/intents` which:
+
+1. Builds a Cardano transaction that:
+   - Mints an **Intent Token** (one-shot NFT identifying your swap)
+   - Locks your input tokens in the **Escrow validator** UTxO
+   - Attaches an **EscrowDatum** with all swap parameters
+2. Returns the unsigned CBOR transaction to the frontend
+
+Your wallet prompts you to review and sign the transaction. The signed TX is submitted via `POST /v1/tx/submit`.
+
+**EscrowDatum contents:**
+```
+{
+  creator: your_pubkey_hash,
+  inputAsset: { policyId, assetName },
+  outputAsset: { policyId, assetName },
+  inputAmount: 100_000_000,
+  minOutput: 4_702_500,
+  deadline: current_time + 1_hour,
+  escrowToken: unique_token_name,
+  maxPartialFills: 5,
+  fillCount: 0,
+  remainingInput: 100_000_000
+}
+```
+
+### Wait for Settlement
+
+Your intent is now on-chain. The **Solver Engine** runs every ~30 seconds:
+
+1. **Collects** all pending escrow UTxOs from chain
+2. **Groups** intents by pool (token pair)
+3. **Nets** opposing flows (ADA→TOKEN vs TOKEN→ADA)
+4. **Fills residual** via AMM pool swap
+5. **Builds** settlement TX (burns intent tokens, sends outputs)
+6. **Submits** settlement TX (signed by solver wallet)
+
+Track your intent status in the **Portfolio** tab or via WebSocket:
+
+```javascript
+// Subscribe to intent updates
+ws.send(JSON.stringify({
+  type: 'subscribe',
+  channel: 'intent',
+  params: { intentId: 'your_intent_id' }
+}));
+
+// Receive status updates
+// PENDING → SUBMITTED → MATCHED → SETTLING → FILLED
+```
+
+### Receive Your Tokens
+
+Once the settlement TX is confirmed:
+
+- Your **output tokens** are sent to your wallet address
+- The **Intent Token** is burned
+- The **Escrow UTxO** is consumed
+- Status updates to `FILLED`
+
+Check your wallet balance or the **Portfolio → History** tab to confirm.
 
 </Steps>
 
+## Partial Fills
+
+SolverNet supports **partial fills** for large orders:
+
+- If the solver can only fill 60% of your swap in one batch, it fills that portion
+- A new escrow UTxO is created with the remaining 40% and an updated datum
+- The `fillCount` increments, `remainingInput` decreases
+- Fill continues in subsequent solver cycles
+- Minimum fill threshold: **10%** of remaining amount (prevents dust fills)
+- Maximum partial fills: **5** (configurable in datum)
+
+$$outputPerFill_i = \frac{fillAmount_i}{totalInput} \times totalExpectedOutput$$
+
 ## Cancellation
 
-You can cancel an active intent at any time before it's settled:
+You can cancel an **unfilled** intent at any time:
 
-1. Go to the **Trading Footer** or **Portfolio** page
-2. Find your active intent
-3. Click **Cancel**
-4. Sign the cancel transaction
-5. Your input tokens are returned to your wallet
+1. Go to **Portfolio → Open Orders**
+2. Click **"Cancel"** on the intent
+3. Sign the cancellation transaction
+
+The cancellation TX:
+- Requires your **signature** (creator pubkey hash)
+- **Burns** the Intent Token
+- **Returns** your locked funds to your wallet
+- Only works if the intent hasn't been filled yet
+
+```
+POST /v1/intents/:id
+DELETE method
+
+// Or via portfolio
+POST /v1/portfolio/build-action
+{ wallet_address, utxo_ref, action_type: "cancel" }
+```
+
+## Reclaim (After Deadline)
+
+If the solver doesn't fill your intent before the deadline:
+
+1. Go to **Portfolio → Open Orders**
+2. Click **"Reclaim"** on the expired intent
+3. Sign the reclaim transaction
 
 <Callout type="warning">
-If the solver is in the process of settling your intent (`FILLING` state), cancellation may fail. The intent will either be filled or you can retry cancellation on the next block.
+Reclaim is only available **after** the deadline has passed. Before the deadline, use Cancel instead.
+The validator enforces `tx_valid_from > deadline` for reclaims.
 </Callout>
 
-## Expiry & Reclaim
+## Price Protection
 
-If your intent is not settled before its expiry time:
-1. The intent status changes to `EXPIRED`
-2. The reclaim keeper cron automatically submits a reclaim transaction
-3. Your funds are returned to your wallet
-4. No action needed from you
+Your swap is protected by several mechanisms:
 
-You can also manually reclaim via the API:
-
-```bash
-curl -X POST http://localhost:3001/v1/admin/reclaim \
-  -H "Content-Type: application/json" \
-  -d '{"intentId": "intent_xyz789"}'
-```
+| Protection | How It Works |
+|-----------|--------------|
+| **minOutput** | Solver must deliver at least this amount or TX fails |
+| **Deadline** | Intent expires after deadline, funds reclaimable |
+| **On-chain validation** | Escrow validator verifies all conditions |
+| **Intent Token** | One-shot NFT prevents replay/double-spend |
+| **Anti-double-satisfaction** | InlineDatum check prevents solver from using one output for two intents |

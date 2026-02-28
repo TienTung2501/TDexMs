@@ -1,66 +1,89 @@
 # Frontend
 
-import { Callout } from 'nextra/components'
+import { Cards, Card } from 'nextra/components'
 
-The SolverNet DEX frontend is a **Next.js 16** application with React 19, providing a professional trading interface with real-time charts, wallet integration, and pool management.
+The SolverNet DEX frontend is a modern single-page application built with Next.js 16 and React 19.
 
 ## Tech Stack
 
 | Technology | Version | Purpose |
-|---|---|---|
-| **Next.js** | 16.1.6 | React framework (App Router) |
-| **React** | 19.2.3 | UI library |
-| **TypeScript** | 5.x | Type safety |
-| **Tailwind CSS** | 4.x | Utility-first styling |
-| **Radix UI** | Various | Accessible UI primitives |
-| **lightweight-charts** | 5.1.0 | TradingView-style price charts |
-| **recharts** | 3.7.0 | Analytics charts |
-| **Lucid Evolution** | 0.4.x | Cardano wallet/TX SDK |
-| **next-themes** | — | Dark/light mode |
+|-----------|---------|---------|
+| **Next.js** | 16 | App Router, SSR, file-based routing |
+| **React** | 19 | UI rendering with concurrent features |
+| **Tailwind CSS** | 4 | Utility-first styling |
+| **shadcn/ui** | latest | Pre-built accessible UI components |
+| **Recharts** | 2 | Charts and data visualization |
+| **TradingView** | Widget | Professional candlestick charts |
+| **CIP-30** | — | Cardano wallet integration standard |
 
 ## Project Structure
 
 ```
 frontend/src/
 ├── app/                    # Next.js App Router
-│   ├── layout.tsx          # Root layout (providers, navigation)
-│   ├── page.tsx            # Main trading page (/)
-│   ├── providers.tsx       # React context providers
-│   ├── globals.css         # Global styles
-│   ├── admin/              # Admin panel (/admin)
-│   ├── analytics/          # Analytics dashboard (/analytics)
-│   ├── orders/             # Order management (/orders)
-│   ├── pools/              # Liquidity pools (/pools)
-│   └── portfolio/          # Portfolio view (/portfolio)
+│   ├── layout.tsx          # Root layout (fonts, providers)
+│   ├── page.tsx            # Landing page
+│   ├── globals.css         # Global styles + Tailwind
+│   ├── providers.tsx       # Theme + wallet providers
+│   ├── trade/              # Trading page
+│   │   └── page.tsx
+│   ├── pools/              # Pools listing + detail
+│   │   ├── page.tsx
+│   │   └── [id]/page.tsx
+│   ├── orders/             # Advanced orders
+│   │   └── page.tsx
+│   ├── portfolio/          # Portfolio dashboard
+│   │   └── page.tsx
+│   ├── analytics/          # Protocol analytics
+│   │   └── page.tsx
+│   └── admin/              # Admin panel
+│       └── page.tsx
 ├── components/
-│   ├── features/           # Feature-specific components
-│   │   ├── trading/        # SwapCard, OrderEntry, PriceChart
-│   │   ├── wallet/         # Wallet connection
-│   │   ├── liquidity/      # LP management
-│   │   └── admin/          # Admin dashboard
-│   ├── layout/             # App shell, navigation
-│   ├── ui/                 # shadcn/ui base components
-│   └── common/             # Shared components
+│   ├── layout/             # Header, Footer, Sidebar
+│   ├── swap/               # SwapCard, TokenSelect, QuoteDisplay
+│   ├── pool/               # PoolCard, PoolTable, LiquidityForm
+│   ├── chart/              # PriceChart, DepthChart, TVLChart
+│   ├── order/              # OrderEntry, OrderBook, OrderHistory
+│   ├── portfolio/          # PortfolioSummary, Positions, History
+│   ├── wallet/             # WalletConnect, WalletInfo
+│   ├── admin/              # AdminDashboard, SettingsPanel
+│   └── ui/                 # shadcn/ui components
 ├── lib/
 │   ├── api.ts              # Backend API client
-│   └── utils.ts            # Utility functions
-└── providers/              # React context providers
+│   ├── utils.ts            # Helpers (formatAmount, cn)
+│   ├── constants.ts        # Asset definitions, config
+│   └── hooks/              # Custom React hooks
+└── providers/
+    ├── theme-provider.tsx  # Dark/light mode
+    └── wallet-provider.tsx # CIP-30 wallet context
 ```
 
-## Pages
+## Page Routes
 
-| Route | Component | Description |
-|---|---|---|
-| `/` | Trading Page | Main swap interface with TradingView chart, SwapCard, order entry, pseudo-orderbook |
-| `/pools` | Pools Page | List and manage liquidity pools |
-| `/orders` | Orders Page | View and manage limit/DCA/stop-loss orders |
-| `/portfolio` | Portfolio Page | Wallet holdings, LP positions, trade history |
-| `/analytics` | Analytics Page | Protocol metrics, TVL charts, volume analytics |
-| `/admin` | Admin Page | Protocol settings, fee collection, pool management |
+| Route | Page | Description |
+|-------|------|-------------|
+| `/` | Landing | Hero section, feature overview |
+| `/trade` | Trading | Swap card, price chart, recent trades, order book |
+| `/pools` | Pool List | All liquidity pools with TVL, volume, APY |
+| `/pools/[id]` | Pool Detail | Pool stats, chart, swap history, liquidity management |
+| `/orders` | Orders | Create and manage Limit, DCA, Stop-Loss orders |
+| `/portfolio` | Portfolio | Wallet overview, open positions, trade history, LP positions |
+| `/analytics` | Analytics | Protocol stats, TVL chart, volume, fee revenue |
+| `/admin` | Admin Panel | Protocol deployment, settings, fee collection, solver control |
 
-### Quick Links
+## Sections
 
-- [Components →](/docs/frontend/components)
-- [Pages →](/docs/frontend/pages)
-- [Wallet Integration →](/docs/frontend/wallet-integration)
-- [API Client →](/docs/frontend/api-client)
+<Cards>
+  <Card title="Components" href="/docs/frontend/components">
+    Component architecture and key UI components
+  </Card>
+  <Card title="Pages" href="/docs/frontend/pages">
+    Page layouts and routing structure
+  </Card>
+  <Card title="Wallet Integration" href="/docs/frontend/wallet-integration">
+    CIP-30 wallet connection and transaction signing
+  </Card>
+  <Card title="API Client" href="/docs/frontend/api-client">
+    Frontend API client and data fetching patterns
+  </Card>
+</Cards>
