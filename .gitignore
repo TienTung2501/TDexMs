@@ -4,6 +4,7 @@ node_modules/
 
 # Reference code (không push lên git)
 frontend-etf-factory-protocol/
+frontend_reference/
 
 # Build outputs
 dist/
@@ -24,7 +25,7 @@ build/
 # OS
 .DS_Store
 Thumbs.db
-frontend_reference/
+
 # Turbo
 .turbo/
 

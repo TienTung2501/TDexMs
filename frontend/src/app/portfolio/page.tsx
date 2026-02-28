@@ -17,12 +17,13 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { TokenIcon } from "@/components/ui/token-icon";
+import { AllocationDonutChart } from "@/components/charts/allocation-donut-chart";
+import { PortfolioPerformanceChart } from "@/components/charts/portfolio-performance-chart";
 import {
   usePortfolioSummary,
   usePortfolioOpenOrders,
@@ -92,44 +93,60 @@ export default function PortfolioPage() {
   const lpTabLoading = hasRealLpData ? lpOnChainLoading : lpLoading;
 
   // Fallback summary from wallet balances when API isn't available yet
+  // Also builds wallet-derived allocation if API allocation_chart is empty
   const fallbackSummary = useMemo(() => {
-    if (summary) return summary;
-    const entries = Object.entries(balances).filter(([, v]) => v > 0);
-    const totalAda = entries.reduce((sum, [ticker, amount]) => {
+    // Build wallet-based allocation chart from local balances
+    const walletEntries = Object.entries(balances).filter(([, v]) => v > 0);
+    const walletTotalAda = walletEntries.reduce((sum, [ticker, amount]) => {
       const token = TOKENS[ticker];
       if (!token) return sum;
-      const display =
-        token.decimals > 0 ? amount / Math.pow(10, token.decimals) : amount;
-      return sum + (ticker === "ADA" ? display : 0);
+      // Amount is already human-readable from wallet provider
+      return sum + (ticker === "ADA" ? amount : 0);
     }, 0);
 
+    const walletAllocation = walletEntries
+      .map(([ticker, amount]) => {
+        const token = TOKENS[ticker];
+        if (!token) return null;
+        return {
+          asset: ticker,
+          percentage: walletTotalAda > 0 ? (amount / walletTotalAda) * 100 : 0,
+          value_usd: amount * 0.5,
+        };
+      })
+      .filter(Boolean) as {
+      asset: string;
+      percentage: number;
+      value_usd: number;
+    }[];
+
+    if (summary) {
+      // API summary is available — but if its allocation_chart is empty,
+      // use wallet-derived allocation instead (API only tracks active intents)
+      return {
+        ...summary,
+        total_balance_ada: summary.total_balance_ada || walletTotalAda,
+        total_balance_usd: summary.total_balance_usd || walletTotalAda * 0.5,
+        status_breakdown: {
+          ...summary.status_breakdown,
+          available_in_wallet: summary.status_breakdown.available_in_wallet || walletTotalAda,
+        },
+        allocation_chart:
+          summary.allocation_chart && summary.allocation_chart.length > 0
+            ? summary.allocation_chart
+            : walletAllocation,
+      };
+    }
+
     return {
-      total_balance_usd: totalAda * 0.5,
-      total_balance_ada: totalAda,
+      total_balance_usd: walletTotalAda * 0.5,
+      total_balance_ada: walletTotalAda,
       status_breakdown: {
-        available_in_wallet: totalAda,
+        available_in_wallet: walletTotalAda,
         locked_in_orders: 0,
         locked_in_lp: 0,
       },
-      allocation_chart: entries
-        .map(([ticker, amount]) => {
-          const token = TOKENS[ticker];
-          if (!token) return null;
-          const display =
-            token.decimals > 0
-              ? amount / Math.pow(10, token.decimals)
-              : amount;
-          return {
-            asset: ticker,
-            percentage: totalAda > 0 ? (display / totalAda) * 100 : 0,
-            value_usd: display * 0.5,
-          };
-        })
-        .filter(Boolean) as {
-        asset: string;
-        percentage: number;
-        value_usd: number;
-      }[],
+      allocation_chart: walletAllocation,
     };
   }, [summary, balances]);
 
@@ -253,7 +270,7 @@ export default function PortfolioPage() {
           </CardContent>
         </Card>
 
-        {/* Allocation Chart (horizontal bars) */}
+        {/* Token Allocation — Interactive Donut Chart */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
@@ -268,38 +285,32 @@ export default function PortfolioPage() {
                   <Skeleton key={i} className="h-10 w-full" />
                 ))}
               </div>
-            ) : allocation.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No tokens found</p>
             ) : (
-              <div className="space-y-3">
-                {allocation.slice(0, 8).map((item) => {
-                  const token = TOKENS[item.asset];
-                  return (
-                    <div key={item.asset} className="flex items-center gap-3">
-                      {token && <TokenIcon token={token} size="sm" />}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="font-medium">{item.asset}</span>
-                          <span className="font-mono text-xs">
-                            {item.percentage.toFixed(1)}%
-                          </span>
-                        </div>
-                        <Progress
-                          value={item.percentage}
-                          className="h-1.5 mt-1"
-                        />
-                      </div>
-                      <span className="text-xs text-muted-foreground font-mono w-20 text-right">
-                        ${formatCompact(item.value_usd)}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              <AllocationDonutChart
+                allocation={allocation}
+                loading={summaryLoading && !summary}
+              />
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* ────── Portfolio Performance Chart ────── */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <PieChart className="h-4 w-4" />
+            Portfolio Performance
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <PortfolioPerformanceChart
+            currentValue={totalBalance}
+            label="Portfolio Value"
+            prefix="₳ "
+          />
+        </CardContent>
+      </Card>
 
       {/* ────── Section 2–4: Tabs ─────────── */}
       <Tabs defaultValue="open-orders" className="w-full">

@@ -168,6 +168,65 @@ export function createPoolRouter(
     },
   );
 
+  /** GET /v1/pools/:poolId/swaps — Recent swap trades for a specific pool */
+  router.get(
+    '/pools/:poolId/swaps',
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const poolId = req.params.poolId as string;
+        const limit = Math.min(Number(req.query.limit) || 20, 100);
+        const prisma = getPrisma();
+
+        const pool = await prisma.pool.findUnique({
+          where: { id: poolId },
+          select: {
+            assetATicker: true, assetBTicker: true,
+            assetADecimals: true, assetBDecimals: true,
+          },
+        });
+        if (!pool) {
+          res.status(404).json({ error: 'Pool not found' });
+          return;
+        }
+
+        const swaps = await prisma.swap.findMany({
+          where: { poolId },
+          orderBy: { timestamp: 'desc' },
+          take: limit,
+        });
+
+        res.json({
+          data: swaps.map((s) => ({
+            id: s.id,
+            direction: s.direction,
+            inputAmount: s.inputAmount.toString(),
+            outputAmount: s.outputAmount.toString(),
+            fee: s.fee.toString(),
+            priceImpact: s.priceImpact,
+            senderAddress: s.senderAddress,
+            txHash: s.txHash,
+            timestamp: s.timestamp.toISOString(),
+            inputTicker: s.direction === 'AToB'
+              ? (pool.assetATicker ?? 'A')
+              : (pool.assetBTicker ?? 'B'),
+            outputTicker: s.direction === 'AToB'
+              ? (pool.assetBTicker ?? 'B')
+              : (pool.assetATicker ?? 'A'),
+            inputDecimals: s.direction === 'AToB'
+              ? (pool.assetADecimals ?? 6)
+              : (pool.assetBDecimals ?? 6),
+            outputDecimals: s.direction === 'AToB'
+              ? (pool.assetBDecimals ?? 6)
+              : (pool.assetADecimals ?? 6),
+          })),
+          total: swaps.length,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
+
   /** GET /v1/pools/:poolId/history — Pool TVL/volume/price history */
   router.get(
     '/pools/:poolId/history',

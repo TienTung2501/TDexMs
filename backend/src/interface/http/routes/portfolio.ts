@@ -22,6 +22,72 @@ export function createPortfolioRouter(
   const router = Router();
 
   // ──────────────────────────────────────────────
+  // Ticker resolution helper: hex assetName → human-readable ticker
+  // Uses pool metadata to resolve tickers. Falls back to hex→UTF-8 decoding.
+  // ──────────────────────────────────────────────
+  let _tickerCache: Map<string, string> | null = null;
+  let _tickerCacheTs = 0;
+  const TICKER_CACHE_TTL = 60_000; // 60s
+
+  /** Decode a hex-encoded Cardano asset name to UTF-8. Returns original if invalid. */
+  function hexToUtf8(hex: string): string {
+    if (!hex || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) return hex;
+    try {
+      const bytes = Buffer.from(hex, 'hex');
+      const str = bytes.toString('utf8');
+      // Only return if all chars are printable ASCII/Unicode
+      if (/^[\x20-\x7E\u00A0-\uFFFF]+$/.test(str)) return str;
+      return hex;
+    } catch {
+      return hex;
+    }
+  }
+
+  async function resolveAssetTicker(policyId: string, assetName: string): Promise<string> {
+    if (!policyId || policyId === '') return 'ADA';
+    if (!assetName || assetName === 'lovelace') return 'ADA';
+
+    // Build/refresh cache from pool metadata
+    if (!_tickerCache || Date.now() - _tickerCacheTs > TICKER_CACHE_TTL) {
+      const map = new Map<string, string>();
+      if (poolRepo) {
+        try {
+          const pools = await poolRepo.findMany({});
+          for (const pool of pools.items) {
+            if (pool.assetATicker && pool.assetAPolicyId) {
+              map.set(`${pool.assetAPolicyId}.${pool.assetAAssetName}`, pool.assetATicker);
+            }
+            if (pool.assetBTicker && pool.assetBPolicyId) {
+              map.set(`${pool.assetBPolicyId}.${pool.assetBAssetName}`, pool.assetBTicker);
+            }
+          }
+        } catch { /* use empty cache on error */ }
+      }
+      _tickerCache = map;
+      _tickerCacheTs = Date.now();
+    }
+
+    // Lookup from pool metadata
+    const key = `${policyId}.${assetName}`;
+    const fromPool = _tickerCache.get(key);
+    if (fromPool) return fromPool;
+
+    // Fallback: hex→UTF-8 decode
+    return hexToUtf8(assetName);
+  }
+
+  async function buildPairString(
+    inputPolicyId: string, inputAssetName: string,
+    outputPolicyId: string, outputAssetName: string,
+  ): Promise<string> {
+    const [inTicker, outTicker] = await Promise.all([
+      resolveAssetTicker(inputPolicyId, inputAssetName),
+      resolveAssetTicker(outputPolicyId, outputAssetName),
+    ]);
+    return `${inTicker}_${outTicker}`;
+  }
+
+  // ──────────────────────────────────────────────
   // Static routes MUST be registered BEFORE /:address
   // to prevent Express from matching "summary" as an address.
   // ──────────────────────────────────────────────
@@ -110,18 +176,32 @@ export function createPortfolioRouter(
         }
 
         // Build allocation from unique assets in active positions
-        const assetTotals = new Map<string, number>();
+        // Use policyId.assetName as key for aggregation, resolve tickers for output
+        const assetTotals = new Map<string, { policyId: string; assetName: string; amount: number }>();
         for (const intent of activeIntents.items) {
-          const ticker = intent.inputAssetName || 'ADA';
-          assetTotals.set(ticker, (assetTotals.get(ticker) ?? 0) + Number(intent.inputAmount));
+          const key = intent.inputPolicyId
+            ? `${intent.inputPolicyId}.${intent.inputAssetName}`
+            : 'ADA';
+          const existing = assetTotals.get(key);
+          if (existing) {
+            existing.amount += Number(intent.inputAmount);
+          } else {
+            assetTotals.set(key, {
+              policyId: intent.inputPolicyId,
+              assetName: intent.inputAssetName,
+              amount: Number(intent.inputAmount),
+            });
+          }
         }
 
         const totalKnown = lockedInOrders || 1;
-        const allocation = Array.from(assetTotals.entries()).map(([asset, value]) => ({
-          asset,
-          percentage: (value / totalKnown) * 100,
-          value_usd: value * 0.5, // placeholder conversion
-        }));
+        const allocation = await Promise.all(
+          Array.from(assetTotals.entries()).map(async ([_key, { policyId, assetName, amount }]) => ({
+            asset: await resolveAssetTicker(policyId, assetName),
+            percentage: (amount / totalKnown) * 100,
+            value_usd: amount * 0.5, // placeholder conversion
+          })),
+        );
 
         res.json({
           total_balance_usd: 0, // Client fills from CIP-30 wallet
@@ -159,16 +239,16 @@ export function createPortfolioRouter(
 
         const now = Date.now();
 
-        const openOrders = [
+        const openOrders = await Promise.all([
           // Map intents as SWAP type
-          ...intents.items.map((intent) => {
+          ...intents.items.map(async (intent) => {
             const deadlineMs = intent.deadline * 1000;
             const isExpired = now > deadlineMs;
             const inputAmt = Number(intent.inputAmount);
             return {
               utxo_ref: `${intent.escrowTxHash ?? intent.id}#0`,
               created_at: Math.floor(intent.createdAt.getTime() / 1000),
-              pair: `${intent.inputAssetName || 'ADA'}_${intent.outputAssetName || 'ADA'}`,
+              pair: await buildPairString(intent.inputPolicyId, intent.inputAssetName, intent.outputPolicyId, intent.outputAssetName),
               type: 'SWAP' as const,
               conditions: {
                 slippage_percent: null,
@@ -187,7 +267,7 @@ export function createPortfolioRouter(
             };
           }),
           // Map orders
-          ...orders.items.map((order) => {
+          ...orders.items.map(async (order) => {
             const p = order.toProps();
             const deadlineMs = new Date(p.deadline).getTime();
             const isExpired = now > deadlineMs;
@@ -202,7 +282,7 @@ export function createPortfolioRouter(
                 ? `${p.escrowTxHash}#${p.escrowOutputIndex ?? 0}`
                 : `${p.id}#0`,
               created_at: Math.floor(p.createdAt.getTime() / 1000),
-              pair: `${p.inputAssetName || 'ADA'}_${p.outputAssetName || 'ADA'}`,
+              pair: await buildPairString(p.inputPolicyId, p.inputAssetName, p.outputPolicyId, p.outputAssetName),
               type: p.type as 'SWAP' | 'LIMIT' | 'DCA' | 'STOP_LOSS',
               conditions: {
                 target_price: p.priceNumerator && p.priceDenominator
@@ -222,7 +302,9 @@ export function createPortfolioRouter(
               available_action: isExpired ? 'RECLAIM' as const : 'CANCEL' as const,
             };
           }),
-        ].sort((a, b) => b.created_at - a.created_at);
+        ]);
+
+        openOrders.sort((a, b) => b.created_at - a.created_at);
 
         res.json(openOrders);
       } catch (err) {
@@ -268,7 +350,7 @@ export function createPortfolioRouter(
           }),
         );
 
-        // Flatten and map
+        // Flatten and map (async for ticker resolution)
         const history: any[] = [];
 
         for (const { intents, orders } of results) {
@@ -276,7 +358,7 @@ export function createPortfolioRouter(
             history.push({
               order_id: intent.id,
               completed_at: Math.floor((intent.updatedAt ?? intent.createdAt).getTime() / 1000),
-              pair: `${intent.inputAssetName || 'ADA'}_${intent.outputAssetName || 'ADA'}`,
+              pair: await buildPairString(intent.inputPolicyId, intent.inputAssetName, intent.outputPolicyId, intent.outputAssetName),
               type: 'SWAP',
               status: intent.status === 'EXPIRED' ? 'CANCELLED' : intent.status,
               execution: {
@@ -293,7 +375,7 @@ export function createPortfolioRouter(
             history.push({
               order_id: p.id,
               completed_at: Math.floor((p.updatedAt ?? p.createdAt).getTime() / 1000),
-              pair: `${p.inputAssetName || 'ADA'}_${p.outputAssetName || 'ADA'}`,
+              pair: await buildPairString(p.inputPolicyId, p.inputAssetName, p.outputPolicyId, p.outputAssetName),
               type: p.type,
               status: p.status === 'EXPIRED' ? 'CANCELLED' : p.status,
               execution: {

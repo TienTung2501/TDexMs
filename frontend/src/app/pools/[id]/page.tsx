@@ -21,6 +21,7 @@ import { PriceChart, TIMEFRAME_TO_INTERVAL, type ChartTimeframe, type ChartMode 
 import { LiquidityForm } from "@/components/features/liquidity/liquidity-form";
 import { RecentTradesTable } from "@/components/features/trading/recent-trades-table";
 import { TokenPairIcon } from "@/components/ui/token-icon";
+import { PoolHistoryChart } from "@/components/charts/pool-history-chart";
 import { usePool, useCandles } from "@/lib/hooks";
 import { getPoolHistory, type PoolHistoryEntry } from "@/lib/api";
 import { formatCompact, cn } from "@/lib/utils";
@@ -281,7 +282,7 @@ export default function PoolDetailPage() {
 
       {/* Pool History + Recent trades */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 30d Pool History */}
+        {/* 30d Pool History — Recharts area chart */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base">30-Day Pool History</CardTitle>
@@ -291,60 +292,8 @@ export default function PoolDetailPage() {
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               </div>
-            ) : history.length > 0 ? (
-              <div className="space-y-3">
-                {/* TVL Timeline */}
-                <div>
-                  <div className="text-xs text-muted-foreground mb-2">TVL Over Time</div>
-                  <div className="flex items-end gap-[2px] h-16">
-                    {history.map((h, i) => {
-                      const maxTvl = Math.max(...history.map((x) => x.tvlAda), 1);
-                      const pct = (h.tvlAda / maxTvl) * 100;
-                      return (
-                        <div
-                          key={i}
-                          className="flex-1 rounded-t bg-primary/40 hover:bg-primary/70 transition-colors"
-                          style={{ height: `${Math.max(pct, 2)}%` }}
-                          title={`${new Date(h.timestamp).toLocaleDateString()}: ₳ ${formatCompact(h.tvlAda)}`}
-                        />
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                    <span>{new Date(history[0]?.timestamp).toLocaleDateString()}</span>
-                    <span>{new Date(history[history.length - 1]?.timestamp).toLocaleDateString()}</span>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Daily Volume Timeline */}
-                <div>
-                  <div className="text-xs text-muted-foreground mb-2">Daily Volume</div>
-                  <div className="flex items-end gap-[2px] h-16">
-                    {history.map((h, i) => {
-                      const maxVol = Math.max(...history.map((x) => x.volume ?? 0), 1);
-                      const pct = ((h.volume ?? 0) / maxVol) * 100;
-                      return (
-                        <div
-                          key={i}
-                          className="flex-1 rounded-t bg-blue-500/40 hover:bg-blue-500/70 transition-colors"
-                          style={{ height: `${Math.max(pct, 2)}%` }}
-                          title={`${new Date(h.timestamp).toLocaleDateString()}: ₳ ${formatCompact(h.volume ?? 0)}`}
-                        />
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                    <span>{new Date(history[0]?.timestamp).toLocaleDateString()}</span>
-                    <span>{new Date(history[history.length - 1]?.timestamp).toLocaleDateString()}</span>
-                  </div>
-                </div>
-              </div>
             ) : (
-              <div className="text-center py-8 text-sm text-muted-foreground">
-                No history data available for this pool.
-              </div>
+              <PoolHistoryChart data={history} loading={historyLoading} />
             )}
           </CardContent>
         </Card>

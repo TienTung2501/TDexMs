@@ -1,1 +1,0 @@
-việc cần làm tiếp theo là đồng bộ hóa button, thêm data, cung cấp đẩy đủ thông tin của thành viên, chỉnh thêm mấy cái background cho đẹp.

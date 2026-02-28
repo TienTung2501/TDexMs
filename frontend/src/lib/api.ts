@@ -705,6 +705,33 @@ export async function getPoolHistory(
   });
 }
 
+// ─── Pool Swaps (Recent Trades) ────────────────────────────
+
+export interface PoolSwapEntry {
+  id: string;
+  direction: string;
+  inputAmount: string;
+  outputAmount: string;
+  fee: string;
+  priceImpact: number;
+  senderAddress: string;
+  txHash: string;
+  timestamp: string;
+  inputTicker: string;
+  outputTicker: string;
+  inputDecimals: number;
+  outputDecimals: number;
+}
+
+export async function getPoolSwaps(
+  poolId: string,
+  limit: number = 20
+): Promise<{ data: PoolSwapEntry[]; total: number }> {
+  return apiFetch(`/pools/${poolId}/swaps`, {
+    params: { limit: String(limit) },
+  });
+}
+
 // ─── Token Analytics ──────────────────────────────────────
 
 export interface TokenAnalytics {

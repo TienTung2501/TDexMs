@@ -5,7 +5,7 @@ import {
   createChart,
   CandlestickSeries,
   HistogramSeries,
-  LineSeries,
+  AreaSeries,
   type IChartApi,
   ColorType,
   type Time,
@@ -47,7 +47,7 @@ export function PriceChart({
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
-  const lineSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
+  const areaSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const volumeSeriesRef = useRef<ReturnType<IChartApi["addSeries"]> | null>(null);
   const [internalTf, setInternalTf] = useState<ChartTimeframe>("4H");
   const [internalMode, setInternalMode] = useState<ChartMode>("candle");
@@ -106,8 +106,10 @@ export function PriceChart({
       visible: chartMode === "candle",
     });
 
-    const lineSeries = chart.addSeries(LineSeries, {
-      color: "hsl(158 64% 52%)",
+    const areaSeries = chart.addSeries(AreaSeries, {
+      lineColor: "#10b981",
+      topColor: "rgba(16, 185, 129, 0.4)",
+      bottomColor: "rgba(16, 185, 129, 0.0)",
       lineWidth: 2,
       crosshairMarkerRadius: 4,
       visible: chartMode === "line",
@@ -125,7 +127,7 @@ export function PriceChart({
 
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
-    lineSeriesRef.current = lineSeries;
+    areaSeriesRef.current = areaSeries;
     volumeSeriesRef.current = volumeSeries;
 
     const handleResize = () => {
@@ -145,7 +147,7 @@ export function PriceChart({
       chart.remove();
       chartRef.current = null;
       candleSeriesRef.current = null;
-      lineSeriesRef.current = null;
+      areaSeriesRef.current = null;
       volumeSeriesRef.current = null;
     };
   }, []); // Only run once — chart is created and never destroyed
@@ -153,7 +155,7 @@ export function PriceChart({
   // Toggle series visibility when chart mode changes
   useEffect(() => {
     candleSeriesRef.current?.applyOptions({ visible: chartMode === "candle" });
-    lineSeriesRef.current?.applyOptions({ visible: chartMode === "line" });
+    areaSeriesRef.current?.applyOptions({ visible: chartMode === "line" });
   }, [chartMode]);
 
   // Update timeScale visibility when timeframe changes
@@ -165,7 +167,7 @@ export function PriceChart({
 
   // Update data in-place — no chart destruction/recreation
   useEffect(() => {
-    if (!candleSeriesRef.current || !lineSeriesRef.current || !volumeSeriesRef.current) return;
+    if (!candleSeriesRef.current || !areaSeriesRef.current || !volumeSeriesRef.current) return;
 
     // Filter out invalid timestamps (NaN, 0, negative) and non-finite prices
     const validData = data
@@ -177,7 +179,7 @@ export function PriceChart({
     if (validData.length === 0) {
       // Clear all series when no valid data
       candleSeriesRef.current.setData([]);
-      lineSeriesRef.current.setData([]);
+      areaSeriesRef.current.setData([]);
       volumeSeriesRef.current.setData([]);
       return;
     }
@@ -192,7 +194,7 @@ export function PriceChart({
       }))
     );
 
-    lineSeriesRef.current.setData(
+    areaSeriesRef.current.setData(
       validData.map((d) => ({
         time: d.time as Time,
         value: d.close,
