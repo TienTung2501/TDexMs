@@ -84,6 +84,21 @@ const envSchema = z.object({
   FAUCET_TARGET_ADDRESS: z.string().default(''),
   FAUCET_API_KEY: z.string().default(''),
   FAUCET_INTERVAL_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+
+  // Demo bots (simulate trading / LP activity on testnet)
+  BOT_SWAP_ENABLED: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
+  BOT_LIQUIDITY_ENABLED: z
+    .string()
+    .transform((val) => val === 'true')
+    .default('false'),
+  // Bot wallet seeds (swap bot uses MNEMONIC0/1/2, LP bot uses T_WALLET_SEED2)
+  MNEMONIC0: z.string().default(''),
+  MNEMONIC1: z.string().default(''),
+  MNEMONIC2: z.string().default(''),
+  T_WALLET_SEED2: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

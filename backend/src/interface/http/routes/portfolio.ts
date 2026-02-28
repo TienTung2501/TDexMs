@@ -107,17 +107,22 @@ export function createPortfolioRouter(
         ]);
 
         // Merge and sort by date
+        // Filter out CREATED status — these are pre-sign records that may be ghost entries
         const transactions = [
-          ...intents.items.map((i) => ({
-            id: i.id,
-            type: 'intent' as const,
-            status: i.status,
-            inputAsset: `${i.inputPolicyId}.${i.inputAssetName}`,
-            inputAmount: i.inputAmount.toString(),
-            outputAsset: `${i.outputPolicyId}.${i.outputAssetName}`,
-            createdAt: i.createdAt.toISOString(),
-          })),
-          ...orders.items.map((o) => {
+          ...intents.items
+            .filter((i) => i.status !== 'CREATED')
+            .map((i) => ({
+              id: i.id,
+              type: 'intent' as const,
+              status: i.status,
+              inputAsset: `${i.inputPolicyId}.${i.inputAssetName}`,
+              inputAmount: i.inputAmount.toString(),
+              outputAsset: `${i.outputPolicyId}.${i.outputAssetName}`,
+              createdAt: i.createdAt.toISOString(),
+            })),
+          ...orders.items
+            .filter((o) => o.toProps().status !== 'CREATED')
+            .map((o) => {
             const p = o.toProps();
             return {
               id: p.id,
@@ -232,8 +237,11 @@ export function createPortfolioRouter(
         const limit = Math.min(Number(req.query.limit) || 20, 100);
 
         // Fetch active intents + orders and merge
-        // Include CREATED, PENDING, ACTIVE, FILLING statuses — not just ACTIVE
-        const activeIntentStatuses = ['CREATED', 'PENDING', 'ACTIVE', 'FILLING'];
+        // Only show ACTIVE and FILLING statuses (not CREATED/PENDING).
+        // CREATED records are pre-sign and may be ghost records from unsigned TXs.
+        // ChainSync promotes confirmed TXs to ACTIVE within ~60-120s.
+        // GhostCleanupCron deletes unconfirmed CREATED records after 5 minutes.
+        const activeIntentStatuses = ['ACTIVE', 'FILLING'];
         const [intentResults, orders] = await Promise.all([
           Promise.all(
             activeIntentStatuses.map((s) =>
@@ -364,6 +372,7 @@ export function createPortfolioRouter(
           for (const intent of intents) {
             history.push({
               order_id: intent.id,
+              created_at: Math.floor(intent.createdAt.getTime() / 1000),
               completed_at: Math.floor((intent.updatedAt ?? intent.createdAt).getTime() / 1000),
               pair: await buildPairString(intent.inputPolicyId, intent.inputAssetName, intent.outputPolicyId, intent.outputAssetName),
               type: 'SWAP',
@@ -381,6 +390,7 @@ export function createPortfolioRouter(
             const p = order.toProps();
             history.push({
               order_id: p.id,
+              created_at: Math.floor(p.createdAt.getTime() / 1000),
               completed_at: Math.floor((p.updatedAt ?? p.createdAt).getTime() / 1000),
               pair: await buildPairString(p.inputPolicyId, p.inputAssetName, p.outputPolicyId, p.outputAssetName),
               type: p.type,

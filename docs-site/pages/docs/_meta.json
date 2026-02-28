@@ -1,7 +1,23 @@
 {
+  "---product-overview": {
+    "title": "Overview",
+    "type": "separator"
+  },
+  "product": {
+    "title": "Product Overview"
+  },
+  "features": {
+    "title": "Features"
+  },
+  "how-it-works": {
+    "title": "How It Works"
+  },
+  "---technical-docs": {
+    "title": "Technical Documentation",
+    "type": "separator"
+  },
   "getting-started": {
-    "title": "Getting Started",
-    "type": "doc"
+    "title": "Getting Started"
   },
   "architecture": {
     "title": "Architecture"
@@ -20,6 +36,10 @@
   },
   "frontend": {
     "title": "Frontend"
+  },
+  "---operations": {
+    "title": "Operations",
+    "type": "separator"
   },
   "guides": {
     "title": "Guides"

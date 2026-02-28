@@ -1,23 +1,24 @@
 {
   "index": {
-    "title": "Introduction",
+    "title": "Home",
+    "type": "page",
     "theme": {
-      "layout": "full"
+      "layout": "full",
+      "sidebar": false,
+      "breadcrumb": false,
+      "pagination": false
     }
   },
-  "product": {
-    "title": "Product Overview"
-  },
-  "features": {
-    "title": "Features"
-  },
-  "how-it-works": {
-    "title": "How It Works"
-  },
   "docs": {
-    "title": "📖 Documentation"
+    "title": "Documentation",
+    "type": "page"
   },
   "changelog": {
-    "title": "Changelog"
+    "title": "Changelog",
+    "type": "page",
+    "theme": {
+      "sidebar": false,
+      "toc": true
+    }
   }
 }

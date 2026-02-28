@@ -21,8 +21,11 @@ import { PriceAggregationCron } from './infrastructure/cron/PriceAggregationCron
 import { ReclaimKeeperCron } from './infrastructure/cron/ReclaimKeeperCron.js';
 import { OrderExecutorCron } from './infrastructure/cron/OrderExecutorCron.js';
 import { PoolSnapshotCron } from './infrastructure/cron/PoolSnapshotCron.js';
+import { GhostCleanupCron } from './infrastructure/cron/GhostCleanupCron.js';
 import { CacheService } from './infrastructure/cache/CacheService.js';
 import { FaucetBot } from './infrastructure/faucet/FaucetBot.js';
+import { SwapBotService } from './infrastructure/bots/SwapBotService.js';
+import { LiquidityBotService } from './infrastructure/bots/LiquidityBotService.js';
 
 // Application
 import { GetQuote } from './application/use-cases/GetQuote.js';
@@ -273,6 +276,16 @@ async function main(): Promise<void> {
   // B4/B6 fix: these tables were previously never populated
   const poolSnapshotCron = new PoolSnapshotCron(prisma, 3_600_000); // every hour
 
+  // Ghost cleanup cron — removes CREATED intents/orders/pools whose TX was never
+  // signed/submitted on-chain. Prevents ghost records from polluting the DB and UI.
+  const ghostCleanupCron = new GhostCleanupCron(
+    prisma,
+    blockfrost,
+    120_000,   // check every 2 minutes
+    5 * 60_000, // delete CREATED records older than 5 minutes
+    env.ORDER_ROUTES_ENABLED,
+  );
+
   // Testnet faucet bot — DISABLED (no longer needed)
   // const faucetBot = new FaucetBot({
   //   targetAddress: env.FAUCET_TARGET_ADDRESS || env.SOLVER_ADDRESS,
@@ -280,6 +293,24 @@ async function main(): Promise<void> {
   //   apiKey: env.FAUCET_API_KEY || undefined,
   //   intervalMs: env.FAUCET_INTERVAL_MS,
   // });
+
+  // Demo bots — simulate trading / LP activity (controlled by env vars)
+  const backendUrl = `http://localhost:${env.PORT}`;
+  const swapBot = new SwapBotService({
+    backendUrl,
+    blockfrostUrl: env.BLOCKFROST_URL,
+    blockfrostProjectId: env.BLOCKFROST_PROJECT_ID,
+    network: (env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod') as 'Preprod' | 'Mainnet',
+    walletSeeds: [env.MNEMONIC0, env.MNEMONIC1, env.MNEMONIC2].filter(Boolean),
+  });
+
+  const liquidityBot = new LiquidityBotService({
+    backendUrl,
+    blockfrostUrl: env.BLOCKFROST_URL,
+    blockfrostProjectId: env.BLOCKFROST_PROJECT_ID,
+    network: (env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod') as 'Preprod' | 'Mainnet',
+    walletSeed: env.T_WALLET_SEED2,
+  });
 
   // ──────────────────────────────────────────────
   // 6. Start
@@ -309,7 +340,27 @@ async function main(): Promise<void> {
     logger.info('OrderExecutorCron disabled (ORDER_EXECUTOR_ENABLED=false) — intent-only mode');
   }
   poolSnapshotCron.start();
+  ghostCleanupCron.start();
   // faucetBot disabled
+
+  // Demo bots — start if enabled
+  if (env.BOT_SWAP_ENABLED) {
+    swapBot.start().catch((err) => {
+      logger.error({ err }, 'Swap bot failed to start');
+    });
+    logger.info('SwapBot started (BOT_SWAP_ENABLED=true)');
+  } else {
+    logger.info('SwapBot disabled (BOT_SWAP_ENABLED=false)');
+  }
+
+  if (env.BOT_LIQUIDITY_ENABLED) {
+    liquidityBot.start().catch((err) => {
+      logger.error({ err }, 'Liquidity bot failed to start');
+    });
+    logger.info('LiquidityBot started (BOT_LIQUIDITY_ENABLED=true)');
+  } else {
+    logger.info('LiquidityBot disabled (BOT_LIQUIDITY_ENABLED=false)');
+  }
 
   // ──────────────────────────────────────────────
   // 7. Graceful Shutdown
@@ -323,6 +374,9 @@ async function main(): Promise<void> {
     reclaimKeeper.stop();
     orderExecutorCron.stop();
     poolSnapshotCron.stop();
+    ghostCleanupCron.stop();
+    swapBot.stop();
+    liquidityBot.stop();
     // faucetBot disabled
     wsServer.close();
 
