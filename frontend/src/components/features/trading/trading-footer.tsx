@@ -218,6 +218,10 @@ function MarketTradesTab({
               <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                 <Clock className="h-3 w-3 inline mr-1" />
                 {timeAgo(trade.createdAt)}
+                <br />
+                <span className="text-[9px] opacity-70">
+                  {new Date(trade.createdAt).toLocaleTimeString()}
+                </span>
               </td>
               <td className="px-3 py-2 font-medium whitespace-nowrap">
                 {trade.inputTicker}
@@ -343,6 +347,10 @@ function MyIntentsTab({
             >
               <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                 {timeAgo(intent.createdAt)}
+                <br />
+                <span className="text-[9px] opacity-70">
+                  {new Date(intent.createdAt).toLocaleTimeString()}
+                </span>
               </td>
               <td className="px-3 py-2 font-medium whitespace-nowrap">
                 {intent.inputTicker}

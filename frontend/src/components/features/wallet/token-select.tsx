@@ -21,10 +21,10 @@ interface TokenSelectProps {
   onSelect: (token: Token) => void;
   excludeTicker?: string;
   balances?: Record<string, number>;
-  /** When set, only show tokens that have a pool pairing with this token */
-  pairedWith?: Token;
-  /** Pool list for pair-aware filtering */
+  /** Pool list for showing "no pool" indicators (display only, no filtering) */
   availablePools?: Array<{ assetA: { policyId: string; ticker?: string }; assetB: { policyId: string; ticker?: string } }>;
+  /** The token on the other side — used for "no pool" indicator display */
+  pairedWith?: Token;
 }
 
 /** Decode a Cardano hex-encoded asset name to UTF-8. Returns hex if not valid UTF-8. */
@@ -143,7 +143,7 @@ export function TokenSelectDialog({
       .finally(() => setFetching(false));
   }, [open]);
 
-  // Build set of tickers that have pool pairings with the paired token
+  // Build set of tickers that have pool pairings with the paired token (for UI indicators only)
   const pairedTickers = useMemo(() => {
     if (!pairedWith || !availablePools || availablePools.length === 0) return null;
     const matchesPaired = (asset: { policyId: string; ticker?: string }) =>
@@ -161,16 +161,26 @@ export function TokenSelectDialog({
   }, [pairedWith, availablePools]);
 
   const filtered = useMemo(() => {
-    return dynamicTokens.filter((t) => {
+    const tokens = dynamicTokens.filter((t) => {
+      // Only exclude the same token that's already selected on the other side
       if (t.ticker === excludeTicker) return false;
-      // Pair-aware filtering: only show tokens with existing pool pairing
-      if (pairedTickers && !pairedTickers.has(t.ticker.toUpperCase())) return false;
+      // No pair filtering — always show ALL tokens (Uniswap standard)
       if (!search) return true;
       return (
         t.ticker.toLowerCase().includes(search.toLowerCase()) ||
         t.name.toLowerCase().includes(search.toLowerCase())
       );
     });
+    // Sort: tokens with pool pairing first, then alphabetically
+    if (pairedTickers) {
+      tokens.sort((a, b) => {
+        const aHasPool = pairedTickers.has(a.ticker.toUpperCase()) ? 0 : 1;
+        const bHasPool = pairedTickers.has(b.ticker.toUpperCase()) ? 0 : 1;
+        if (aHasPool !== bHasPool) return aHasPool - bHasPool;
+        return a.ticker.localeCompare(b.ticker);
+      });
+    }
+    return tokens;
   }, [search, excludeTicker, dynamicTokens, pairedTickers]);
 
   return (
@@ -214,6 +224,7 @@ export function TokenSelectDialog({
                       { maximumFractionDigits: 2 }
                     )
                   : balance.toLocaleString();
+              const hasPool = !pairedTickers || pairedTickers.has(token.ticker.toUpperCase());
 
               return (
                 <button
@@ -225,13 +236,21 @@ export function TokenSelectDialog({
                   }}
                   className={cn(
                     "flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-left",
-                    "hover:bg-accent transition-colors cursor-pointer"
+                    "hover:bg-accent transition-colors cursor-pointer",
+                    !hasPool && "opacity-60"
                   )}
                 >
                   <div className="flex items-center gap-3">
                     <TokenIcon token={token} size="lg" />
                     <div>
-                      <div className="font-medium text-sm">{token.ticker}</div>
+                      <div className="font-medium text-sm flex items-center gap-1.5">
+                        {token.ticker}
+                        {!hasPool && (
+                          <span className="text-[9px] text-amber-500 bg-amber-500/10 px-1.5 py-0.5 rounded-full font-normal">
+                            No pool
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground">
                         {token.name}
                       </div>

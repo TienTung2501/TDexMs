@@ -416,7 +416,7 @@ export function SwapCard({
             </Button>
           ) : !pool ? (
             <Button variant="trade" size="xl" className="w-full" disabled>
-              No pool available
+              Insufficient liquidity for this trade
             </Button>
           ) : parseFloat(inputAmount) > inputBalance ? (
             <Button
@@ -453,64 +453,18 @@ export function SwapCard({
         open={!!selectingFor}
         onOpenChange={() => setSelectingFor(null)}
         onSelect={(token) => {
-          const poolList = externalPools || [];
-          const matchT = (a: { policyId: string; ticker?: string }, b: { policyId: string; ticker?: string }) =>
-            a.policyId === b.policyId ||
-            (a.ticker && b.ticker && a.ticker.toUpperCase() === b.ticker.toUpperCase());
-
           if (selectingFor === "input") {
+            // If user selects the same token as output, swap them
+            if (token.ticker === outputToken.ticker) {
+              setOutputToken(inputToken);
+            }
             setInputToken(token);
-            // Reset output to first valid paired token if current output is no longer valid
-            const hasValidPair = poolList.some(
-              (p) =>
-                (matchT(p.assetA, token) && matchT(p.assetB, outputToken)) ||
-                (matchT(p.assetB, token) && matchT(p.assetA, outputToken))
-            );
-            if (!hasValidPair) {
-              // Find first valid counterpart
-              for (const p of poolList) {
-                if (matchT(p.assetA, token) && p.assetB.ticker?.toUpperCase() !== token.ticker.toUpperCase()) {
-                  const resolved = Object.values(TOKENS).find(
-                    (t) => t.policyId === p.assetB.policyId || t.ticker.toUpperCase() === p.assetB.ticker?.toUpperCase()
-                  ) || { policyId: p.assetB.policyId, assetName: p.assetB.assetName ?? "", ticker: p.assetB.ticker ?? "?", name: p.assetB.ticker ?? "?", decimals: p.assetB.decimals ?? 0, logo: "🪙" };
-                  setOutputToken(resolved);
-                  break;
-                }
-                if (matchT(p.assetB, token) && p.assetA.ticker?.toUpperCase() !== token.ticker.toUpperCase()) {
-                  const resolved = Object.values(TOKENS).find(
-                    (t) => t.policyId === p.assetA.policyId || t.ticker.toUpperCase() === p.assetA.ticker?.toUpperCase()
-                  ) || { policyId: p.assetA.policyId, assetName: p.assetA.assetName ?? "", ticker: p.assetA.ticker ?? "?", name: p.assetA.ticker ?? "?", decimals: p.assetA.decimals ?? 0, logo: "🪙" };
-                  setOutputToken(resolved);
-                  break;
-                }
-              }
-            }
           } else {
-            setOutputToken(token);
-            // Reset input to first valid paired token if current input is no longer valid
-            const hasValidPair = poolList.some(
-              (p) =>
-                (matchT(p.assetA, inputToken) && matchT(p.assetB, token)) ||
-                (matchT(p.assetB, inputToken) && matchT(p.assetA, token))
-            );
-            if (!hasValidPair) {
-              for (const p of poolList) {
-                if (matchT(p.assetA, token) && p.assetB.ticker?.toUpperCase() !== token.ticker.toUpperCase()) {
-                  const resolved = Object.values(TOKENS).find(
-                    (t) => t.policyId === p.assetB.policyId || t.ticker.toUpperCase() === p.assetB.ticker?.toUpperCase()
-                  ) || { policyId: p.assetB.policyId, assetName: p.assetB.assetName ?? "", ticker: p.assetB.ticker ?? "?", name: p.assetB.ticker ?? "?", decimals: p.assetB.decimals ?? 0, logo: "🪙" };
-                  setInputToken(resolved);
-                  break;
-                }
-                if (matchT(p.assetB, token) && p.assetA.ticker?.toUpperCase() !== token.ticker.toUpperCase()) {
-                  const resolved = Object.values(TOKENS).find(
-                    (t) => t.policyId === p.assetA.policyId || t.ticker.toUpperCase() === p.assetA.ticker?.toUpperCase()
-                  ) || { policyId: p.assetA.policyId, assetName: p.assetA.assetName ?? "", ticker: p.assetA.ticker ?? "?", name: p.assetA.ticker ?? "?", decimals: p.assetA.decimals ?? 0, logo: "🪙" };
-                  setInputToken(resolved);
-                  break;
-                }
-              }
+            // If user selects the same token as input, swap them
+            if (token.ticker === inputToken.ticker) {
+              setInputToken(outputToken);
             }
+            setOutputToken(token);
           }
           setInputAmount("");
         }}

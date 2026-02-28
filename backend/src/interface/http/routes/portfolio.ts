@@ -232,10 +232,17 @@ export function createPortfolioRouter(
         const limit = Math.min(Number(req.query.limit) || 20, 100);
 
         // Fetch active intents + orders and merge
-        const [intents, orders] = await Promise.all([
-          intentRepo.findMany({ address: walletAddress, status: 'ACTIVE' as any, limit }),
+        // Include CREATED, PENDING, ACTIVE, FILLING statuses — not just ACTIVE
+        const activeIntentStatuses = ['CREATED', 'PENDING', 'ACTIVE', 'FILLING'];
+        const [intentResults, orders] = await Promise.all([
+          Promise.all(
+            activeIntentStatuses.map((s) =>
+              intentRepo.findMany({ address: walletAddress, status: s as any, limit }),
+            ),
+          ),
           orderRepo.findMany({ creator: walletAddress, status: 'ACTIVE' as any, limit }),
         ]);
+        const intents = { items: intentResults.flatMap((r) => r.items) };
 
         const now = Date.now();
 

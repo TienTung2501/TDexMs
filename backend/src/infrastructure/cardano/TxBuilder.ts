@@ -3159,17 +3159,13 @@ export class TxBuilder implements ITxBuilder {
   async buildDeploySettingsTx(params: DeploySettingsTxParams): Promise<BuildTxResult> {
     this.logger.info(
       { admin: params.adminAddress },
-      'Building deploy settings TX',
+      'Building deploy settings TX (with Settings NFT thread token)',
     );
 
     try {
       const lucid = await this.getLucid();
       const bp = this.getBlueprint();
-
-      // Load settings validator (parameterized by settings_nft: AssetClass)
-      const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
-      const settingsScript = this.resolveSettingsScript(settingsBp);
-      const settingsAddr = validatorToAddress(this.network, settingsScript);
+      const r = this.getResolved();
 
       // Admin wallet
       const adminUtxos = await lucid.utxosAt(params.adminAddress);
@@ -3178,13 +3174,44 @@ export class TxBuilder implements ITxBuilder {
       }
       lucid.selectWallet.fromAddress(params.adminAddress, adminUtxos);
 
-      // Check no settings UTxO already exists
+      // ── Step 1: Mint Settings NFT via intent_token_policy (one-shot) ──
+      const seedUtxo = adminUtxos[0];
+      const outRefDatum = Data.to(
+        new Constr(0, [seedUtxo.txHash, BigInt(seedUtxo.outputIndex)]),
+      );
+      const settingsNftNameHex = datumToHash(outRefDatum);
+      const settingsNftUnit = toUnit(r.intentPolicyId, settingsNftNameHex);
+
+      this.logger.info(
+        {
+          seedTxHash: seedUtxo.txHash,
+          seedOutputIndex: seedUtxo.outputIndex,
+          settingsNftPolicyId: r.intentPolicyId,
+          settingsNftAssetName: settingsNftNameHex,
+          settingsNftUnit,
+        },
+        'Settings NFT details computed from seed UTxO',
+      );
+
+      // ── Step 2: Parameterize settings_validator with the minted NFT ──
+      const settingsBp = findValidator(bp, 'settings_validator.settings_validator');
+      const settingsNftAssetClass = mkAssetClass(r.intentPolicyId, settingsNftNameHex);
+      const appliedCode = applyParamsToScript(settingsBp.compiledCode, [
+        Data.to(settingsNftAssetClass),
+      ]);
+      const settingsScript: Script = {
+        type: 'PlutusV3' as const,
+        script: applyDoubleCborEncoding(appliedCode),
+      };
+      const settingsAddr = validatorToAddress(this.network, settingsScript);
+
+      // Check no settings UTxO already exists at the parameterized address
       const existingSettings = await lucid.utxosAt(settingsAddr);
       if (existingSettings.length > 0) {
         throw new ChainError('Settings UTxO already exists on-chain');
       }
 
-      // Build SettingsDatum
+      // ── Step 3: Build SettingsDatum ──
       // SettingsDatum { admin, protocol_fee_bps, min_pool_liquidity,
       //                 min_intent_size, solver_bond, fee_collector, version }
       const adminDetails = getAddressDetails(params.adminAddress);
@@ -3202,12 +3229,20 @@ export class TxBuilder implements ITxBuilder {
         ]),
       );
 
+      // ── Step 4: Build TX — mint NFT + send datum + NFT to parameterized address ──
       const settingsAssets: Assets = {
         lovelace: MIN_SCRIPT_LOVELACE,
+        [settingsNftUnit]: 1n,
       };
 
       const tx = lucid
         .newTx()
+        .collectFrom([seedUtxo])
+        .mintAssets(
+          { [settingsNftUnit]: 1n },
+          IntentTokenRedeemer.Mint(seedUtxo.txHash, BigInt(seedUtxo.outputIndex)),
+        )
+        .attach.MintingPolicy(r.intentPolicyScript)
         .pay.ToContract(
           settingsAddr,
           { kind: 'inline', value: settingsDatum },
@@ -3220,14 +3255,24 @@ export class TxBuilder implements ITxBuilder {
       });
 
       this.logger.info(
-        { txHash: completed.toHash(), settingsAddr },
-        'Deploy settings TX built',
+        {
+          txHash: completed.toHash(),
+          settingsAddr,
+          settingsNftPolicyId: r.intentPolicyId,
+          settingsNftAssetName: settingsNftNameHex,
+          settingsNftUnit,
+        },
+        'Deploy settings TX built (with Settings NFT thread token)',
       );
 
       return {
         unsignedTx: completed.toCBOR(),
         txHash: completed.toHash(),
         estimatedFee: 0n,
+        settingsMeta: {
+          settingsNftPolicyId: r.intentPolicyId,
+          settingsNftAssetName: settingsNftNameHex,
+        },
       };
     } catch (error) {
       if (error instanceof ChainError) throw error;

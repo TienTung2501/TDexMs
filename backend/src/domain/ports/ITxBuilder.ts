@@ -183,6 +183,11 @@ export interface BuildTxResult {
     /** Output index of the pool UTxO in the TX (for DB registration) */
     poolOutputIndex?: number;
   };
+  /** Extra metadata returned by buildDeploySettingsTx for env configuration */
+  settingsMeta?: {
+    settingsNftPolicyId: string;
+    settingsNftAssetName: string;
+  };
 }
 
 export interface ITxBuilder {

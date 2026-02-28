@@ -582,6 +582,12 @@ export default function PortfolioPage() {
                         {new Date(
                           entry.completed_at * 1000
                         ).toLocaleDateString()}
+                        <br />
+                        <span className="text-[10px]">
+                          {new Date(
+                            entry.completed_at * 1000
+                          ).toLocaleTimeString()}
+                        </span>
                       </div>
                       <div className="col-span-2">
                         <Badge

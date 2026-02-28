@@ -297,8 +297,14 @@ function assetToToken(asset: string): Token {
   const dotIdx = asset.indexOf(".");
   const policyId = dotIdx >= 0 ? asset.slice(0, dotIdx) : asset;
   const assetName = dotIdx >= 0 ? asset.slice(dotIdx + 1) : "";
+  // First try exact match on policyId + assetName (handles tokens sharing the same policyId)
+  const exactMatch = Object.values(TOKENS).find(
+    (t) => t.policyId === policyId && t.assetName === assetName
+  );
+  if (exactMatch) return exactMatch;
+  // Fallback: full asset string match
   const found = Object.values(TOKENS).find(
-    (t) => `${t.policyId}.${t.assetName}` === asset || t.policyId === policyId
+    (t) => `${t.policyId}.${t.assetName}` === asset
   );
   if (found) return found;
   const decoded = hexToUtf8(assetName);

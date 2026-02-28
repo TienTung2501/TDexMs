@@ -34,6 +34,11 @@ export interface UpdateSettingsOutput {
   txHash: string;
   estimatedFee: string;
   mode: 'update' | 'deploy';
+  /** Returned only on mode='deploy': NFT details to save to .env */
+  settingsMeta?: {
+    settingsNftPolicyId: string;
+    settingsNftAssetName: string;
+  };
 }
 
 export class UpdateSettingsUseCase {
@@ -82,6 +87,7 @@ export class UpdateSettingsUseCase {
       txHash: txResult.txHash,
       estimatedFee: txResult.estimatedFee.toString(),
       mode,
+      ...(txResult.settingsMeta ? { settingsMeta: txResult.settingsMeta } : {}),
     };
   }
 }
