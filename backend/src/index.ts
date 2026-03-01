@@ -295,7 +295,9 @@ async function main(): Promise<void> {
   // });
 
   // Demo bots — simulate trading / LP activity (controlled by env vars)
-  const backendUrl = `http://localhost:${env.PORT}`;
+  // BOT_BACKEND_URL should be set to the public URL in production (e.g. https://tdexms.onrender.com).
+  // Falls back to localhost for local development.
+  const backendUrl = env.BOT_BACKEND_URL || `http://localhost:${env.PORT}`;
   const swapBot = new SwapBotService({
     backendUrl,
     blockfrostUrl: env.BLOCKFROST_URL,

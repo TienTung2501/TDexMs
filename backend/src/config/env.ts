@@ -99,6 +99,11 @@ const envSchema = z.object({
   MNEMONIC1: z.string().default(''),
   MNEMONIC2: z.string().default(''),
   T_WALLET_SEED2: z.string().default(''),
+
+  // Public URL of this backend (used by demo bots to call the API).
+  // In production set this to the deployed URL, e.g. https://tdexms.onrender.com
+  // Leave empty in local dev — falls back to http://localhost:PORT
+  BOT_BACKEND_URL: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;
