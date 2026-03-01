@@ -1,17 +1,32 @@
 {
   "index": {
-    "title": "🏠 Home",
+    "title": "Introduction",
+    "type": "doc",
     "theme": {
       "layout": "default",
       "breadcrumb": false,
       "pagination": false
     }
   },
+  "product": {
+    "title": "Product Overview",
+    "type": "doc"
+  },
+  "features": {
+    "title": "Features",
+    "type": "doc"
+  },
+  "how-it-works": {
+    "title": "How It Works",
+    "type": "doc"
+  },
   "docs": {
-    "title": "📖 Documentation"
+    "title": "Documentation",
+    "type": "doc"
   },
   "changelog": {
-    "title": "📋 Changelog",
+    "title": "Changelog",
+    "type": "doc",
     "theme": {
       "toc": true
     }

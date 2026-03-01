@@ -1,17 +1,4 @@
 {
-  "---product-overview": {
-    "title": "Overview",
-    "type": "separator"
-  },
-  "product": {
-    "title": "Product Overview"
-  },
-  "features": {
-    "title": "Features"
-  },
-  "how-it-works": {
-    "title": "How It Works"
-  },
   "---technical-docs": {
     "title": "Technical Documentation",
     "type": "separator"
