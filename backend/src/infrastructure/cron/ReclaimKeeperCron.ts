@@ -22,6 +22,7 @@ import {
   type LucidEvolution,
 } from '@lucid-evolution/lucid';
 import { getLogger } from '../../config/logger.js';
+import { TxSubmitter } from '../../solver/TxSubmitter.js';
 import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js';
 import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
@@ -104,6 +105,9 @@ export class ReclaimKeeperCron {
     if (!this.keeperAddress) {
       lucid.selectWallet.fromSeed(this.solverSeedPhrase);
       this.keeperAddress = await lucid.wallet().address();
+      // Register with TxSubmitter singleton so all three services (SolverEngine,
+      // OrderExecutorCron, ReclaimKeeperCron) share the same serial TX queue.
+      TxSubmitter.getInstance().setLucid(lucid);
       this.logger.info({ keeperAddress: this.keeperAddress }, 'Keeper wallet initialized');
     }
 
@@ -221,24 +225,27 @@ export class ReclaimKeeperCron {
       throw err;
     }
 
-    // Sign and submit
+    // Sign and submit via TxSubmitter queue — serial submission prevents UTxO contention
     const { lucid } = await this.getKeeperLucid();
-    const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
-    const submittedHash = await signed.submit();
-
-    this.logger.info(
-      { intentId: intent.id, txHash: submittedHash },
-      'Intent reclaim TX submitted — awaiting on-chain confirmation',
-    );
-
-    // CRITICAL RULE: Await on-chain confirmation before updating DB
-    const confirmed = await lucid.awaitTx(submittedHash, 120_000);
-    if (!confirmed) {
-      this.logger.warn(
-        { intentId: intent.id, txHash: submittedHash },
-        'Reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
-      );
-      return;
+    let submittedHash: string;
+    try {
+      submittedHash = await TxSubmitter.getInstance().submit({
+        label: `reclaim-intent id=${intent.id}`,
+        signAndSubmit: async () => {
+          const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
+          return signed.submit();
+        },
+      });
+    } catch (submitErr) {
+      const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      if (submitMsg.includes('not confirmed within')) {
+        this.logger.warn(
+          { intentId: intent.id },
+          'Reclaim TX not confirmed within timeout — DB not updated; will retry next tick',
+        );
+        return;
+      }
+      throw submitErr;
     }
 
     // Only update DB after confirmed on-chain
@@ -328,22 +335,26 @@ export class ReclaimKeeperCron {
       throw err;
     }
 
-    const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
-    const submittedHash = await signed.submit();
-
-    this.logger.info(
-      { orderId: order.id, txHash: submittedHash },
-      'Order reclaim TX submitted — awaiting on-chain confirmation',
-    );
-
-    // CRITICAL RULE: Await on-chain confirmation before updating DB
-    const confirmed = await lucid.awaitTx(submittedHash, 120_000);
-    if (!confirmed) {
-      this.logger.warn(
-        { orderId: order.id, txHash: submittedHash },
-        'Order reclaim TX not confirmed within 120s — DB not updated; will retry next tick',
-      );
-      return;
+    // Sign and submit via TxSubmitter queue — serial submission prevents UTxO contention
+    let submittedHash: string;
+    try {
+      submittedHash = await TxSubmitter.getInstance().submit({
+        label: `reclaim-order id=${order.id}`,
+        signAndSubmit: async () => {
+          const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
+          return signed.submit();
+        },
+      });
+    } catch (submitErr) {
+      const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      if (submitMsg.includes('not confirmed within')) {
+        this.logger.warn(
+          { orderId: order.id },
+          'Order reclaim TX not confirmed within timeout — DB not updated; will retry next tick',
+        );
+        return;
+      }
+      throw submitErr;
     }
 
     // Only update DB after confirmed on-chain — mark CANCELLED since funds are returned

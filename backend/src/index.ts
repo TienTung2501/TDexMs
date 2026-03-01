@@ -281,7 +281,7 @@ async function main(): Promise<void> {
   const ghostCleanupCron = new GhostCleanupCron(
     prisma,
     blockfrost,
-    6 * 60 * 60_000,  // Check 6 tiếng / lần
+    3 * 60 * 60_000,  // Check 6 tiếng / lần
     60 * 60_000,      // Xóa các record rác tồn tại quá 1 tiếng
     env.ORDER_ROUTES_ENABLED,
   );

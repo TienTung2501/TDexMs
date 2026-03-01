@@ -23,6 +23,7 @@ import {
   type LucidEvolution,
 } from '@lucid-evolution/lucid';
 import { getLogger } from '../../config/logger.js';
+import { TxSubmitter } from '../../solver/TxSubmitter.js';
 import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
@@ -116,6 +117,9 @@ export class OrderExecutorCron {
     if (!this.keeperAddress) {
       lucid.selectWallet.fromSeed(this.solverSeedPhrase);
       this.keeperAddress = await lucid.wallet().address();
+      // Register with TxSubmitter singleton so all three services (SolverEngine,
+      // OrderExecutorCron, ReclaimKeeperCron) share the same serial TX queue.
+      TxSubmitter.getInstance().setLucid(lucid);
       this.logger.info(
         { keeperAddress: this.keeperAddress },
         'Order executor keeper wallet initialised',
@@ -335,23 +339,26 @@ export class OrderExecutorCron {
       },
     });
 
-    // Sign and submit via keeper wallet
-    const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
-    const submittedHash = await signed.submit();
-
-    this.logger.info(
-      { orderId: order.id, type: order.type, txHash: submittedHash },
-      'Order execution TX submitted — awaiting on-chain confirmation',
-    );
-
-    // CRITICAL RULE: Await on-chain confirmation before updating DB
-    const confirmed = await lucid.awaitTx(submittedHash, 120_000);
-    if (!confirmed) {
-      this.logger.warn(
-      { orderId: order.id, type: order.type, txHash: submittedHash },
-      'Order execution TX not confirmed within 120s — DB not updated; will retry next tick'
-      );
-      return;
+    // Sign and submit via TxSubmitter queue — prevents UTxO contention with other bots
+    let submittedHash: string;
+    try {
+      submittedHash = await TxSubmitter.getInstance().submit({
+        label: `order-execute id=${order.id} type=${order.type}`,
+        signAndSubmit: async () => {
+          const signed = await lucid.fromTx(unsignedTx).sign.withWallet().complete();
+          return signed.submit();
+        },
+      });
+    } catch (submitErr) {
+      const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+      if (submitMsg.includes('not confirmed within')) {
+        this.logger.warn(
+          { orderId: order.id, type: order.type },
+          'Order execution TX not confirmed within timeout — DB not updated; will retry next tick',
+        );
+        return;
+      }
+      throw submitErr;
     }
 
     this.logger.info(

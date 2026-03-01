@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Solver Engine â€” Main orchestrator
  * Runs the continuous loop: collect â†’ validate â†’ route â†’ batch â†’ settle.
  * Uses Blockfrost for chain interaction (replaces Ogmios).
@@ -11,6 +11,7 @@
  * CRITICAL RULE: All DB state changes occur ONLY after on-chain TX confirmation.
  */
 import { getLogger } from '../config/logger.js';
+import { TxSubmitter } from './TxSubmitter.js';
 import { IntentCollector } from './IntentCollector.js';
 import { RouteOptimizer } from './RouteOptimizer.js';
 import { BatchBuilder } from './BatchBuilder.js';
@@ -72,6 +73,16 @@ export class SolverEngine {
   private lastActiveIntents = 0;
   private lastTxHash: string | null = null;
 
+  /**
+   * Per-escrow validator crash counter.
+   * Key: "{txHash}#{outputIndex}" — incremented each time the on-chain
+   * Plutus script simulation rejects a solo settlement for that specific escrow.
+   * After MAX_VALIDATOR_CRASHES solo failures we stop retrying the intent permanently
+   * for this process lifetime (avoids infinite loop on structurally bad intents).
+   */
+  private readonly validatorCrashCounts = new Map<string, number>();
+  private static readonly MAX_VALIDATOR_CRASHES = 3;
+
   /** Get current solver status (thread-safe read) */
   getStatus(): SolverStatus {
     return {
@@ -121,6 +132,9 @@ export class SolverEngine {
           this.config.network,
         );
         lucid.selectWallet.fromSeed(this.config.solverSeedPhrase);
+        // Register with TxSubmitter singleton so SolverEngine, OrderExecutorCron
+        // and ReclaimKeeperCron all submit TXs serially (prevents UTxO contention).
+        TxSubmitter.getInstance(180_000, 2_000).setLucid(lucid);
         return lucid;
       })();
     }
@@ -206,13 +220,25 @@ export class SolverEngine {
         staleCount++;
         continue;
       }
-      if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING' && dbIntent.status !== 'PARTIALLY_FILLED') {
+     // ⚡ AUTO-HEAL: Nếu UTxO đã tồn tại trên chuỗi (Chain) mà DB vẫn là CREATED
+      if (dbIntent.status === 'CREATED') {
+        this.logger.info(
+          { intentId: dbIntent.id, txHash: intent.utxoRef.txHash },
+          'Auto-healing: Found valid on-chain UTxO for CREATED intent. Upgrading to ACTIVE.',
+        );
+        // Chỉ gọi API update xuống Database, không cần modify object dbIntent
+        await this.intentRepo.updateStatus(dbIntent.id, 'ACTIVE');
+        
+      } 
+      // Chuyển thành "else if" để nếu nó đã là CREATED ở trên thì không lọt vào đây nữa
+      else if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING' && dbIntent.status !== 'PARTIALLY_FILLED') {
         this.logger.debug(
           { intentId: dbIntent.id, status: dbIntent.status },
           'Skipping non-ACTIVE/PARTIALLY_FILLED DB intent',
         );
         continue;
       }
+      
       // Recovery check: if intent is FILLING with a pending settlementTxHash,
       // a previous iteration submitted a TX but timed out waiting for confirmation.
       // Don't re-settle — the TX may still confirm and consume the escrow UTxO.
@@ -229,6 +255,16 @@ export class SolverEngine {
         this.logger.debug(
           { intentId: dbIntent.id, deadline: String(dbIntent.deadline) },
           'Skipping expired intent (deadline passed)',
+        );
+        continue;
+      }
+      // Skip intents whose escrow UTxO has caused repeated validator crashes —
+      // they are structurally unsettleable (e.g. minOutput can never be satisfied).
+      const escrowKey = `${intent.utxoRef.txHash}#${intent.utxoRef.outputIndex}`;
+      if ((this.validatorCrashCounts.get(escrowKey) ?? 0) >= SolverEngine.MAX_VALIDATOR_CRASHES) {
+        this.logger.debug(
+          { escrowKey, intentId: dbIntent.id },
+          'Skipping escrow permanently blacklisted after validator crashes',
         );
         continue;
       }
@@ -434,10 +470,74 @@ export class SolverEngine {
             await this.settleBatch(subBatchGroup, anyPartial);
             await sleep(2000);
           } catch (err) {
-            this.logger.error(
-              { err, poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
-              'Failed to settle sub-batch',
-            );
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const isValidatorCrash =
+              errMsg.includes('validator crashed') || errMsg.includes('exited prematurely');
+
+            // When a multi-intent batch crashes the validator, bisect:
+            // settle each intent individually so healthy ones still process
+            // and the bad escrow(s) are identified and tracked.
+            if (isValidatorCrash && subBatch.intents.length > 1) {
+              this.logger.warn(
+                { poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
+                'Batch validator crash — bisecting: retrying each intent solo',
+              );
+              for (const solo of subBatch.intents) {
+                const escrowKey = `${solo.utxoRef.txHash}#${solo.utxoRef.outputIndex}`;
+                const crashCount = this.validatorCrashCounts.get(escrowKey) ?? 0;
+                if (crashCount >= SolverEngine.MAX_VALIDATOR_CRASHES) {
+                  this.logger.warn(
+                    { escrowKey, crashCount },
+                    'Skipping escrow — validator crash limit reached; intent likely structurally unsettleable',
+                  );
+                  continue;
+                }
+                const soloBatch: typeof batch = {
+                  ...batch,
+                  intents: [solo],
+                  totalInputAmount: solo.remainingInput > 0n ? solo.remainingInput : solo.inputAmount,
+                  totalOutputAmount: 0n,
+                };
+                // ⚡ VÁ LỖ HỔNG: Kiểm tra lợi nhuận trước khi chạy Solo ⚡
+                const soloSurplus = this.batchBuilder.calculateSurplus(soloBatch);
+                if (soloSurplus < this.config.minProfitLovelace) {
+                  this.logger.warn(
+                    { escrowKey, surplus: soloSurplus.toString(), minRequired: this.config.minProfitLovelace.toString() },
+                    'Solo intent not profitable enough to settle individually after bisect, skipping',
+                  );
+                  // Không tính là crash, chỉ là không đủ lời để chạy solo lúc này
+                  continue; 
+                }
+                try {
+                  await this.settleBatch(soloBatch, routes.get(escrowKey)?.isPartialFill ?? false);
+                  await sleep(2000);
+                } catch (soloErr) {
+                  const soloMsg = soloErr instanceof Error ? soloErr.message : String(soloErr);
+                  const isSoloCrash =
+                    soloMsg.includes('validator crashed') || soloMsg.includes('exited prematurely');
+                  if (isSoloCrash) {
+                    const newCount = crashCount + 1;
+                    this.validatorCrashCounts.set(escrowKey, newCount);
+                    this.logger.error(
+                      { escrowKey, crashCount: newCount, max: SolverEngine.MAX_VALIDATOR_CRASHES },
+                      newCount >= SolverEngine.MAX_VALIDATOR_CRASHES
+                        ? 'Escrow permanently skipped after repeated validator crashes'
+                        : 'Solo validator crash — will retry next iteration',
+                    );
+                  } else {
+                    this.logger.error(
+                      { soloErr, poolId: batch.poolId, escrowKey },
+                      'Failed to settle solo intent after bisect',
+                    );
+                  }
+                }
+              }
+            } else {
+              this.logger.error(
+                { err, poolId: batch.poolId, direction: subBatch.label, intentCount: subBatch.intents.length },
+                'Failed to settle sub-batch',
+              );
+            }
           } finally {
             this.collector.clearProcessing(refs);
           }
@@ -472,15 +572,40 @@ export class SolverEngine {
 
           const refs = [singleIntent.utxoRef];
           this.collector.markProcessing(refs);
+          // ⚡ VÁ LỖ HỔNG 2: Kiểm tra lợi nhuận cho Single Intent ⚡
+          const singleSurplus = this.batchBuilder.calculateSurplus(singleBatch);
+          if (singleSurplus < this.config.minProfitLovelace) {
+            this.logger.debug(
+              { utxoRef: intentKey, surplus: singleSurplus.toString() },
+              'Single intent not profitable enough to settle individually, skipping',
+            );
+            this.collector.clearProcessing(refs); // Nhớ clearProcessing trước khi thoát
+            continue;
+          }
 
           try {
             await this.settleBatch(singleBatch, isPartialFill);
             await sleep(2000);
           } catch (err) {
-            this.logger.error(
-              { err, poolId: batch.poolId, utxoRef: intentKey },
-              'Failed to settle single intent',
-            );
+            const errMsg = err instanceof Error ? err.message : String(err);
+            const isValidatorCrash =
+              errMsg.includes('validator crashed') || errMsg.includes('exited prematurely');
+            const escrowKey = intentKey;
+            if (isValidatorCrash) {
+              const crashCount = (this.validatorCrashCounts.get(escrowKey) ?? 0) + 1;
+              this.validatorCrashCounts.set(escrowKey, crashCount);
+              this.logger.error(
+                { escrowKey, crashCount, max: SolverEngine.MAX_VALIDATOR_CRASHES, poolId: batch.poolId },
+                crashCount >= SolverEngine.MAX_VALIDATOR_CRASHES
+                  ? 'Escrow permanently skipped after repeated validator crashes'
+                  : 'Solo intent validator crash — will retry next iteration',
+              );
+            } else {
+              this.logger.error(
+                { err, poolId: batch.poolId, utxoRef: intentKey },
+                'Failed to settle single intent',
+              );
+            }
           } finally {
             this.collector.clearProcessing(refs);
           }
@@ -544,80 +669,78 @@ export class SolverEngine {
         }
 
         // Submit the TX â€” sign with solver wallet first
+        // Submit via TxSubmitter queue — serial submission prevents UTxO contention
+        // between SolverEngine, OrderExecutorCron and ReclaimKeeperCron sharing the same wallet.
         let submittedTxHash: string;
         try {
-          submittedTxHash = await this.signAndSubmitTx(txResult.unsignedTx);
-        } catch (signErr) {
-          const errMsg = signErr instanceof Error ? signErr.message : String(signErr);
-          // "All inputs are spent" / "already been included" means the TX landed on-chain
-          // before this submit attempt (e.g. a previous retry already confirmed it).
-          // Treat as success: skip FILLING→ACTIVE revert and proceed directly to awaitTx.
-          if (
-            errMsg.includes('All inputs are spent') ||
-            errMsg.includes('already been included')
-          ) {
-            this.logger.info(
-              { txHash: txResult.txHash, poolId: batch.poolId },
-              'TX already included on-chain — skipping re-submit, awaiting confirmation',
+          submittedTxHash = await TxSubmitter.getInstance(180_000, 2_000).submit({
+            label: `settlement pool=${batch.poolId} intents=${batch.intents.length} attempt=${attempt}`,
+            signAndSubmit: async () => {
+              try {
+                return await this.signAndSubmitTx(txResult.unsignedTx);
+              } catch (signErr) {
+                const signMsg = signErr instanceof Error ? signErr.message : String(signErr);
+                // "All inputs are spent" / "already been included": TX already landed on-chain
+                // (e.g. a previous retry succeeded). Return known txHash so TxSubmitter
+                // proceeds to awaitTx normally instead of treating it as a failure.
+                if (
+                  signMsg.includes('All inputs are spent') ||
+                  signMsg.includes('already been included')
+                ) {
+                  this.logger.info(
+                    { txHash: txResult.txHash, poolId: batch.poolId },
+                    'TX already included on-chain — skipping re-submit, awaiting confirmation',
+                  );
+                  return txResult.txHash;
+                }
+                // Genuine sign/submit failure — revert FILLING → ACTIVE before propagating
+                for (const intent of batch.intents) {
+                  const intentId = await this.resolveIntentId(
+                    intent.utxoRef.txHash,
+                    intent.utxoRef.outputIndex,
+                  );
+                  if (intentId) {
+                    await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+                  }
+                }
+                throw new Error(`TX sign/submit failed: ${signMsg}`);
+              }
+            },
+          });
+        } catch (submitErr) {
+          const submitMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
+          // TxSubmitter throws "not confirmed within Nms" on awaitTx timeout.
+          // IMPORTANT: Do NOT revert to ACTIVE — the TX may still confirm on-chain
+          // which would consume the escrow UTxO. Keep FILLING and store txHash.
+          if (submitMsg.includes('not confirmed within')) {
+            this.logger.warn(
+              { txHash: txResult.txHash },
+              'Settlement TX not confirmed within 180s — keeping FILLING status (TX may still confirm)',
             );
-            submittedTxHash = txResult.txHash;
-          } else {
-            // Genuine failure — revert FILLING → ACTIVE so the batch can be retried
             for (const intent of batch.intents) {
               const intentId = await this.resolveIntentId(
                 intent.utxoRef.txHash,
                 intent.utxoRef.outputIndex,
               );
               if (intentId) {
-                await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+                const dbIntent = await this.intentRepo.findById(intentId);
+                if (dbIntent) {
+                  dbIntent.markPendingSettlement(txResult.txHash);
+                  await this.intentRepo.save(dbIntent);
+                }
               }
             }
-            throw new Error(`TX sign/submit failed: ${errMsg}`);
+            return;
           }
+          throw submitErr; // propagate to outer retry catch
         }
-
-        this.logger.info(
-          { txHash: submittedTxHash, poolId: batch.poolId },
-          'Settlement TX signed and submitted — awaiting on-chain confirmation',
-        );
 
         // Track last submitted TX hash for admin monitoring
         this.lastTxHash = submittedTxHash;
 
-        // CRITICAL RULE: Await on-chain confirmation before any DB updates
-        const confirmed = await this.chainProvider.awaitTx(submittedTxHash, 180_000);
-        if (!confirmed) {
-          // TX accepted into mempool but not confirmed within 180s.
-          // IMPORTANT: Do NOT revert to ACTIVE. The TX may still confirm on-chain
-          // which would consume the escrow UTxO. Reverting to ACTIVE could cause
-          // the solver to try settling an already-consumed UTxO.
-          // Instead, keep as FILLING and store the submitted txHash for traceability.
-          // On the next solver iteration, if the escrow UTxO is no longer on-chain,
-          // the intent simply won't appear in the collector results.
-          this.logger.warn(
-            { txHash: submittedTxHash },
-            'Settlement TX not confirmed within 180s - keeping FILLING status (TX may still confirm)',
-          );
-          for (const intent of batch.intents) {
-            const intentId = await this.resolveIntentId(
-              intent.utxoRef.txHash,
-              intent.utxoRef.outputIndex,
-            );
-            if (intentId) {
-              // Store txHash for traceability but keep FILLING status
-              const dbIntent = await this.intentRepo.findById(intentId);
-              if (dbIntent) {
-                dbIntent.markPendingSettlement(submittedTxHash);
-                await this.intentRepo.save(dbIntent);
-              }
-            }
-          }
-          return;
-        }
-
         this.logger.info(
           { txHash: submittedTxHash, poolId: batch.poolId },
-          'Settlement TX confirmed on-chain” updating DB',
+          'Settlement TX confirmed on-chain — updating DB',
         );
 
         // â”€â”€ Post-confirmation DB updates â”€â”€
@@ -792,6 +915,35 @@ export class SolverEngine {
 
         return; // Success
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // "validator crashed / exited prematurely" is a Plutus script simulation
+        // failure — the tx structure is fundamentally wrong for these inputs.
+        // Retrying with the same inputs will always produce the same result.
+        // Break immediately to avoid burning all maxRetries slots uselessly.
+        const isValidatorCrash =
+          errMsg.includes('validator crashed') ||
+          errMsg.includes('exited prematurely');
+
+        if (isValidatorCrash) {
+          // Revert FILLING → ACTIVE so intents remain processable (bisect will handle them)
+          for (const intent of batch.intents) {
+            try {
+              const intentId = await this.resolveIntentId(
+                intent.utxoRef.txHash,
+                intent.utxoRef.outputIndex,
+              );
+              if (intentId) {
+                await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+              }
+            } catch { /* best-effort */ }
+          }
+          this.logger.error(
+            { poolId: batch.poolId, intentCount: batch.intents.length, error: errMsg },
+            'Validator simulation crashed — aborting retries (non-retryable)',
+          );
+          throw err; // propagate immediately; no point retrying
+        }
+
         if (attempt < this.config.maxRetries) {
           this.logger.warn(
             { attempt, err },
@@ -824,3 +976,41 @@ export class SolverEngine {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+// review
+// . Thuật toán tìm kiếm nhị phân trong RouteOptimizer.ts
+// Vấn đề: Khi một lệnh quá lớn làm trượt giá (Slippage) vượt mức cho phép, làm sao để biết nên khớp bao nhiêu % là tối ưu nhất?
+
+// Cách bạn giải quyết: Bạn dùng Binary Search (Tìm kiếm nhị phân) trong hàm calculateMaxIntentFill (kết hợp AmmMath.ts).
+
+// Đánh giá: Đây là tư duy thuật toán cực kỳ sắc bén. Thay vì hardcode cắt giảm 50% một cách máy móc, bạn để máy tính tự dò dẫm giới hạn cao nhất có thể khớp. Rất ít Junior/Mid-level dev nghĩ ra cách này.
+
+// B. Cơ chế Netting Engine (Khớp lệnh nội bộ)
+// Ý tưởng: Gom phe Mua và phe Bán lại, bù trừ cho nhau (Cross-match) và chỉ mang "phần dư" (Net flow) đi giao dịch với AMM Pool.
+
+// Đánh giá: Đây là mô hình của các sàn DEX thế hệ mới (như CowSwap). Dù hiện tại Smart Contract của bạn chưa hỗ trợ gộp 2 chiều vào 1 TX (bạn đã chú thích rất rõ ở dòng 165 SolverEngine.ts), nhưng việc bạn thiết kế sẵn Engine này cho thấy bạn có tầm nhìn xa về việc tối ưu hóa thanh khoản và phí mạng.
+
+// C. Hàng đợi TX (TxSubmitter.ts) chống tranh chấp UTxO
+// Vấn đề: Cardano xài mô hình UTxO. Nếu 2 con Bot cùng lấy 1 đồng ADA trong ví Solver để làm phí TX, khi gửi lên mạng, 1 TX sẽ bị lỗi "UTxO already spent" (Tranh chấp).
+
+// Cách bạn giải quyết: Thiết kế mẫu Singleton Pattern tạo ra một hàng đợi (Queue). Các TX phải xếp hàng, TX trước báo confirmed xong thì TX sau mới được nộp.
+
+// Đánh giá: Giải quyết triệt để bài toán Concurrency (Đồng thời) cơ bản trên Cardano.
+
+// 3. Cảnh báo Kỹ thuật (Technical Debt) & Hướng Mở rộng
+// Hệ thống hiện tại chạy rất hoàn hảo trên một Server đơn lẻ (như Render Free bạn đang dùng). Tuy nhiên, nếu công ty yêu cầu bạn Scale-up (chạy 3-5 server cùng lúc để tăng tốc độ), kiến trúc này sẽ gặp vấn đề:
+
+// Vấn đề In-Memory State (Lưu trạng thái trong RAM):
+
+// processingSet trong IntentCollector: Chống xử lý trùng lặp lệnh.
+
+// validatorCrashCounts trong SolverEngine: Đếm số lần crash của lệnh độc hại.
+
+// queue trong TxSubmitter: Hàng đợi nộp TX.
+
+// Tại sao lại lỗi nếu Scale? Cả 3 biến trên đều là biến cục bộ (lưu trong RAM của Node.js). Nếu bạn chạy 2 server (Instance A và Instance B), chúng sẽ không biết RAM của nhau. Lệnh độc hại có thể bị Instance A khóa, nhưng Instance B vẫn ngây thơ gắp vào và bị crash. Hai Instance cũng có thể lấy trùng UTxO vì hàng đợi TxSubmitter bị tách rời.
+
+// 👉 Giải pháp (Cách trả lời phỏng vấn):
+// "Hiện tại đây là bản Proof-of-Concept nên tôi dùng In-Memory State để xử lý Concurrency và Circuit Breaker. Để triển khai Production Multi-instance, tôi sẽ chuyển toàn bộ cấu trúc này sang Redis: Dùng Redis Set cho processingSet, Redis Hash cho crashCounts và dùng Redis Pub/Sub hoặc BullMQ làm hàng đợi phân tán cho TxSubmitter."
+
+// Tổng Kết
+// Dự án SolverNet của bạn là một dự án chất lượng cao. Cấu trúc thư mục Clean Architecture, xử lý lỗi tinh tế, các Helper Math chuẩn xác và chú thích (comment) code cực kỳ rõ ràng, chuyên nghiệp.

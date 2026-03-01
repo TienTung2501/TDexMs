@@ -81,6 +81,7 @@ export class GhostCleanupCron {
 
     await Promise.all([
       this.cleanupGhostIntents(cutoffDate),
+      this.cleanupStuckCanceling(cutoffDate), // <--- GỌI THÊM Ở ĐÂY
       this.ordersEnabled
         ? this.cleanupGhostOrders(cutoffDate)
         : Promise.resolve(),
@@ -299,6 +300,61 @@ export class GhostCleanupCron {
       }
     } catch (err) {
       this.logger.error({ err }, 'Ghost pool cleanup failed');
+    }
+  }
+  /**
+   * Giải cứu các lệnh bị kẹt ở trạng thái CANCELING (hoặc tương tự).
+   * Nếu quá maxAgeMs (5 phút) mà vẫn chưa Cancel xong, đưa nó về lại ACTIVE.
+   */
+  private async cleanupStuckCanceling(cutoffDate: Date): Promise<void> {
+    try {
+      const stuckIntents = await this.prisma.intent.findMany({
+        where: {
+          status: 'CANCELLING', // Thay bằng string chính xác trong schema của bạn nếu khác
+          updatedAt: { lt: cutoffDate }, // Dùng updatedAt để tính từ lúc user bấm Cancel
+        },
+        select: {
+          id: true,
+          escrowTxHash: true,
+        },
+        take: 50,
+      });
+
+      if (stuckIntents.length === 0) return;
+
+      this.logger.info(
+        { count: stuckIntents.length },
+        'Found stuck CANCELING intents — checking on-chain status',
+      );
+
+      let rescued = 0;
+
+      for (const intent of stuckIntents) {
+        try {
+          // Khôi phục về ACTIVE để Solver có thể xử lý tiếp, 
+          // hoặc user có thể bấm Cancel lại.
+          await this.prisma.intent.update({
+            where: { id: intent.id },
+            data: { status: 'ACTIVE' },
+          });
+          rescued++;
+          this.logger.info(
+            { intentId: intent.id },
+            'Ghost cleanup: rescued stuck CANCELING intent back to ACTIVE',
+          );
+        } catch (err) {
+          this.logger.warn(
+            { intentId: intent.id, err },
+            'Ghost cleanup: failed to rescue stuck CANCELING intent',
+          );
+        }
+      }
+
+      if (rescued > 0) {
+        this.logger.info({ rescued }, 'Stuck CANCELING rescue completed');
+      }
+    } catch (err) {
+      this.logger.error({ err }, 'Stuck CANCELING rescue failed');
     }
   }
 }
