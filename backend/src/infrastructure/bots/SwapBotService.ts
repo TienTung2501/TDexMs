@@ -23,8 +23,8 @@ import {
 import { getLogger } from '../../config/logger.js';
 
 // ─── Config ────────────────────────────────────────────────────────
-const MIN_INTERVAL_MS = 5 * 60 * 1000;    // 5 minutes
-const MAX_INTERVAL_MS = 30 * 60 * 1000;   // 30 minutes
+const MIN_INTERVAL_MS = 60 * 60 * 1000;    // 60 minutes
+const MAX_INTERVAL_MS = 120 * 60 * 1000;   // 120 minutes
 const MIN_ADA_BALANCE = 10_000_000n;       // 10 ADA minimum
 const SLIPPAGE_BPS    = 500n;              // 5% slippage tolerance
 const INTENT_DEADLINE_MS = 4 * 3600 * 1000; // 4 hour deadline

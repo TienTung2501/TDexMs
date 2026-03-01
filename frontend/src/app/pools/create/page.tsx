@@ -84,6 +84,7 @@ export default function CreatePoolPage() {
         buildingMsg: "Building pool creation transaction...",
         successMsg: `Pool ${tokenA.ticker}/${tokenB.ticker} created!`,
         action: "create_pool",
+        extractId: (res) => ({ poolId: res.poolId || '' }),
         onSuccess: () => {
           // Could redirect: router.push("/pools");
         },

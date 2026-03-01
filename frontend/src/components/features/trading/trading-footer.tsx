@@ -4,8 +4,10 @@ import React, { useState, useMemo } from "react";
 import { ArrowRight, ExternalLink, Loader2, XCircle, Clock, CheckCircle, AlertCircle, RefreshCw, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { truncateAddress, formatTokenAmount, toHuman, cn } from "@/lib/utils";
-import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
+import { CursorPaginator } from "@/components/ui/paginator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { truncateAddress, formatTokenAmount, cn } from "@/lib/utils";
+import { useIntents, usePaginatedIntents, type NormalizedIntent } from "@/lib/hooks";
 import { useWallet } from "@/providers/wallet-provider";
 import { cancelIntent } from "@/lib/api";
 import { useTransaction } from "@/lib/hooks/use-transaction";
@@ -56,14 +58,30 @@ function timeAgo(iso: string): string {
 export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooterProps) {
   const [tab, setTab] = useState<TabId>("trades");
   const { isConnected, address } = useWallet();
-  const { execute: executeTx, busy: txBusy, TxToastContainer } = useTransaction();
+  const { execute: executeTx, TxToastContainer } = useTransaction();
+  // Track which specific intent is being cancelled (per-row), not a global flag
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
-  // All intents (unfiltered) for market trades
-  const { intents: allIntents, loading: tradesLoading } = useIntents({});
+  // Server-side paginated intents for market trades
+  const {
+    intents: marketIntents,
+    loading: tradesLoading,
+    hasMore: tradesHasMore,
+    hasPrev: tradesHasPrev,
+    goNext: tradesGoNext,
+    goPrev: tradesGoPrev,
+    rangeStart: tradesFrom,
+    rangeEnd: tradesTo,
+    total: tradesTotal,
+  } = usePaginatedIntents({ pageSize: 20 });
 
-  // User intents for "My Intents" tab
+  // User intents — only fetch when wallet is connected; if address is undefined
+  // the hook with an empty address would return ALL global intents instead of
+  // the user's own, causing the badge count to reflect every open intent in
+  // the system while no wallet is connected.
   const { intents: userIntents, loading: intentsLoading, refetch: refetchIntents } = useIntents({
     address: isConnected ? address ?? undefined : undefined,
+    enabled: isConnected && !!address,
   });
 
   // Filter intents to current pair if inputToken & outputToken are provided
@@ -76,12 +94,11 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
   };
 
   const filteredTrades = useMemo(
-    () => allIntents
+    () => marketIntents
       .filter(pairFilter)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 50),
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [allIntents, inputToken?.ticker, outputToken?.ticker]
+    [marketIntents, inputToken?.ticker, outputToken?.ticker]
   );
 
   const filteredUserIntents = useMemo(
@@ -90,12 +107,16 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
     [userIntents, inputToken?.ticker, outputToken?.ticker]
   );
 
-  const openCount = filteredUserIntents.filter(
-    (i) => i.status === "ACTIVE" || i.status === "PENDING"
-  ).length;
+  // Badge count = ALL of the user's ACTIVE/PENDING intents across every pair.
+  // Previously this used filteredUserIntents (pair-scoped), so the badge would
+  // show 0 if the user had intents on a different pair than they were viewing.
+  const openCount = isConnected
+    ? userIntents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING").length
+    : 0;
 
   const handleCancelIntent = async (intentId: string) => {
-    if (!address) return;
+    if (!address || cancellingId) return;
+    setCancellingId(intentId);
     await executeTx(
       () => cancelIntent(intentId, address),
       {
@@ -103,7 +124,16 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
         successMsg: "Intent cancelled!",
         action: "cancel_intent",
         extractId: (res) => ({ intentId: res.intentId }),
-        onSuccess: () => refetchIntents(),
+        onSuccess: () => {
+          setCancellingId(null);
+          refetchIntents();
+        },
+        onError: () => {
+          // Wallet rejected or TX failed — clear lock and refetch to pick up
+          // any status that the backend may have rolled back.
+          setCancellingId(null);
+          refetchIntents();
+        },
       },
     );
   };
@@ -150,7 +180,10 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
       {/* Content */}
       <div className="max-h-[300px] overflow-y-auto">
         {tab === "trades" && (
-          <MarketTradesTab trades={filteredTrades} loading={tradesLoading} />
+          <MarketTradesTab
+            trades={filteredTrades}
+            loading={tradesLoading}
+          />
         )}
         {tab === "intents" && (
           <MyIntentsTab
@@ -158,10 +191,24 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
             loading={intentsLoading}
             isConnected={isConnected}
             onCancel={handleCancelIntent}
-            cancelBusy={txBusy}
+            cancellingId={cancellingId}
           />
         )}
       </div>
+      {tab === "trades" && (tradesHasMore || tradesHasPrev) && (
+        <div className="border-t border-border/30 px-3 py-1.5">
+          <CursorPaginator
+            total={tradesTotal}
+            rangeStart={tradesFrom}
+            rangeEnd={tradesTo}
+            hasMore={tradesHasMore}
+            hasPrev={tradesHasPrev}
+            onNext={tradesGoNext}
+            onPrev={tradesGoPrev}
+            loading={tradesLoading}
+          />
+        </div>
+      )}
     </div>
     </>
   );
@@ -178,8 +225,16 @@ function MarketTradesTab({
 }) {
   if (loading && trades.length === 0) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="px-3 py-3 space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="flex justify-between items-center gap-3 py-1">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-14" />
+            <Skeleton className="h-3 w-14" />
+            <Skeleton className="h-4 w-12 rounded-full" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -270,13 +325,13 @@ function MyIntentsTab({
   loading,
   isConnected,
   onCancel,
-  cancelBusy,
+  cancellingId,
 }: {
   intents: NormalizedIntent[];
   loading: boolean;
   isConnected: boolean;
   onCancel: (id: string) => void;
-  cancelBusy: boolean;
+  cancellingId: string | null;
 }) {
   if (!isConnected) {
     return (
@@ -288,8 +343,15 @@ function MyIntentsTab({
 
   if (loading && intents.length === 0) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="px-3 py-3 space-y-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="flex justify-between items-center gap-3 py-1">
+            <Skeleton className="h-3 w-16" />
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-4 w-12 rounded-full" />
+            <Skeleton className="h-3 w-10" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -319,7 +381,8 @@ function MyIntentsTab({
       </thead>
       <tbody>
         {intents.map((intent) => {
-          const canCancel = intent.status === "ACTIVE" || intent.status === "PENDING";
+          // CANCELLING is included so users can retry if wallet signing was rejected
+          const canCancel = intent.status === "ACTIVE" || intent.status === "PENDING" || intent.status === "CANCELLING";
           const canReclaim = intent.status === "EXPIRED";
           const txHash = intent.settlementTxHash || intent.escrowTxHash;
           const deadlineDate = new Date(intent.deadline);
@@ -404,10 +467,14 @@ function MyIntentsTab({
                     variant="ghost"
                     className="h-6 px-2 text-destructive hover:text-destructive text-[10px]"
                     onClick={() => onCancel(intent.id)}
-                    disabled={cancelBusy}
+                    disabled={cancellingId !== null}
                   >
-                    <XCircle className="h-3 w-3 mr-0.5" />
-                    Cancel
+                    {cancellingId === intent.id ? (
+                      <Loader2 className="h-3 w-3 mr-0.5 animate-spin" />
+                    ) : (
+                      <XCircle className="h-3 w-3 mr-0.5" />
+                    )}
+                    {cancellingId === intent.id ? "Cancelling..." : intent.status === "CANCELLING" ? "Retry Cancel" : "Cancel"}
                   </Button>
                 )}
                 {canReclaim && (
@@ -416,7 +483,7 @@ function MyIntentsTab({
                     variant="outline"
                     className="h-6 px-2 text-amber-600 border-amber-500/30 hover:bg-amber-500/10 text-[10px] animate-pulse"
                     onClick={() => onCancel(intent.id)}
-                    disabled={cancelBusy}
+                    disabled={cancellingId !== null}
                   >
                     <Undo2 className="h-3 w-3 mr-0.5" />
                     Reclaim

@@ -12,17 +12,22 @@ import {
   BarChart3,
   Percent,
   Layers,
+  Droplets,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PriceChart, TIMEFRAME_TO_INTERVAL, type ChartTimeframe, type ChartMode } from "@/components/features/trading/price-chart";
 import { LiquidityForm } from "@/components/features/liquidity/liquidity-form";
 import { RecentTradesTable } from "@/components/features/trading/recent-trades-table";
 import { TokenPairIcon } from "@/components/ui/token-icon";
 import { PoolHistoryChart } from "@/components/charts/pool-history-chart";
 import { usePool, useCandles } from "@/lib/hooks";
+import { useWallet } from "@/providers/wallet-provider";
+import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
 import { getPoolHistory, type PoolHistoryEntry } from "@/lib/api";
 import { formatCompact, cn } from "@/lib/utils";
 
@@ -39,6 +44,83 @@ function usePoolHistory(poolId: string | undefined) {
       .finally(() => setLoading(false));
   }, [poolId]);
   return { history, loading };
+}
+
+// ─── Your Position Card ──────────────────────────────────────────────────────
+function UserPositionCard({ pool, decimalsA, decimalsB, reserveAHuman, reserveBHuman }: {
+  pool: NonNullable<ReturnType<typeof usePool>["pool"]>;
+  decimalsA: number;
+  decimalsB: number;
+  reserveAHuman: number;
+  reserveBHuman: number;
+}) {
+  const { isConnected, balances } = useWallet();
+
+  const userLpBalance = useMemo(() => {
+    if (!pool.lpPolicyId || !pool.poolNftAssetName) return 0;
+    const lpUnit = pool.lpPolicyId + pool.poolNftAssetName;
+    return balances[lpUnit] ?? 0;
+  }, [pool.lpPolicyId, pool.poolNftAssetName, balances]);
+
+  const sharePercent = pool.totalLpTokens > 0 ? (userLpBalance / pool.totalLpTokens) * 100 : 0;
+  const userTokenA = (reserveAHuman * userLpBalance) / (pool.totalLpTokens || 1);
+  const userTokenB = (reserveBHuman * userLpBalance) / (pool.totalLpTokens || 1);
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Droplets className="h-4 w-4 text-primary" />
+          Your Position
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!isConnected ? (
+          <div className="text-center py-3 space-y-2">
+            <p className="text-xs text-muted-foreground">Connect your wallet to see your LP position</p>
+            <WalletConnectDialog />
+          </div>
+        ) : userLpBalance === 0 ? (
+          <div className="flex items-start gap-2 text-xs text-muted-foreground py-2">
+            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/70" />
+            <span>You have no LP tokens for this pool. Deposit liquidity below to get started.</span>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg bg-secondary/50 p-3 text-center">
+                <p className="text-[10px] text-muted-foreground mb-1">LP Tokens</p>
+                <p className="font-mono font-semibold text-sm text-primary">{formatCompact(userLpBalance)}</p>
+              </div>
+              <div className="rounded-lg bg-secondary/50 p-3 text-center">
+                <p className="text-[10px] text-muted-foreground mb-1">Pool Share</p>
+                <p className="font-mono font-semibold text-sm">{sharePercent.toFixed(4)}%</p>
+              </div>
+            </div>
+            <Separator />
+            <div className="space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground flex items-center gap-1">
+                  <span>{pool.assetA.logo}</span> {pool.assetA.ticker}
+                </span>
+                <span className="font-mono font-medium">
+                  {userTokenA > 1000 ? formatCompact(userTokenA) : userTokenA.toLocaleString(undefined, { maximumFractionDigits: decimalsA > 0 ? 6 : 0 })}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground flex items-center gap-1">
+                  <span>{pool.assetB.logo}</span> {pool.assetB.ticker}
+                </span>
+                <span className="font-mono font-medium">
+                  {userTokenB > 1000 ? formatCompact(userTokenB) : userTokenB.toLocaleString(undefined, { maximumFractionDigits: decimalsB > 0 ? 6 : 0 })}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function PoolDetailPage() {
@@ -79,8 +161,24 @@ export default function PoolDetailPage() {
 
   if (poolLoading && !pool) {
     return (
-      <div className="shell py-16 flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="shell py-8 space-y-6">
+        {/* Header skeleton */}
+        <Skeleton className="h-9 w-48" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-4">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-[400px] w-full rounded-xl" />
+          </div>
+          <div className="space-y-4">
+            <Skeleton className="h-40 w-full rounded-xl" />
+            <Skeleton className="h-64 w-full rounded-xl" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 rounded-xl" />
+          ))}
+        </div>
       </div>
     );
   }
@@ -203,9 +301,7 @@ export default function PoolDetailPage() {
             </CardHeader>
             <CardContent className="px-1">
               {candlesLoading && candles.length === 0 ? (
-                <div className="flex items-center justify-center h-[400px]">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
+                <Skeleton className="h-[400px] w-full rounded-lg" />
               ) : (
                 <PriceChart
                   data={candles}
@@ -219,8 +315,11 @@ export default function PoolDetailPage() {
           </Card>
         </div>
 
-        {/* Liquidity form */}
+        {/* Liquidity form + Your Position */}
         <div className="space-y-6">
+          {/* Your Position */}
+          <UserPositionCard pool={pool} decimalsA={decimalsA} decimalsB={decimalsB} reserveAHuman={reserveAHuman} reserveBHuman={reserveBHuman} />
+
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Manage Liquidity</CardTitle>
@@ -289,8 +388,10 @@ export default function PoolDetailPage() {
           </CardHeader>
           <CardContent>
             {historyLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <div className="space-y-2 py-2">
+                <Skeleton className="h-5 w-full" />
+                <Skeleton className="h-24 w-full" />
+                <Skeleton className="h-4 w-3/4" />
               </div>
             ) : (
               <PoolHistoryChart data={history} loading={historyLoading} />

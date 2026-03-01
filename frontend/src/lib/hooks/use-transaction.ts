@@ -108,9 +108,11 @@ export function useTransaction(): UseTransactionReturn {
         const txHash = await signAndSubmitTx(result.unsignedTx);
 
         if (!txHash) {
+          const cancelErr = new Error("Transaction signing was cancelled");
           toast("error", "Transaction was not signed");
           setStage("idle");
           setBusy(false);
+          onError?.(cancelErr);
           return null;
         }
 

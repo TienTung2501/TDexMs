@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useRef } from "react";
+import React, { useState, useCallback, useRef, useMemo } from "react";
 import { Loader2, CheckCircle2, AlertCircle, Send, Pen, PenLine, ExternalLink, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +43,63 @@ const STAGE_CONFIG: Record<TxStage, { icon: React.ReactNode; color: string; titl
 };
 
 /**
+ * Standalone container component — defined OUTSIDE the hook so React always
+ * sees the same component type (no unmount/remount on every re-render).
+ */
+const TxToastContainerInner = React.memo(function TxToastContainerInner({
+  toasts,
+  onDismiss,
+}: {
+  toasts: TxToastState[];
+  onDismiss: (id: number) => void;
+}) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+      {toasts.map((t) => {
+        const cfg = STAGE_CONFIG[t.stage];
+        return (
+          <div
+            key={t.id}
+            className={cn(
+              "relative flex items-start gap-3 rounded-xl border border-border bg-card p-4 shadow-xl backdrop-blur-sm",
+              "animate-in slide-in-from-right-5 fade-in duration-300",
+            )}
+          >
+            <div className={cn("mt-0.5 shrink-0", cfg.color)}>{cfg.icon}</div>
+            <div className="flex-1 min-w-0">
+              <p className={cn("text-sm font-semibold leading-tight", cfg.color)}>
+                {cfg.title}
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5 break-words">
+                {t.message}
+              </p>
+              {t.txHash && (
+                <a
+                  href={`https://preprod.cardanoscan.io/transaction/${t.txHash}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                >
+                  View on explorer
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
+            </div>
+            <button
+              onClick={() => onDismiss(t.id)}
+              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
+/**
  * Lightweight TX-aware toast hook.
  * Usage:
  *   const { toast, TxToastContainer } = useTxToast();
@@ -75,52 +132,12 @@ export function useTxToast() {
     [dismiss],
   );
 
-  function TxToastContainer() {
-    if (toasts.length === 0) return null;
-    return (
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
-        {toasts.map((t) => {
-          const cfg = STAGE_CONFIG[t.stage];
-          return (
-            <div
-              key={t.id}
-              className={cn(
-                "relative flex items-start gap-3 rounded-xl border border-border bg-card p-4 shadow-xl backdrop-blur-sm",
-                "animate-in slide-in-from-right-5 fade-in duration-300",
-              )}
-            >
-              <div className={cn("mt-0.5 shrink-0", cfg.color)}>{cfg.icon}</div>
-              <div className="flex-1 min-w-0">
-                <p className={cn("text-sm font-semibold leading-tight", cfg.color)}>
-                  {cfg.title}
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5 break-words">
-                  {t.message}
-                </p>
-                {t.txHash && (
-                  <a
-                    href={`https://preprod.cardanoscan.io/transaction/${t.txHash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
-                  >
-                    View on explorer
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-              </div>
-              <button
-                onClick={() => dismiss(t.id)}
-                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    );
-  }
+  // Memoized JSX element — React reconciles by inner component identity
+  // (TxToastContainerInner), not by function reference, so no remounting.
+  const TxToastContainer = useCallback(
+    () => <TxToastContainerInner toasts={toasts} onDismiss={dismiss} />,
+    [toasts, dismiss],
+  );
 
   return { toast, TxToastContainer, dismiss };
 }

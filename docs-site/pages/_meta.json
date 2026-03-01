@@ -1,23 +1,18 @@
 {
   "index": {
-    "title": "Home",
-    "type": "page",
+    "title": "🏠 Home",
     "theme": {
-      "layout": "full",
-      "sidebar": false,
+      "layout": "default",
       "breadcrumb": false,
       "pagination": false
     }
   },
   "docs": {
-    "title": "Documentation",
-    "type": "page"
+    "title": "📖 Documentation"
   },
   "changelog": {
-    "title": "Changelog",
-    "type": "page",
+    "title": "📋 Changelog",
     "theme": {
-      "sidebar": false,
       "toc": true
     }
   }

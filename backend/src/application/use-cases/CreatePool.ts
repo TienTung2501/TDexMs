@@ -103,7 +103,7 @@ export class CreatePool {
       outputIndex: txResult.poolMeta?.poolOutputIndex ?? 0,
       // R-07 fix: store LP policy ID so portfolio can read LP balances on-chain
       lpPolicyId: txResult.poolMeta?.lpPolicyId ?? undefined,
-      state: 'ACTIVE' as const,
+      state: 'CREATING' as const, // Transitions to ACTIVE via POST /tx/confirm after on-chain confirmation
       createdAt: now,
       updatedAt: now,
     });

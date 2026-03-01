@@ -1,45 +1,30 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
-import { Search, TrendingUp, TrendingDown, Droplets, Loader2, Plus, AlertCircle } from "lucide-react";
+import { Search, TrendingUp, TrendingDown, Droplets, Plus, AlertCircle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TokenPairIcon } from "@/components/ui/token-icon";
-import { usePools, useAnalytics } from "@/lib/hooks";
+import { usePaginatedPools, useAnalytics } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
+import { CursorPaginator } from "@/components/ui/paginator";
 
 export default function PoolsPage() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"tvl" | "volume" | "apy">("tvl");
 
-  const { pools: allPools, loading: poolsLoading, isRefetching: poolsRefetching, error: poolsError } = usePools();
-  const { analytics, loading: analyticsLoading, isRefetching: analyticsRefetching } = useAnalytics();
+  const handleSearch = (v: string) => setSearch(v);
+  const handleSortBy = (v: "tvl" | "volume" | "apy") => setSortBy(v);
 
-  const filteredPools = useMemo(() => {
-    let pools = [...allPools];
-
-    if (search) {
-      const q = search.toLowerCase();
-      pools = pools.filter(
-        (p) =>
-          p.assetA.ticker.toLowerCase().includes(q) ||
-          p.assetB.ticker.toLowerCase().includes(q) ||
-          p.assetA.name.toLowerCase().includes(q) ||
-          p.assetB.name.toLowerCase().includes(q)
-      );
-    }
-
-    pools.sort((a, b) => {
-      if (sortBy === "tvl") return b.tvlAda - a.tvlAda;
-      if (sortBy === "volume") return b.volume24h - a.volume24h;
-      return b.apy - a.apy;
-    });
-
-    return pools;
-  }, [allPools, search, sortBy]);
+  const {
+    pools, total, loading: poolsLoading, isRefetching: poolsRefetching, error: poolsError,
+    hasMore, hasPrev, goNext, goPrev, rangeStart, rangeEnd,
+  } = usePaginatedPools({ sortBy, search });
+  const { analytics, loading: analyticsLoading } = useAnalytics();
 
   return (
     <div className="shell py-8 space-y-6">
@@ -75,7 +60,7 @@ export default function PoolsPage() {
             <div className="text-xs text-muted-foreground">{s.label}</div>
             <div className="text-lg font-bold mt-1">
               {analyticsLoading && !analytics ? (
-                <Loader2 className="h-4 w-4 animate-spin mx-auto" />
+                <Skeleton className="h-6 w-16 mx-auto" />
               ) : (
                 s.value
               )}
@@ -91,7 +76,7 @@ export default function PoolsPage() {
           <Input
             placeholder="Search pools..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearch(e.target.value)}
             className="pl-9"
           />
         </div>
@@ -99,7 +84,7 @@ export default function PoolsPage() {
           {(["tvl", "volume", "apy"] as const).map((key) => (
             <button
               key={key}
-              onClick={() => setSortBy(key)}
+              onClick={() => handleSortBy(key)}
               className={cn(
                 "px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer",
                 sortBy === key
@@ -122,20 +107,35 @@ export default function PoolsPage() {
       )}
 
       {/* Pool grid */}
-      {poolsLoading && allPools.length === 0 ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      {poolsLoading && pools.length === 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-9 w-9 rounded-full" />
+                    <div className="space-y-1">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-3 w-14" />
+                    </div>
+                  </div>
+                  <Skeleton className="h-5 w-14 rounded-full" />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1"><Skeleton className="h-3 w-8" /><Skeleton className="h-4 w-14" /></div>
+                  <div className="space-y-1"><Skeleton className="h-3 w-12" /><Skeleton className="h-4 w-14" /></div>
+                  <div className="space-y-1"><Skeleton className="h-3 w-8" /><Skeleton className="h-4 w-10" /></div>
+                </div>
+                <Skeleton className="h-1.5 w-full rounded-full" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : (
         <div className="relative">
-          {/* Subtle background refetch indicator */}
-          {poolsRefetching && (
-            <div className="absolute top-2 right-2 z-10">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/50" />
-            </div>
-          )}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredPools.map((pool) => (
+        <div className={cn("grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4", poolsRefetching && "opacity-70 transition-opacity")}>
+          {pools.map((pool) => (
             <Link key={pool.id} href={`/pools/${pool.id}`}>
               <Card className="hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5 transition-all cursor-pointer h-full">
                 <CardContent className="p-5 space-y-4">
@@ -208,10 +208,21 @@ export default function PoolsPage() {
             </Link>
           ))}
         </div>
+        <CursorPaginator
+          total={total}
+          rangeStart={rangeStart}
+          rangeEnd={rangeEnd}
+          hasMore={hasMore}
+          hasPrev={hasPrev}
+          onNext={goNext}
+          onPrev={goPrev}
+          loading={poolsLoading}
+          className="mt-4"
+        />
         </div>
       )}
 
-      {!poolsLoading && filteredPools.length === 0 && (
+      {!poolsLoading && pools.length === 0 && (
         <div className="text-center py-12 text-muted-foreground">
           <Droplets className="h-10 w-10 mx-auto mb-3 opacity-30" />
           <p className="text-sm">No pools found matching your search.</p>

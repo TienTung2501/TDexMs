@@ -8,7 +8,6 @@ import {
   XCircle,
   AlertCircle,
   ExternalLink,
-  Loader2,
   ShoppingCart,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,9 +15,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { CursorPaginator } from "@/components/ui/paginator";
 import { useWallet } from "@/providers/wallet-provider";
 import { WalletConnectDialog } from "@/components/features/wallet/wallet-connect-dialog";
-import { useIntents, useOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
+import { usePaginatedIntents, usePaginatedOrders, type NormalizedIntent, type NormalizedOrder } from "@/lib/hooks";
 import { cancelOrder } from "@/lib/api";
 import { truncateAddress, cn } from "@/lib/utils";
 import { useTransaction } from "@/lib/hooks/use-transaction";
@@ -47,47 +48,45 @@ export default function OrdersPage() {
   const [tab, setTab] = useState("all");
   const { execute: executeTx, busy: txBusy, TxToastContainer } = useTransaction();
 
-  const { intents, total, loading } = useIntents({
+  // Tab → backend status mapping (undefined = no filter = fetch all)
+  const intentStatus = tab === "filled" ? "FILLED" : tab === "closed" ? "CANCELLED" : undefined;
+  const orderStatus  = tab === "filled" ? "FILLED" : tab === "closed" ? "CANCELLED" : undefined;
+
+  const {
+    intents, total, loading, hasMore: intentsHasMore, hasPrev: intentsHasPrev,
+    goNext: intentsNext, goPrev: intentsPrev, rangeStart: iFrom, rangeEnd: iTo,
+  } = usePaginatedIntents({
     address: isConnected ? address ?? undefined : undefined,
+    status: intentStatus,
+    pageSize: 20,
+    enabled: isConnected && !!address,
   });
 
-  const { orders, total: ordersTotal, loading: ordersLoading, refetch: refetchOrders } = useOrders({
+  const {
+    orders, total: ordersTotal, loading: ordersLoading, hasMore: ordersHasMore, hasPrev: ordersHasPrev,
+    goNext: ordersNext, goPrev: ordersPrev, rangeStart: oFrom, rangeEnd: oTo,
+    refetch: refetchOrders,
+  } = usePaginatedOrders({
     creator: isConnected ? address ?? undefined : undefined,
+    status: orderStatus,
+    pageSize: 20,
+    enabled: isConnected && !!address,
   });
 
+  // Client-side filter for "active" tab (combines multiple statuses that backend can't merge)
   const filtered = useMemo(() => {
-    if (tab === "all") return intents;
     if (tab === "active")
-      return intents.filter(
-        (i) =>
-          i.status === "ACTIVE" ||
-          i.status === "PENDING" ||
-          i.status === "CREATED" ||
-          i.status === "FILLING"
-      );
-    if (tab === "filled")
-      return intents.filter((i) => i.status === "FILLED");
-    return intents.filter(
-      (i) =>
-        i.status === "CANCELLED" ||
-        i.status === "EXPIRED" ||
-        i.status === "RECLAIMED"
-    );
+      return intents.filter(i => ["ACTIVE","PENDING","CREATED","FILLING"].includes(i.status));
+    return intents;
   }, [tab, intents]);
 
   const filteredOrders = useMemo(() => {
-    if (tab === "all") return orders;
-    if (tab === "active")
-      return orders.filter((o) => o.status === "ACTIVE" || o.status === "PARTIALLY_FILLED");
-    if (tab === "filled")
-      return orders.filter((o) => o.status === "FILLED");
-    return orders.filter(
-      (o) => o.status === "CANCELLED" || o.status === "EXPIRED"
-    );
+    if (tab === "active") return orders.filter(o => ["ACTIVE","PARTIALLY_FILLED"].includes(o.status));
+    return orders;
   }, [tab, orders]);
 
   const handleCancelOrder = async (orderId: string) => {
-    if (!address) return;
+    if (!address || txBusy) return;
     await executeTx(
       () => cancelOrder(orderId, address),
       {
@@ -96,6 +95,7 @@ export default function OrdersPage() {
         action: "cancel_order",
         extractId: (res) => ({ orderId: res.orderId }),
         onSuccess: () => refetchOrders(),
+        onError: () => refetchOrders(),
       },
     );
   };
@@ -119,12 +119,13 @@ export default function OrdersPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Orders</h1>
         <div className="flex items-center gap-2">
-          <Badge variant="secondary">
-            {total} intents
-          </Badge>
-          <Badge variant="secondary">
-            {ordersTotal} orders
-          </Badge>
+          {section === "intents" ? (
+            loading ? <Skeleton className="h-5 w-20 rounded-full" /> :
+            <Badge variant="secondary">{total.toLocaleString()} intents</Badge>
+          ) : (
+            ordersLoading ? <Skeleton className="h-5 w-20 rounded-full" /> :
+            <Badge variant="secondary">{ordersTotal.toLocaleString()} orders</Badge>
+          )}
         </div>
       </div>
 
@@ -156,82 +157,28 @@ export default function OrdersPage() {
         </button>
       </div>
 
-      {/* Summary */}
-      {section === "intents" ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            {
-              label: "Active",
-              count: intents.filter(
-                (i) => i.status === "ACTIVE" || i.status === "PENDING"
-              ).length,
-              color: "text-primary",
-            },
-            {
-              label: "Filled",
-              count: intents.filter((i) => i.status === "FILLED").length,
-              color: "text-primary",
-            },
-            {
-              label: "Cancelled",
-              count: intents.filter((i) => i.status === "CANCELLED").length,
-              color: "text-muted-foreground",
-            },
-            {
-              label: "Total",
-              count: intents.length,
-              color: "text-foreground",
-            },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className="rounded-xl border border-border/50 bg-card/50 p-3 text-center"
-            >
-              <div className="text-xs text-muted-foreground">{s.label}</div>
-              <div className={cn("text-xl font-bold mt-1", s.color)}>
-                {loading && intents.length === 0 ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            {
-              label: "Active",
-              count: orders.filter(
-                (o) => o.status === "ACTIVE" || o.status === "PARTIALLY_FILLED"
-              ).length,
-              color: "text-primary",
-            },
-            {
-              label: "Filled",
-              count: orders.filter((o) => o.status === "FILLED").length,
-              color: "text-primary",
-            },
-            {
-              label: "Cancelled",
-              count: orders.filter((o) => o.status === "CANCELLED" || o.status === "EXPIRED").length,
-              color: "text-muted-foreground",
-            },
-            {
-              label: "Total",
-              count: orders.length,
-              color: "text-foreground",
-            },
-          ].map((s) => (
-            <div
-              key={s.label}
-              className="rounded-xl border border-border/50 bg-card/50 p-3 text-center"
-            >
-              <div className="text-xs text-muted-foreground">{s.label}</div>
-              <div className={cn("text-xl font-bold mt-1", s.color)}>
-                {ordersLoading && orders.length === 0 ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : s.count}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Summary — simple stat strip replacing the old 4-card grid */}
+      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+        {section === "intents" ? (
+          loading && intents.length === 0 ? (
+            <div className="flex gap-4"><Skeleton className="h-4 w-24" /><Skeleton className="h-4 w-24" /></div>
+          ) : (
+            <>
+              <span><span className="font-semibold text-primary">{intents.filter(i=>["ACTIVE","PENDING","FILLING"].includes(i.status)).length}</span> active on this page</span>
+              <span><span className="font-semibold text-foreground">{total.toLocaleString()}</span> total</span>
+            </>
+          )
+        ) : (
+          ordersLoading && orders.length === 0 ? (
+            <div className="flex gap-4"><Skeleton className="h-4 w-24" /><Skeleton className="h-4 w-24" /></div>
+          ) : (
+            <>
+              <span><span className="font-semibold text-primary">{orders.filter(o=>["ACTIVE","PARTIALLY_FILLED"].includes(o.status)).length}</span> active on this page</span>
+              <span><span className="font-semibold text-foreground">{ordersTotal.toLocaleString()}</span> total</span>
+            </>
+          )
+        )}
+      </div>
 
       {/* Tabs & List */}
       <Tabs value={tab} onValueChange={setTab}>
@@ -246,8 +193,18 @@ export default function OrdersPage() {
           {section === "intents" ? (
             /* ─── Intents List ─── */
             loading && intents.length === 0 ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <div className="space-y-3 py-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Card key={i}><CardContent className="p-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="flex gap-3 flex-1">
+                        <Skeleton className="h-6 w-20 rounded-full" />
+                        <div className="space-y-2 flex-1"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-32" /></div>
+                      </div>
+                      <div className="space-y-2 text-right"><Skeleton className="h-3 w-24" /><Skeleton className="h-3 w-20" /></div>
+                    </div>
+                  </CardContent></Card>
+                ))}
               </div>
             ) : filtered.length === 0 ? (
               <div className="text-center py-12 text-sm text-muted-foreground">
@@ -255,7 +212,8 @@ export default function OrdersPage() {
                 No intents found for this filter.
               </div>
             ) : (
-              filtered.map((intent) => {
+              <>
+              {filtered.map((intent) => {
                 const cfg = STATUS_CONFIG[intent.status as IntentStatus] || STATUS_CONFIG.PENDING;
                 const StatusIcon = cfg.icon;
 
@@ -311,13 +269,31 @@ export default function OrdersPage() {
                     </CardContent>
                   </Card>
                 );
-              })
+              })}
+              <CursorPaginator
+                total={total} rangeStart={iFrom} rangeEnd={iTo}
+                hasMore={intentsHasMore} hasPrev={intentsHasPrev}
+                onNext={intentsNext} onPrev={intentsPrev}
+                loading={loading} className="mt-2 pt-2 border-t border-border/30"
+              />
+              </>
             )
           ) : (
             /* ─── Advanced Orders List ─── */
             ordersLoading && orders.length === 0 ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <div className="space-y-3 py-2">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Card key={i}><CardContent className="p-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="flex gap-3 flex-1">
+                        <Skeleton className="h-6 w-14 rounded-full" />
+                        <Skeleton className="h-6 w-20 rounded-full" />
+                        <div className="space-y-2 flex-1"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-32" /></div>
+                      </div>
+                      <Skeleton className="h-8 w-20" />
+                    </div>
+                  </CardContent></Card>
+                ))}
               </div>
             ) : filteredOrders.length === 0 ? (
               <div className="text-center py-12 text-sm text-muted-foreground">
@@ -325,7 +301,8 @@ export default function OrdersPage() {
                 No advanced orders found for this filter.
               </div>
             ) : (
-              filteredOrders.map((order) => {
+              <>
+              {filteredOrders.map((order) => {
                 const isActive = order.status === "ACTIVE" || order.status === "PARTIALLY_FILLED";
                 const isFilled = order.status === "FILLED";
                 const variant = isFilled ? "success" : isActive ? "default" : "secondary";
@@ -406,6 +383,7 @@ export default function OrdersPage() {
                               variant="outline"
                               className="text-destructive border-destructive/30 hover:bg-destructive/10"
                               onClick={() => handleCancelOrder(order.id)}
+                              disabled={txBusy}
                             >
                               <XCircle className="h-3.5 w-3.5 mr-1" />
                               Cancel
@@ -416,7 +394,14 @@ export default function OrdersPage() {
                     </CardContent>
                   </Card>
                 );
-              })
+              })}
+              <CursorPaginator
+                total={ordersTotal} rangeStart={oFrom} rangeEnd={oTo}
+                hasMore={ordersHasMore} hasPrev={ordersHasPrev}
+                onNext={ordersNext} onPrev={ordersPrev}
+                loading={ordersLoading} className="mt-2 pt-2 border-t border-border/30"
+              />
+              </>
             )
           )}
         </TabsContent>

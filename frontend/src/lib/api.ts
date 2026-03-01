@@ -280,6 +280,11 @@ export interface DepositResponse {
   unsignedTx: string;
   txHash: string;
   estimatedLpTokens: string;
+  /** Forwarded to confirmTx for deferred reserve DB update */
+  poolId: string;
+  newReserveA: string;
+  newReserveB: string;
+  newTotalLp: string;
 }
 
 export async function depositLiquidity(poolId: string, body: DepositRequest): Promise<DepositResponse> {
@@ -302,6 +307,11 @@ export interface WithdrawResponse {
   txHash: string;
   estimatedAmountA: string;
   estimatedAmountB: string;
+  /** Forwarded to confirmTx for deferred reserve DB update */
+  poolId: string;
+  newReserveA: string;
+  newReserveB: string;
+  newTotalLp: string;
 }
 
 export async function withdrawLiquidity(poolId: string, body: WithdrawRequest): Promise<WithdrawResponse> {

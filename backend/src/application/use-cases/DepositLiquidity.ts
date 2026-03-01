@@ -20,6 +20,11 @@ export interface DepositLiquidityOutput {
   txHash: string;
   estimatedFee: string;
   estimatedLpTokens: string;
+  /** Fields forwarded to POST /tx/confirm for deferred DB update (prevents reserve corruption on TX failure) */
+  poolId: string;
+  newReserveA: string;
+  newReserveB: string;
+  newTotalLp: string;
 }
 
 export class DepositLiquidity {
@@ -61,47 +66,22 @@ export class DepositLiquidity {
       lpToMint: estimatedLp,
     });
 
-    // B3 fix: Optimistically update pool reserves in DB after building TX
+    // B3 fix (revised): Compute new reserves now, but defer the actual DB update to
+    // POST /tx/confirm so reserves are ONLY updated when the TX is confirmed on-chain.
+    // Previously updating here caused reserve inflation if the user rejected wallet signing.
     const newReserveA = pool.reserveA + BigInt(input.amountA);
     const newReserveB = pool.reserveB + BigInt(input.amountB);
     const newTotalLp = pool.totalLpTokens + estimatedLp;
-    await this.poolRepo.updateReserves(
-      pool.id,
-      newReserveA,
-      newReserveB,
-      newTotalLp,
-      txResult.txHash,
-      pool.outputIndex, // Will be corrected by ChainSync
-    );
-
-    // Task 1 fix: Insert PoolHistory snapshot for charting/APY tracking
-    const newPrice = newReserveB > 0n ? Number(newReserveA) / Number(newReserveB) : 0;
-    await this.poolRepo.insertHistory({
-      poolId: pool.id,
-      reserveA: newReserveA,
-      reserveB: newReserveB,
-      tvlAda: pool.tvlAda,
-      volume: pool.volume24h,
-      fees: pool.fees24h,
-      price: newPrice,
-    });
-
-    // Task 4 fix: Emit real-time pool update via WebSocket
-    this.wsServer?.broadcastPool({
-      poolId: pool.id,
-      reserveA: newReserveA.toString(),
-      reserveB: newReserveB.toString(),
-      price: newPrice.toString(),
-      tvlAda: pool.tvlAda.toString(),
-      lastTxHash: txResult.txHash,
-      timestamp: Date.now(),
-    });
 
     return {
       unsignedTx: txResult.unsignedTx,
       txHash: txResult.txHash,
       estimatedFee: txResult.estimatedFee.toString(),
       estimatedLpTokens: estimatedLp.toString(),
+      poolId: input.poolId,
+      newReserveA: newReserveA.toString(),
+      newReserveB: newReserveB.toString(),
+      newTotalLp: newTotalLp.toString(),
     };
   }
 }

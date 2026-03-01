@@ -8,6 +8,7 @@ import { IntentDepth } from "@/components/features/trading/pseudo-orderbook";
 import { TradingFooter } from "@/components/features/trading/trading-footer";
 import { TokenPairIcon } from "@/components/ui/token-icon";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TOKENS, type Token } from "@/lib/mock-data";
 import { useAnalytics, usePools, useCandles, usePrice, useIntents } from "@/lib/hooks";
 import { formatCompact, cn } from "@/lib/utils";
@@ -41,12 +42,17 @@ export default function SwapPage() {
     setPairInitialized(true);
   }, [pools, pairInitialized]);
 
-  // Find pool for chart — match by policyId (stable) then ticker as fallback
+  // Find pool — match by (policyId + assetName) pair for non-ADA tokens, or ticker for ADA.
+  // Using policyId alone is NOT safe because test tokens like tBTC and tUSD share the same
+  // policyId "a257..."; we must also check assetName to distinguish them.
   const pool = useMemo(() => {
     if (!inputToken || !outputToken) return undefined;
-    const matchToken = (poolToken: { policyId: string; ticker?: string }, t: { policyId: string; ticker?: string }) =>
-      poolToken.policyId === t.policyId ||
-      (poolToken.ticker && t.ticker && poolToken.ticker.toUpperCase() === t.ticker.toUpperCase());
+    const tokenKey = (t: { policyId: string; assetName?: string; ticker?: string }) =>
+      t.policyId === '' ? `ada:${t.ticker?.toUpperCase() ?? ''}` : `${t.policyId}:${t.assetName ?? ''}`;
+    const matchToken = (
+      poolToken: { policyId: string; assetName?: string; ticker?: string },
+      t: { policyId: string; assetName?: string; ticker?: string },
+    ) => tokenKey(poolToken) === tokenKey(t);
     return pools.find(
       (p) =>
         (matchToken(p.assetA, inputToken) && matchToken(p.assetB, outputToken)) ||
@@ -55,14 +61,20 @@ export default function SwapPage() {
   }, [pools, inputToken, outputToken]);
 
   // Determine direction: is inputToken the pool's assetA?
+  // IMPORTANT: Compare policyId+assetName together, NOT policyId alone.
+  // Some test tokens share the same policyId (e.g. tBTC and tUSD are both
+  // under "a257a138..."), so policyId alone cannot distinguish them.
   const isForward = useMemo(() => {
     if (!pool || !inputToken) return true;
-    return (
-      pool.assetA.policyId === inputToken.policyId ||
-      (pool.assetA.policyId === "" &&
-        inputToken.policyId === "" &&
-        pool.assetA.ticker?.toUpperCase() === inputToken.ticker?.toUpperCase())
-    );
+    const tokenKey = (t: { policyId: string; assetName?: string }) =>
+      `${t.policyId}:${t.assetName ?? ''}`;
+    // ADA special-case: both policyId and assetName are empty; fall back to ticker
+    if (pool.assetA.policyId === '' && inputToken.policyId === '') {
+      return (
+        pool.assetA.ticker?.toUpperCase() === inputToken.ticker?.toUpperCase()
+      );
+    }
+    return tokenKey(pool.assetA) === tokenKey(inputToken);
   }, [pool, inputToken]);
 
   // Decimal-aware candle fetching
@@ -108,10 +120,20 @@ export default function SwapPage() {
   // Loading state while pools load and pair auto-selects
   if (!inputToken || !outputToken) {
     return (
-      <div className="shell py-4 flex items-center justify-center min-h-[60vh]">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">Loading trading pairs...</p>
+      <div className="shell py-4 space-y-3">
+        {/* Market info header skeleton */}
+        <Skeleton className="h-14 w-full rounded-xl" />
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+          {/* Chart skeleton */}
+          <div className="space-y-3">
+            <Skeleton className="h-[420px] w-full rounded-xl" />
+            <Skeleton className="h-48 w-full rounded-xl" />
+          </div>
+          {/* Swap card skeleton */}
+          <div className="space-y-3">
+            <Skeleton className="h-72 w-full rounded-xl" />
+            <Skeleton className="h-32 w-full rounded-xl" />
+          </div>
         </div>
       </div>
     );

@@ -81,12 +81,16 @@ export function SwapCard({
   const [quoteLoading, setQuoteLoading] = useState(false);
 
 
-  // Find pool — match by policyId (stable) then ticker as fallback
+  // Find pool — match by (policyId + assetName) combined key.
+  // policyId alone is NOT safe: test tokens like tBTC and tUSD share the same policyId.
   const pool = useMemo(() => {
     const poolList = externalPools || [];
-    const matchToken = (poolToken: { policyId: string; ticker?: string }, t: { policyId: string; ticker?: string }) =>
-      poolToken.policyId === t.policyId ||
-      (poolToken.ticker && t.ticker && poolToken.ticker.toUpperCase() === t.ticker.toUpperCase());
+    const tokenKey = (t: { policyId: string; assetName?: string; ticker?: string }) =>
+      t.policyId === '' ? `ada:${t.ticker?.toUpperCase() ?? ''}` : `${t.policyId}:${t.assetName ?? ''}`;
+    const matchToken = (
+      poolToken: { policyId: string; assetName?: string; ticker?: string },
+      t: { policyId: string; assetName?: string; ticker?: string },
+    ) => tokenKey(poolToken) === tokenKey(t);
     return poolList.find(
       (p) =>
         (matchToken(p.assetA, inputToken) && matchToken(p.assetB, outputToken)) ||
@@ -105,9 +109,17 @@ export function SwapCard({
     const outDecimals = outputToken.decimals ?? 0;
     const amountInBase = parseFloat(inputAmount) * Math.pow(10, inDecimals);
 
-    const isForward = pool.assetA.policyId === inputToken.policyId ||
-      (pool.assetA.policyId === '' && inputToken.policyId === '' &&
-        pool.assetA.ticker?.toUpperCase() === inputToken.ticker?.toUpperCase());
+    const isForward = (() => {
+      // Compare policyId+assetName together — tokens like tBTC and tUSD share
+      // the same policyId so policyId alone is not enough to distinguish them.
+      if (pool.assetA.policyId === '' && inputToken.policyId === '') {
+        return pool.assetA.ticker?.toUpperCase() === inputToken.ticker?.toUpperCase();
+      }
+      return (
+        pool.assetA.policyId === inputToken.policyId &&
+        (pool.assetA.assetName ?? '') === (inputToken.assetName ?? '')
+      );
+    })();
     const reserveIn = isForward ? pool.reserveA : pool.reserveB;
     const reserveOut = isForward ? pool.reserveB : pool.reserveA;
 

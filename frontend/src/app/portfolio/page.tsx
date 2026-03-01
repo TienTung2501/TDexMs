@@ -30,12 +30,14 @@ import {
   usePortfolioHistory,
   usePortfolioLiquidity,
   usePortfolioLpPositions,
+  usePools,
 } from "@/lib/hooks";
 import { buildPortfolioAction } from "@/lib/api";
 import { useTransaction } from "@/lib/hooks/use-transaction";
 import { TOKENS } from "@/lib/mock-data";
 import { formatCompact, cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import { Paginator } from "@/components/ui/paginator";
 
 // ─── Helpers ────────────────────────────────
 function formatCountdown(deadline: number): string {
@@ -78,6 +80,9 @@ export default function PortfolioPage() {
   const [historyFilter, setHistoryFilter] = useState<string | undefined>(
     undefined
   );
+  const [ordersPage, setOrdersPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
+  const PAGE_SIZE = 10;
   const { history, loading: historyLoading } = usePortfolioHistory(
     isConnected ? address ?? undefined : undefined,
     historyFilter
@@ -92,6 +97,13 @@ export default function PortfolioPage() {
   const hasRealLpData = lpPositions.length > 0;
   const lpTabCount = hasRealLpData ? lpPositions.length : positions.length;
   const lpTabLoading = hasRealLpData ? lpOnChainLoading : lpLoading;
+
+  // Pool lookup map for resolving real token names in LP positions
+  const { pools: allPoolsList } = usePools();
+  const poolsById = useMemo(
+    () => new Map(allPoolsList.map((p) => [p.id, p])),
+    [allPoolsList]
+  );
 
   // Fallback summary from wallet balances when API isn't available yet
   // Also builds wallet-derived allocation if API allocation_chart is empty
@@ -175,6 +187,7 @@ export default function PortfolioPage() {
             : "Funds reclaimed to wallet",
         action: actionType.toLowerCase(),
         onSuccess: () => refetchOrders(),
+        onError: () => refetchOrders(),
       }
     );
   };
@@ -371,7 +384,7 @@ export default function PortfolioPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y">
+               <div className="divide-y">
                   {/* Header */}
                   <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase">
                     <div className="col-span-2">Date</div>
@@ -382,7 +395,7 @@ export default function PortfolioPage() {
                     <div className="col-span-2 text-right">Action</div>
                   </div>
 
-                  {openOrders.map((order) => {
+                  {openOrders.slice((ordersPage - 1) * PAGE_SIZE, ordersPage * PAGE_SIZE).map((order) => {
                     const isExpired = order.is_expired;
                     return (
                       <div
@@ -394,25 +407,16 @@ export default function PortfolioPage() {
                       >
                         {/* Date */}
                         <div className="col-span-2 text-xs text-muted-foreground">
-                          {new Date(
-                            order.created_at * 1000
-                          ).toLocaleDateString()}
+                          {new Date(order.created_at * 1000).toLocaleDateString()}
                           <br />
                           <span className="text-[10px]">
-                            {new Date(
-                              order.created_at * 1000
-                            ).toLocaleTimeString()}
+                            {new Date(order.created_at * 1000).toLocaleTimeString()}
                           </span>
                         </div>
 
                         {/* Pair & Type */}
                         <div className="col-span-2 flex items-center gap-2">
-                          <Badge
-                            className={cn(
-                              "text-[10px] px-2",
-                              TYPE_COLORS[order.type] || "bg-muted"
-                            )}
-                          >
+                          <Badge className={cn("text-[10px] px-2", TYPE_COLORS[order.type] || "bg-muted")}>
                             {order.type.replace("_", "-")}
                           </Badge>
                           <span className="font-medium text-xs">
@@ -423,28 +427,19 @@ export default function PortfolioPage() {
                         {/* Conditions */}
                         <div className="col-span-2 text-xs font-mono text-muted-foreground space-y-0.5">
                           {order.conditions.target_price != null && (
-                            <div>
-                              Target: {order.conditions.target_price}
-                            </div>
+                            <div>Target: {order.conditions.target_price}</div>
                           )}
                           {order.conditions.trigger_price != null && (
-                            <div>
-                              Trigger: {order.conditions.trigger_price}
-                            </div>
+                            <div>Trigger: {order.conditions.trigger_price}</div>
                           )}
                           {order.conditions.slippage_percent != null && (
-                            <div>
-                              Slip: {order.conditions.slippage_percent}%
-                            </div>
+                            <div>Slip: {order.conditions.slippage_percent}%</div>
                           )}
                         </div>
 
                         {/* Progress */}
                         <div className="col-span-3 space-y-1">
-                          <Progress
-                            value={order.budget.progress_percent}
-                            className="h-2"
-                          />
+                          <Progress value={order.budget.progress_percent} className="h-2" />
                           <div className="flex justify-between text-[10px] text-muted-foreground">
                             <span>{order.budget.progress_text}</span>
                             <span className="font-mono">
@@ -457,12 +452,7 @@ export default function PortfolioPage() {
                         {/* Deadline */}
                         <div className="col-span-1">
                           {isExpired ? (
-                            <Badge
-                              variant="destructive"
-                              className="text-[10px]"
-                            >
-                              Expired
-                            </Badge>
+                            <Badge variant="destructive" className="text-[10px]">Expired</Badge>
                           ) : (
                             <span className="text-xs text-muted-foreground">
                               {formatCountdown(order.deadline)}
@@ -472,51 +462,48 @@ export default function PortfolioPage() {
 
                         {/* Action */}
                         <div className="col-span-2 flex justify-end gap-2">
-                          {isExpired &&
-                          order.available_action === "RECLAIM" ? (
+                          {isExpired && order.available_action === "RECLAIM" ? (
                             <Button
-                              size="sm"
-                              variant="outline"
+                              size="sm" variant="outline"
                               className="h-7 text-xs text-amber-600 border-amber-500/30 hover:bg-amber-500/10"
-                              onClick={() =>
-                                handleAction(order.utxo_ref, "RECLAIM")
-                              }
+                              onClick={() => handleAction(order.utxo_ref, "RECLAIM")}
                               disabled={busy}
                             >
-                              <RefreshCw className="h-3 w-3 mr-1" />
-                              Reclaim
+                              <RefreshCw className="h-3 w-3 mr-1" /> Reclaim
                             </Button>
                           ) : isExpired ? (
                             <Button
-                              size="sm"
-                              variant="destructive"
-                              className="h-7 text-xs animate-pulse"
-                              onClick={() =>
-                                handleAction(order.utxo_ref, "CANCEL")
-                              }
+                              size="sm" variant="destructive" className="h-7 text-xs animate-pulse"
+                              onClick={() => handleAction(order.utxo_ref, "CANCEL")}
                               disabled={busy}
                             >
-                              <AlertTriangle className="h-3 w-3 mr-1" />
-                              Cancel (Expired)
+                              <AlertTriangle className="h-3 w-3 mr-1" /> Cancel (Expired)
                             </Button>
                           ) : (
                             <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 text-xs text-destructive hover:text-destructive"
-                              onClick={() =>
-                                handleAction(order.utxo_ref, "CANCEL")
-                              }
+                              size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive"
+                              onClick={() => handleAction(order.utxo_ref, "CANCEL")}
                               disabled={busy}
                             >
-                              <XCircle className="h-3 w-3 mr-1" />
-                              Cancel
+                              <XCircle className="h-3 w-3 mr-1" /> Cancel
                             </Button>
                           )}
                         </div>
                       </div>
                     );
                   })}
+                </div>
+              )} {/* <--- ĐÂY LÀ DẤU ĐÓNG KHỐI ELSE QUAN TRỌNG */}
+
+              {/* Phần Paginator nên nằm ngoài khối Ternary để luôn hiển thị đúng logic */}
+              {openOrders.length > PAGE_SIZE && (
+                <div className="px-4 py-3 border-t border-border/30">
+                  <Paginator
+                    page={ordersPage}
+                    pageSize={PAGE_SIZE}
+                    total={openOrders.length}
+                    onPageChange={setOrdersPage}
+                  />
                 </div>
               )}
             </CardContent>
@@ -536,7 +523,7 @@ export default function PortfolioPage() {
             ].map((f) => (
               <button
                 key={f.label}
-                onClick={() => setHistoryFilter(f.value)}
+                onClick={() => { setHistoryFilter(f.value); setHistoryPage(1); }}
                 className={cn(
                   "px-3 py-1 rounded-full text-xs font-medium transition-colors",
                   historyFilter === f.value
@@ -550,97 +537,92 @@ export default function PortfolioPage() {
           </div>
 
           <Card>
-            <CardContent className="p-0">
-              {historyLoading && history.length === 0 ? (
-                <div className="p-6 space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <Skeleton key={i} className="h-14 w-full" />
-                  ))}
-                </div>
-              ) : history.length === 0 ? (
-                <div className="p-8 text-center text-muted-foreground">
-                  <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No intent history yet</p>
-                </div>
-              ) : (
-                <div className="divide-y">
-                  {/* Header */}
-                  <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase">
-                    <div className="col-span-2">Date</div>
-                    <div className="col-span-2">Type & Pair</div>
-                    <div className="col-span-2">Status</div>
-                    <div className="col-span-2">Avg Price</div>
-                    <div className="col-span-2">Total Value</div>
-                    <div className="col-span-2 text-right">Explorer</div>
-                  </div>
+  <CardContent className="p-0">
+    {historyLoading && history.length === 0 ? (
+      <div className="p-6 space-y-3">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-14 w-full" />
+        ))}
+      </div>
+    ) : history.length === 0 ? (
+      <div className="p-8 text-center text-muted-foreground">
+        <History className="h-8 w-8 mx-auto mb-2 opacity-30" />
+        <p className="text-sm">No intent history yet</p>
+      </div>
+    ) : (
+      <>
+        <div className="divide-y">
+          {/* Header */}
+          <div className="hidden md:grid grid-cols-12 gap-2 px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase">
+            <div className="col-span-2">Date</div>
+            <div className="col-span-2">Type & Pair</div>
+            <div className="col-span-2">Status</div>
+            <div className="col-span-2">Avg Price</div>
+            <div className="col-span-2">Total Value</div>
+            <div className="col-span-2 text-right">Explorer</div>
+          </div>
 
-                  {history.map((entry) => (
-                    <div
-                      key={entry.order_id}
-                      className="grid grid-cols-1 md:grid-cols-12 gap-2 px-4 py-3 items-center text-sm"
-                    >
-                      <div className="col-span-2 text-xs text-muted-foreground">
-                        {new Date(
-                          entry.completed_at * 1000
-                        ).toLocaleDateString()}
-                        <br />
-                        <span className="text-[10px]">
-                          {new Date(
-                            entry.completed_at * 1000
-                          ).toLocaleTimeString()}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <Badge
-                          className={cn(
-                            "text-[10px] mr-1",
-                            TYPE_COLORS[entry.type] || "bg-muted"
-                          )}
-                        >
-                          {entry.type}
-                        </Badge>
-                        <span className="text-xs font-medium">
-                          {entry.pair.replace("_", "/")}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <Badge
-                          className={cn(
-                            "text-[10px]",
-                            STATUS_COLORS[entry.status] || "bg-muted"
-                          )}
-                        >
-                          {entry.status}
-                        </Badge>
-                      </div>
-                      <div className="col-span-2 font-mono text-xs">
-                        {entry.execution.average_price > 0
-                          ? entry.execution.average_price.toFixed(4)
-                          : "—"}
-                      </div>
-                      <div className="col-span-2 font-mono text-xs">
-                        ${formatCompact(entry.execution.total_value_usd)}
-                      </div>
-                      <div className="col-span-2 flex justify-end gap-1">
-                        {entry.explorer_links.slice(0, 2).map((txHash, i) => (
-                          <a
-                            key={i}
-                            href={`${EXPLORER_BASE}${txHash}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:text-primary/70"
-                            title={txHash}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </a>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {history.slice((historyPage - 1) * PAGE_SIZE, historyPage * PAGE_SIZE).map((entry) => (
+            <div
+              key={entry.order_id}
+              className="grid grid-cols-1 md:grid-cols-12 gap-2 px-4 py-3 items-center text-sm"
+            >
+              <div className="col-span-2 text-xs text-muted-foreground">
+                {new Date(entry.completed_at * 1000).toLocaleDateString()}
+                <br />
+                <span className="text-[10px]">
+                  {new Date(entry.completed_at * 1000).toLocaleTimeString()}
+                </span>
+              </div>
+              <div className="col-span-2">
+                <Badge className={cn("text-[10px] mr-1", TYPE_COLORS[entry.type] || "bg-muted")}>
+                  {entry.type}
+                </Badge>
+                <span className="text-xs font-medium">{entry.pair.replace("_", "/")}</span>
+              </div>
+              <div className="col-span-2">
+                <Badge className={cn("text-[10px]", STATUS_COLORS[entry.status] || "bg-muted")}>
+                  {entry.status}
+                </Badge>
+              </div>
+              <div className="col-span-2 font-mono text-xs">
+                {entry.execution.average_price > 0 ? entry.execution.average_price.toFixed(4) : "—"}
+              </div>
+              <div className="col-span-2 font-mono text-xs">
+                ${formatCompact(entry.execution.total_value_usd)}
+              </div>
+              <div className="col-span-2 flex justify-end gap-1">
+                {entry.explorer_links.slice(0, 2).map((txHash, i) => (
+                  <a
+                    key={i}
+                    href={`${EXPLORER_BASE}${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:text-primary/70"
+                    title={txHash}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {history.length > PAGE_SIZE && (
+          <div className="px-4 py-3 border-t border-border/30">
+            <Paginator
+              page={historyPage}
+              pageSize={PAGE_SIZE}
+              total={history.length}
+              onPageChange={setHistoryPage}
+            />
+          </div>
+        )}
+      </>
+    )}
+  </CardContent>
+</Card>
         </TabsContent>
 
         {/* ──── LP Positions Tab ──── */}
@@ -664,10 +646,11 @@ export default function PortfolioPage() {
                 /* ── New on-chain LP positions ── */
                 <div className="divide-y">
                   {lpPositions.map((pos) => {
-                    const tickerA = pos.assetATicker || "Asset A";
-                    const tickerB = pos.assetBTicker || "Asset B";
-                    const tokenA = pos.assetATicker ? TOKENS[pos.assetATicker] : undefined;
-                    const tokenB = pos.assetBTicker ? TOKENS[pos.assetBTicker] : undefined;
+                    const poolMeta = poolsById.get(pos.poolId);
+                    const tickerA = pos.assetATicker || poolMeta?.assetA.ticker || "Token A";
+                    const tickerB = pos.assetBTicker || poolMeta?.assetB.ticker || "Token B";
+                    const tokenA = pos.assetATicker ? TOKENS[pos.assetATicker] : poolMeta?.assetA;
+                    const tokenB = pos.assetBTicker ? TOKENS[pos.assetBTicker] : poolMeta?.assetB;
                     const lpBalanceNum = Number(pos.lpBalance);
                     return (
                       <div
@@ -733,9 +716,12 @@ export default function PortfolioPage() {
                 /* ── Legacy LP positions (from /portfolio/liquidity) ── */
                 <div className="divide-y">
                   {positions.map((pos, idx) => {
-                    const [tickerA, tickerB] = pos.pair.split("_");
-                    const tokenA = TOKENS[tickerA];
-                    const tokenB = TOKENS[tickerB];
+                    const poolMeta = pos.poolId ? poolsById.get(pos.poolId) : undefined;
+                    const [splitA, splitB] = (pos.pair || "").split("_");
+                    const tickerA = splitA || poolMeta?.assetA.ticker || "Token A";
+                    const tickerB = splitB || poolMeta?.assetB.ticker || "Token B";
+                    const tokenA = TOKENS[tickerA] ?? poolMeta?.assetA;
+                    const tokenB = TOKENS[tickerB] ?? poolMeta?.assetB;
                     const cv = pos.current_value ?? { asset_a_amount: 0, asset_b_amount: 0, total_value_usd: 0 };
                     return (
                       <div
@@ -765,13 +751,13 @@ export default function PortfolioPage() {
                             </p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-muted-foreground">{tickerA || "Asset A"}</p>
+                            <p className="text-[10px] text-muted-foreground">{tickerA}</p>
                             <p className="font-mono text-sm">
                               {formatCompact(cv.asset_a_amount)}
                             </p>
                           </div>
                           <div>
-                            <p className="text-[10px] text-muted-foreground">{tickerB || "Asset B"}</p>
+                            <p className="text-[10px] text-muted-foreground">{tickerB}</p>
                             <p className="font-mono text-sm">
                               {formatCompact(cv.asset_b_amount)}
                             </p>

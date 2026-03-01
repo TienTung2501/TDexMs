@@ -55,8 +55,9 @@ export class CancelOrder {
       escrowOutputIndex: props.escrowOutputIndex,
     });
 
-    // B4 fix: Save CANCELLING status (not CANCELLED) until TX confirms
-    // The order will be marked CANCELLED via POST /tx/confirm after on-chain confirmation
+    // Note: Order is immediately marked CANCELLED when TX is built (unlike intents which use
+    // CANCELLING → CANCELLED two-step). This is safe because canBeCancelled() already guards
+    // the allowed states strictly. The subsequent confirmTx call is idempotent.
     await this.orderRepo.updateStatus(input.orderId, 'CANCELLED');
 
     return {

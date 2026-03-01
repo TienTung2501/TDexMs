@@ -70,12 +70,15 @@ export function createTxRouter(
     writeLimiter,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { txHash, intentId, orderId, poolId, action } = req.body as {
+        const { txHash, intentId, orderId, poolId, action, newReserveA, newReserveB, newTotalLp } = req.body as {
           txHash?: string;
           intentId?: string;
           orderId?: string;
           poolId?: string;
           action?: string;
+          newReserveA?: string;
+          newReserveB?: string;
+          newTotalLp?: string;
         };
 
         if (!txHash) {
@@ -93,7 +96,12 @@ export function createTxRouter(
         if (intentId) {
           const isCancel = action === 'cancel' || action === 'cancel_intent';
           if (isCancel) {
-            await intentRepo.updateStatus(intentId, 'CANCELLED');
+            // Guard: only mark CANCELLED if the intent is actually in CANCELLING state.
+            // Prevents accidentally wiping an intent that was re-activated or already FILLED.
+            const current = await intentRepo.findById(intentId);
+            if (current && current.status === 'CANCELLING') {
+              await intentRepo.updateStatus(intentId, 'CANCELLED');
+            }
           } else {
             const current = await intentRepo.findById(intentId);
             if (current && ['CREATED', 'PENDING'].includes(current.status)) {
@@ -107,7 +115,12 @@ export function createTxRouter(
         if (orderId && orderRepo) {
           const isCancel = action === 'cancel' || action === 'cancel_order';
           if (isCancel) {
-            await orderRepo.updateStatus(orderId, 'CANCELLED');
+            // Guard: only confirm CANCELLED if the order hasn't already transitioned
+            // to a terminal state (FILLED, EXPIRED). Idempotent if already CANCELLED.
+            const current = await orderRepo.findById(orderId);
+            if (current && !['FILLED', 'EXPIRED'].includes(current.status)) {
+              await orderRepo.updateStatus(orderId, 'CANCELLED');
+            }
           } else {
             const current = await orderRepo.findById(orderId);
             if (current && ['CREATED', 'PENDING'].includes(current.status)) {
@@ -119,6 +132,35 @@ export function createTxRouter(
         // If a poolId was provided with burn action, mark pool INACTIVE
         if (poolId && action === 'burn_pool' && poolRepo) {
           await poolRepo.updateState(poolId, 'INACTIVE');
+        }
+
+        // If a poolId was provided with create_pool action, promote CREATING → ACTIVE
+        // (pool was saved as CREATING when TX was built; confirm on-chain success here)
+        if (poolId && action === 'create_pool' && poolRepo) {
+          await poolRepo.updateState(poolId, 'ACTIVE');
+        }
+
+        // If a poolId was provided with deposit/withdraw, apply the deferred reserve update.
+        // These were previously updated optimistically in DepositLiquidity/WithdrawLiquidity
+        // use-cases, which corrupted reserves if the user rejected wallet signing.
+        if (poolId && (action === 'deposit' || action === 'withdraw') && poolRepo && newReserveA && newReserveB && newTotalLp) {
+          const pool = await poolRepo.findById(poolId);
+          if (pool) {
+            const rA = BigInt(newReserveA);
+            const rB = BigInt(newReserveB);
+            const rLp = BigInt(newTotalLp);
+            await poolRepo.updateReserves(poolId, rA, rB, rLp, txHash, pool.outputIndex);
+            const price = rB > 0n ? Number(rA) / Number(rB) : 0;
+            await poolRepo.insertHistory({
+              poolId,
+              reserveA: rA,
+              reserveB: rB,
+              tvlAda: pool.tvlAda,
+              volume: pool.volume24h,
+              fees: pool.fees24h,
+              price,
+            });
+          }
         }
 
         res.json({ status: 'ok', txHash });

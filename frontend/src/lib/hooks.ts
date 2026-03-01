@@ -51,6 +51,8 @@ function useApi<T>(
   // `isRefetching` signals a background refetch is in progress (optional UI indicator).
   const [isRefetching, setIsRefetching] = useState(false);
   const hasFetchedRef = useRef(false);
+  // Keep a stable ref to fallback so the reset effect below doesn't recreate on every render
+  const fallbackRef = useRef(options?.fallback);
 
   const fetchData = useCallback(async () => {
     if (options?.enabled === false) {
@@ -78,6 +80,18 @@ function useApi<T>(
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // When the hook is disabled (e.g. wallet disconnected, poolId removed),
+  // reset data back to the fallback so stale results never persist.
+  const enabled = options?.enabled;
+  useEffect(() => {
+    if (enabled === false) {
+      setData(fallbackRef.current);
+      setError(null);
+      setInitialLoading(true);
+      hasFetchedRef.current = false;
+    }
+  }, [enabled]);
 
   // Auto-refetch interval
   useEffect(() => {
@@ -318,7 +332,12 @@ function assetToToken(asset: string): Token {
   };
 }
 
-export function useIntents(params?: { address?: string; status?: string }) {
+export function useIntents(params?: { address?: string; status?: string; enabled?: boolean }) {
+  // If `address` is explicitly passed but is empty/undefined, disable the fetch
+  // so that an unconnected wallet never loads the full global intent list as
+  // "user intents".
+  const addressEnabled = params?.address !== undefined ? !!params.address : true;
+  const hookEnabled = params?.enabled !== false && addressEnabled;
   const { data, loading, isRefetching, error, refetch } = useApi<IntentListResponse>(
     () =>
       listIntents({
@@ -327,7 +346,7 @@ export function useIntents(params?: { address?: string; status?: string }) {
         limit: "50",
       }),
     [params?.address, params?.status],
-    { enabled: true, refetchInterval: 15_000 }
+    { enabled: hookEnabled, refetchInterval: hookEnabled ? 15_000 : undefined }
   );
 
   const intents: NormalizedIntent[] = (data?.data || []).map((i) => {
@@ -394,7 +413,9 @@ export function useCandles(
     { enabled: !!poolId, fallback: [] }
   );
 
-  return { candles: data || [], loading, isRefetching, error, refetch };
+  // When poolId is absent (pair has no pool), always return [] so the chart
+  // never shows stale candles from the previously selected pool.
+  return { candles: poolId ? (data || []) : [], loading: poolId ? loading : false, isRefetching, error, refetch };
 }
 
 // ─── Price Hook ─────────────────────────────
@@ -514,6 +535,172 @@ export function useOrders(params?: {
   const orders: NormalizedOrder[] = (data?.items || []).map(normalizeOrder);
 
   return { orders, total: data?.total ?? 0, loading, isRefetching, error, refetch };
+}
+
+// ─── Cursor-Paginated Intents ────────────────────────────────────────────────
+// Implements cursor-stack navigation: cursorStack[N] = cursor to use for page N.
+// Supports millions of records without ever loading the full dataset into memory.
+// ─────────────────────────────────────────────────────────────────────────────
+export function usePaginatedIntents(params: {
+  address?: string;
+  status?: string;
+  pageSize?: number;
+  enabled?: boolean;
+}) {
+  const pageSize = params.pageSize ?? 20;
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  // Reset to first page whenever address or status filter changes
+  useEffect(() => {
+    setCursors([undefined]);
+    setPageIndex(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.address, params.status]);
+
+  const addressEnabled = params.address !== undefined ? !!params.address : true;
+  const hookEnabled = params.enabled !== false && addressEnabled;
+  const cursor = cursors[pageIndex];
+
+  const { data, loading, error, refetch } = useApi<IntentListResponse>(
+    () => listIntents({ address: params.address, status: params.status, cursor, limit: String(pageSize) }),
+    [params.address, params.status, cursor],
+    { enabled: hookEnabled }
+  );
+
+  // Capture the next-page cursor returned by the backend
+  useEffect(() => {
+    const nextCursor = data?.pagination?.cursor;
+    if (nextCursor && !cursors[pageIndex + 1]) {
+      setCursors(prev => { const n = [...prev]; n[pageIndex + 1] = nextCursor; return n; });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.pagination?.cursor, pageIndex]);
+
+  const intents: NormalizedIntent[] = (data?.data || []).map((i) => {
+    const inToken = assetToToken(i.inputAsset);
+    const outToken = assetToToken(i.outputAsset);
+    return {
+      id: i.intentId, status: i.status, creator: i.creator,
+      inputAsset: i.inputAsset, outputAsset: i.outputAsset,
+      inputTicker: inToken.ticker, outputTicker: outToken.ticker,
+      inputDecimals: inToken.decimals, outputDecimals: outToken.decimals,
+      inputAmount: Number(i.inputAmount), minOutput: Number(i.minOutput),
+      actualOutput: i.actualOutput ? Number(i.actualOutput) : undefined,
+      partialFill: i.partialFill ?? false, deadline: i.deadline,
+      createdAt: i.createdAt, escrowTxHash: i.escrowTxHash ?? undefined,
+      settlementTxHash: i.settlementTxHash ?? undefined,
+    };
+  });
+
+  const total = data?.pagination?.total ?? 0;
+  const hasMore = data?.pagination?.hasMore ?? false;
+  const hasPrev = pageIndex > 0;
+  return {
+    intents, total, loading, error, refetch, hasMore, hasPrev,
+    goNext: () => { if (hasMore) setPageIndex(p => p + 1); },
+    goPrev: () => { if (hasPrev) setPageIndex(p => p - 1); },
+    page: pageIndex + 1, pageSize,
+    rangeStart: total > 0 ? pageIndex * pageSize + 1 : 0,
+    rangeEnd: total > 0 ? Math.min((pageIndex + 1) * pageSize, total) : 0,
+  };
+}
+
+// ─── Cursor-Paginated Orders ──────────────────────────────────────────────────
+export function usePaginatedOrders(params: {
+  creator?: string;
+  status?: string;
+  type?: string;
+  pageSize?: number;
+  enabled?: boolean;
+}) {
+  const pageSize = params.pageSize ?? 20;
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  useEffect(() => {
+    setCursors([undefined]);
+    setPageIndex(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.creator, params.status, params.type]);
+
+  const hookEnabled = params.enabled !== false;
+  const cursor = cursors[pageIndex];
+
+  const { data, loading, error, refetch } = useApi<OrderListResponse>(
+    () => listOrders({ creator: params.creator, status: params.status, type: params.type, cursor, limit: String(pageSize) }),
+    [params.creator, params.status, params.type, cursor],
+    { enabled: hookEnabled }
+  );
+
+  useEffect(() => {
+    const nextCursor = data?.cursor ?? undefined;
+    if (nextCursor && !cursors[pageIndex + 1]) {
+      setCursors(prev => { const n = [...prev]; n[pageIndex + 1] = nextCursor; return n; });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.cursor, pageIndex]);
+
+  const orders: NormalizedOrder[] = (data?.items || []).map(normalizeOrder);
+  const total = data?.total ?? 0;
+  const hasMore = data?.hasMore ?? (data?.items?.length === pageSize);
+  const hasPrev = pageIndex > 0;
+  return {
+    orders, total, loading, error, refetch, hasMore, hasPrev,
+    goNext: () => { if (hasMore) setPageIndex(p => p + 1); },
+    goPrev: () => { if (hasPrev) setPageIndex(p => p - 1); },
+    page: pageIndex + 1, pageSize,
+    rangeStart: total > 0 ? pageIndex * pageSize + 1 : 0,
+    rangeEnd: total > 0 ? Math.min((pageIndex + 1) * pageSize, total) : 0,
+  };
+}
+
+// ─── Cursor-Paginated Pools ───────────────────────────────────────────────────
+export function usePaginatedPools(params?: {
+  sortBy?: string;
+  order?: string;
+  search?: string;
+  state?: string;
+  pageSize?: number;
+}) {
+  const pageSize = params?.pageSize ?? 12;
+  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  useEffect(() => {
+    setCursors([undefined]);
+    setPageIndex(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.sortBy, params?.order, params?.search, params?.state]);
+
+  const cursor = cursors[pageIndex];
+
+  const { data, loading, isRefetching, error, refetch } = useApi<PoolListResponse>(
+    () => listPools({ sortBy: params?.sortBy, order: params?.order, search: params?.search, state: params?.state || "ACTIVE", cursor, limit: String(pageSize) }),
+    [params?.sortBy, params?.order, params?.search, params?.state, cursor],
+    { refetchInterval: 30_000 }
+  );
+
+  useEffect(() => {
+    const nextCursor = data?.pagination?.cursor;
+    if (nextCursor && !cursors[pageIndex + 1]) {
+      setCursors(prev => { const n = [...prev]; n[pageIndex + 1] = nextCursor; return n; });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.pagination?.cursor, pageIndex]);
+
+  const pools: NormalizedPool[] = (data?.data || []).map(normalizePool);
+  const total = data?.pagination?.total ?? pools.length;
+  const hasMore = data?.pagination?.hasMore ?? false;
+  const hasPrev = pageIndex > 0;
+  return {
+    pools, total, loading, isRefetching, error, refetch, hasMore, hasPrev,
+    goNext: () => { if (hasMore) setPageIndex(p => p + 1); },
+    goPrev: () => { if (hasPrev) setPageIndex(p => p - 1); },
+    page: pageIndex + 1, pageSize,
+    rangeStart: total > 0 ? pageIndex * pageSize + 1 : 0,
+    rangeEnd: total > 0 ? Math.min((pageIndex + 1) * pageSize, total) : 0,
+  };
 }
 
 // ─── Portfolio Hook ─────────────────────────
