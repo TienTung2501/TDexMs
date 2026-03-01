@@ -469,6 +469,9 @@ export class TxBuilder implements ITxBuilder {
   // Cached resolved scripts (parameterized)
   private resolved: ResolvedScripts | null = null;
 
+  // Warn only once for missing SETTINGS_NFT_POLICY_ID (avoid per-request log spam)
+  private warnedSettingsNft = false;
+
   // Backward-compatible cached fields (used by getEscrowScripts)
   private escrowScript: Script | null = null;
   private escrowAddr: string | null = null;
@@ -571,11 +574,14 @@ export class TxBuilder implements ITxBuilder {
       };
     }
 
-    // Fallback: no settings NFT configured (development mode)
-    this.logger.warn(
-      'SETTINGS_NFT_POLICY_ID not set — using un-parameterized settings validator. ' +
-      'This will NOT work on-chain for updates. Set SETTINGS_NFT_POLICY_ID and SETTINGS_NFT_ASSET_NAME.',
-    );
+    // Fallback: no settings NFT configured (development mode) — warn only once
+    if (!this.warnedSettingsNft) {
+      this.warnedSettingsNft = true;
+      this.logger.warn(
+        'SETTINGS_NFT_POLICY_ID not set — using un-parameterized settings validator. ' +
+        'This will NOT work on-chain for updates. Set SETTINGS_NFT_POLICY_ID and SETTINGS_NFT_ASSET_NAME.',
+      );
+    }
     return {
       type: 'PlutusV3' as const,
       script: applyDoubleCborEncoding(settingsBp.compiledCode),
