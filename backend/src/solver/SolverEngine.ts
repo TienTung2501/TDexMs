@@ -548,18 +548,32 @@ export class SolverEngine {
         try {
           submittedTxHash = await this.signAndSubmitTx(txResult.unsignedTx);
         } catch (signErr) {
-          // Revert FILLING â†’ ACTIVE on sign/submit failure
-          for (const intent of batch.intents) {
-            const intentId = await this.resolveIntentId(
-              intent.utxoRef.txHash,
-              intent.utxoRef.outputIndex,
-            );
-            if (intentId) {
-              await this.intentRepo.updateStatus(intentId, 'ACTIVE');
-            }
-          }
           const errMsg = signErr instanceof Error ? signErr.message : String(signErr);
-          throw new Error(`TX sign/submit failed: ${errMsg}`);
+          // "All inputs are spent" / "already been included" means the TX landed on-chain
+          // before this submit attempt (e.g. a previous retry already confirmed it).
+          // Treat as success: skip FILLING→ACTIVE revert and proceed directly to awaitTx.
+          if (
+            errMsg.includes('All inputs are spent') ||
+            errMsg.includes('already been included')
+          ) {
+            this.logger.info(
+              { txHash: txResult.txHash, poolId: batch.poolId },
+              'TX already included on-chain — skipping re-submit, awaiting confirmation',
+            );
+            submittedTxHash = txResult.txHash;
+          } else {
+            // Genuine failure — revert FILLING → ACTIVE so the batch can be retried
+            for (const intent of batch.intents) {
+              const intentId = await this.resolveIntentId(
+                intent.utxoRef.txHash,
+                intent.utxoRef.outputIndex,
+              );
+              if (intentId) {
+                await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+              }
+            }
+            throw new Error(`TX sign/submit failed: ${errMsg}`);
+          }
         }
 
         this.logger.info(

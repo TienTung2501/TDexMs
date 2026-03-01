@@ -105,8 +105,11 @@ export class ChainSync {
           : 'lovelace';
 
         // Physical reserves from the pool UTxO value
-        const physicalA = poolUtxo.value[unitA] ?? 0n;
-        const physicalB = poolUtxo.value[unitB] ?? 0n;
+        // Guard against cache deserialization edge-cases: ensure we have actual bigints
+        const rawA = poolUtxo.value[unitA] ?? 0n;
+        const rawB = poolUtxo.value[unitB] ?? 0n;
+        const physicalA = typeof rawA === 'bigint' ? rawA : BigInt(String(rawA));
+        const physicalB = typeof rawB === 'bigint' ? rawB : BigInt(String(rawB));
 
         // Parse inline datum for protocol fees, total LP tokens, etc.
         // PoolDatum = Constr(0, [pool_nft, asset_a, asset_b, total_lp_tokens,
@@ -118,9 +121,12 @@ export class ChainSync {
           try {
             const decoded = Data.from(poolUtxo.datum) as Constr<Data>;
             if (decoded.fields.length >= 8) {
-              totalLpTokens = decoded.fields[3] as bigint;
-              protocolFeesA = decoded.fields[5] as bigint;
-              protocolFeesB = decoded.fields[6] as bigint;
+              const rawLp = decoded.fields[3];
+              const rawFeeA = decoded.fields[5];
+              const rawFeeB = decoded.fields[6];
+              totalLpTokens = typeof rawLp === 'bigint' ? rawLp : BigInt(String(rawLp));
+              protocolFeesA = typeof rawFeeA === 'bigint' ? rawFeeA : BigInt(String(rawFeeA));
+              protocolFeesB = typeof rawFeeB === 'bigint' ? rawFeeB : BigInt(String(rawFeeB));
             }
           } catch (e) {
             this.logger.debug({ poolId: pool.id, err: e }, 'Failed to parse pool datum');

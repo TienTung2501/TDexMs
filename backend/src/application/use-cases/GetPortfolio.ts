@@ -120,7 +120,10 @@ export class GetPortfolio {
       for (const [unit, qty] of Object.entries(utxo.value)) {
         if (unit === 'lovelace') continue;
         const prev = balances.get(unit) ?? 0n;
-        balances.set(unit, prev + BigInt(qty));
+        // Guard against cache deserialization edge-cases where a { __bigint__: "x" }
+        // tagged object slips through instead of an actual bigint
+        const qtyBig = typeof qty === 'bigint' ? qty : BigInt(String(qty));
+        balances.set(unit, prev + qtyBig);
       }
     }
 

@@ -140,8 +140,12 @@ export class CacheService {
       // Retrieve the raw string we stored (Upstash returns it as-is when stored as string)
       const raw = await this.redis.get<string>(key);
       if (raw === null || raw === undefined) return null;
-      // If Upstash already parsed it as an object (non-string cache hit), return directly
-      if (typeof raw !== 'string') return raw as unknown as T;
+      // Upstash sometimes auto-parses the stored JSON string into a plain JS object.
+      // In that case we MUST re-serialize and run through safeDeserialize so that
+      // BigInt tags ({ __bigint__: "123" }) are revived back to actual BigInt values.
+      // Returning the pre-parsed object directly leaves tagged objects in place of bigints,
+      // causing "[object Object]" strings / "Cannot convert [object Object] to BigInt" errors.
+      if (typeof raw !== 'string') return safeDeserialize<T>(JSON.stringify(raw));
       return safeDeserialize<T>(raw);
     } catch (err) {
       this.logger.debug({ err, key }, 'Cache get failed (graceful)');
