@@ -95,7 +95,9 @@ export default function PortfolioPage() {
     isConnected ? address ?? undefined : undefined
   );
   const hasRealLpData = lpPositions.length > 0;
-  const lpTabCount = hasRealLpData ? lpPositions.length : positions.length;
+  // Only count legacy positions that have real LP token balances (not phantom entries)
+  const realLegacyPositions = positions.filter((p) => p.lp_balance > 0);
+  const lpTabCount = hasRealLpData ? lpPositions.length : realLegacyPositions.length;
   const lpTabLoading = hasRealLpData ? lpOnChainLoading : lpLoading;
 
   // Pool lookup map for resolving real token names in LP positions
@@ -701,7 +703,7 @@ export default function PortfolioPage() {
                     );
                   })}
                 </div>
-              ) : positions.length === 0 ? (
+              ) : realLegacyPositions.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
                   <Droplets className="h-8 w-8 mx-auto mb-2 opacity-30" />
                   <p className="text-sm">No LP positions</p>
@@ -715,7 +717,7 @@ export default function PortfolioPage() {
               ) : (
                 /* ── Legacy LP positions (from /portfolio/liquidity) ── */
                 <div className="divide-y">
-                  {positions.map((pos, idx) => {
+                  {realLegacyPositions.map((pos, idx) => {
                     const poolMeta = pos.poolId ? poolsById.get(pos.poolId) : undefined;
                     const [splitA, splitB] = (pos.pair || "").split("_");
                     const tickerA = splitA || poolMeta?.assetA.ticker || "Token A";

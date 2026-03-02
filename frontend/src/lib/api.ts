@@ -26,7 +26,11 @@ async function apiFetch<T>(
   }
 
   const res = await fetch(url, {
-    cache: "no-store",
+    // Use "no-cache" (not "no-store") to allow conditional 304 revalidation.
+    // React Query manages freshness via staleTime — the browser HTTP cache
+    // can still serve 304 responses for unchanged data, reducing bandwidth.
+    // "no-store" was previously used but forced full round-trips on every call.
+    cache: "no-cache",
     ...init,
     headers: {
       "Content-Type": "application/json",

@@ -48,8 +48,10 @@ export function GlobalWebSocketProvider({ children }: { children: React.ReactNod
           // If pool reserve or price changes
           if (msg.type === "poolUpdate" || msg.type === "pool:update") {
              queryClient.invalidateQueries({ queryKey: ["pool", msg.data?.poolId] });
-             // Invalidate candle cache briefly so chart can pick it up on background refetch
-             queryClient.invalidateQueries({ queryKey: ["getChartCandles", msg.data?.poolId] });
+             // Note: candle cache is NOT invalidated here — candles have their own
+             // 60s refetchInterval and 5min staleTime. Invalidating on every pool
+             // reserve change caused excessive chart refetches (pool updates fire
+             // on every swap/LP action, which is too frequent for chart data).
           }
 
         } catch {

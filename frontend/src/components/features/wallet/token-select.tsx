@@ -22,7 +22,7 @@ interface TokenSelectProps {
   excludeTicker?: string;
   balances?: Record<string, number>;
   /** Pool list for showing "no pool" indicators (display only, no filtering) */
-  availablePools?: Array<{ assetA: { policyId: string; ticker?: string }; assetB: { policyId: string; ticker?: string } }>;
+  availablePools?: Array<{ assetA: { policyId: string; assetName?: string; ticker?: string }; assetB: { policyId: string; assetName?: string; ticker?: string } }>;
   /** The token on the other side — used for "no pool" indicator display */
   pairedWith?: Token;
 }
@@ -146,9 +146,17 @@ export function TokenSelectDialog({
   // Build set of tickers that have pool pairings with the paired token (for UI indicators only)
   const pairedTickers = useMemo(() => {
     if (!pairedWith || !availablePools || availablePools.length === 0) return null;
-    const matchesPaired = (asset: { policyId: string; ticker?: string }) =>
-      asset.policyId === pairedWith.policyId ||
-      (asset.ticker && pairedWith.ticker && asset.ticker.toUpperCase() === pairedWith.ticker.toUpperCase());
+    // Match using composite key (policyId + assetName) to avoid false positives
+    // when multiple tokens share the same policyId (e.g. tBTC and tUSD).
+    const matchesPaired = (asset: { policyId: string; assetName?: string; ticker?: string }) => {
+      // ADA special case — policyId is empty
+      if (!pairedWith.policyId && !asset.policyId) return true;
+      // Match by policyId AND assetName (full on-chain identity)
+      if (asset.policyId === pairedWith.policyId && asset.assetName === pairedWith.assetName) return true;
+      // Fallback: ticker match (for tokens without assetName in pool data)
+      if (asset.ticker && pairedWith.ticker && asset.ticker.toUpperCase() === pairedWith.ticker.toUpperCase()) return true;
+      return false;
+    };
     const tickers = new Set<string>();
     for (const pool of availablePools) {
       if (matchesPaired(pool.assetA)) {

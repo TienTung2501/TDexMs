@@ -150,7 +150,7 @@ export function usePools(params?: {
       order: params?.order,
       search: params?.search,
       state: params?.state || "ACTIVE",
-      limit: "50",
+      limit: "100",
     }),
     refetchInterval: 30_000
   });
@@ -342,7 +342,10 @@ export function useCandles(
       }));
     },
     enabled: !!poolId,
-    initialData: [],
+    placeholderData: [],    // Use placeholderData instead of initialData — avoids
+                             // treating empty array as "fresh" data (which would skip
+                             // the loading skeleton and show a blank chart)
+    staleTime: 5 * 60_000, // 5 min — candle data rarely changes, no need for 5s global default
     refetchInterval: 60_000, // Safety net: refresh candles every 60s if WS is down
   });
 
@@ -362,7 +365,8 @@ export function usePrice(poolId: string | undefined) {
     },
     enabled: !!poolId,
     refetchInterval: 10_000,
-    initialData: "0"
+    staleTime: 30_000,      // 30s — price updates frequently but 5s global is too aggressive
+    placeholderData: "0"    // Use placeholderData so loading state shows properly
   });
 
   return { price: data || "0", loading, isRefetching, error };
@@ -687,7 +691,7 @@ export function usePortfolioHistory(
     queryFn: () => getPortfolioHistory(address!, { status: statusFilter }),
     enabled: !!address,
     refetchInterval: 30_000,
-    initialData: []
+    placeholderData: []
   });
 
   return { history: data || [], loading, isRefetching, error, refetch };

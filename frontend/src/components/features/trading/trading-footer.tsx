@@ -166,11 +166,11 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
             }`}
           >
             {t.label}
-            {t.count !== undefined && t.count > 0 && (
+            {/* {t.count !== undefined && t.count > 0 && (
               <span className="bg-primary/10 text-primary text-[10px] px-1.5 py-0.5 rounded-full font-semibold">
                 {t.count}
               </span>
-            )}
+            )} */}
           </button>
         ))}
         {/* Pair context badge */}
