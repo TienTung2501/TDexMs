@@ -26,6 +26,7 @@ async function apiFetch<T>(
   }
 
   const res = await fetch(url, {
+    cache: "no-store",
     ...init,
     headers: {
       "Content-Type": "application/json",

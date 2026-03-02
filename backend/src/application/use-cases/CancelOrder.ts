@@ -4,6 +4,7 @@
 import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
 import { OrderNotFoundError, UnauthorizedError } from '../../domain/errors/index.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export interface CancelOrderInput {
   orderId: string;
@@ -41,6 +42,13 @@ export class CancelOrder {
       // Order not yet on-chain, just mark cancelled in DB
       order.markCancelled();
       await this.orderRepo.save(order);
+      getEventBus().emit('order.statusChanged', {
+        orderId: input.orderId,
+        oldStatus: props.status as any,
+        newStatus: 'CANCELLED',
+        creator: props.creator,
+        timestamp: Date.now(),
+      });
       return {
         orderId: input.orderId,
         unsignedTx: '',
@@ -59,6 +67,13 @@ export class CancelOrder {
     // CANCELLING → CANCELLED two-step). This is safe because canBeCancelled() already guards
     // the allowed states strictly. The subsequent confirmTx call is idempotent.
     await this.orderRepo.updateStatus(input.orderId, 'CANCELLED');
+    getEventBus().emit('order.statusChanged', {
+      orderId: input.orderId,
+      oldStatus: props.status as any,
+      newStatus: 'CANCELLED',
+      creator: props.creator,
+      timestamp: Date.now(),
+    });
 
     return {
       orderId: input.orderId,

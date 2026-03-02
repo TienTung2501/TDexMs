@@ -19,6 +19,7 @@ import {
   OrderNotFoundError,
   InvalidSwapParamsError,
 } from '../../domain/errors/index.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export interface ExecuteOrderInput {
   /** DB order UUID */
@@ -92,6 +93,12 @@ export class ExecuteOrderUseCase {
     // (handled by OrderExecutorCron or a future POST /tx/confirm hook).
     if (props.status === 'ACTIVE') {
       await this.orderRepo.updateStatus(input.orderId, 'PENDING');
+      getEventBus().emit('order.statusChanged', {
+        orderId: input.orderId,
+        oldStatus: 'ACTIVE',
+        newStatus: 'PENDING',
+        timestamp: Date.now(),
+      });
     }
 
     return {

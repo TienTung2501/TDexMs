@@ -4,6 +4,7 @@
 import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
 import { IntentNotFoundError } from '../../domain/errors/index.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export interface CancelIntentInput {
   intentId: string;
@@ -45,6 +46,15 @@ export class CancelIntent {
     // user never signs or submits the cancel TX.
     intent.markCancelling();
     await this.intentRepo.save(intent);
+
+    // Emit domain event for real-time broadcast
+    getEventBus().emit('intent.statusChanged', {
+      intentId: input.intentId,
+      oldStatus: 'ACTIVE',
+      newStatus: 'CANCELLING',
+      creator: intent.creator,
+      timestamp: Date.now(),
+    });
 
     return {
       intentId: input.intentId,

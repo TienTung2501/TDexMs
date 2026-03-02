@@ -23,6 +23,7 @@
 import { getLogger } from '../../config/logger.js';
 import type { PrismaClient } from '@prisma/client';
 import type { BlockfrostClient } from '../cardano/BlockfrostClient.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export class GhostCleanupCron {
   private readonly logger;
@@ -128,6 +129,12 @@ export class GhostCleanupCron {
                 data: { status: 'ACTIVE' },
               });
               promoted++;
+              getEventBus().emit('intent.statusChanged', {
+                intentId: intent.id,
+                oldStatus: 'CREATED',
+                newStatus: 'ACTIVE',
+                timestamp: Date.now(),
+              });
               this.logger.info(
                 { intentId: intent.id, txHash: intent.escrowTxHash },
                 'Ghost cleanup: promoted confirmed intent → ACTIVE',
@@ -201,6 +208,12 @@ export class GhostCleanupCron {
                 data: { status: 'ACTIVE' },
               });
               promoted++;
+              getEventBus().emit('order.statusChanged', {
+                orderId: order.id,
+                oldStatus: 'CREATED',
+                newStatus: 'ACTIVE',
+                timestamp: Date.now(),
+              });
               this.logger.info(
                 { orderId: order.id, txHash: order.escrowTxHash },
                 'Ghost cleanup: promoted confirmed order → ACTIVE',
@@ -338,6 +351,12 @@ export class GhostCleanupCron {
             data: { status: 'ACTIVE' },
           });
           rescued++;
+          getEventBus().emit('intent.statusChanged', {
+            intentId: intent.id,
+            oldStatus: 'CANCELLING',
+            newStatus: 'ACTIVE',
+            timestamp: Date.now(),
+          });
           this.logger.info(
             { intentId: intent.id },
             'Ghost cleanup: rescued stuck CANCELING intent back to ACTIVE',

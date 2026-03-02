@@ -27,6 +27,7 @@ import type { IIntentRepository } from '../../domain/ports/IIntentRepository.js'
 import type { IOrderRepository } from '../../domain/ports/IOrderRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
 import type { Intent } from '../../domain/entities/Intent.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export class ReclaimKeeperCron {
   private readonly logger;
@@ -121,6 +122,7 @@ export class ReclaimKeeperCron {
     const expiredIntents = await this.intentRepo.markExpired(now);
     if (expiredIntents > 0) {
       this.logger.info({ count: expiredIntents }, 'Marked intents as expired');
+      // Note: markExpired is a bulk op - individual events are emitted by ChainSync
     }
 
     // Only process orders if enabled
@@ -220,6 +222,12 @@ export class ReclaimKeeperCron {
           'Intent escrow UTxO already spent on-chain — marking RECLAIMED in DB',
         );
         await this.intentRepo.updateStatus(intent.id, 'RECLAIMED');
+        getEventBus().emit('intent.statusChanged', {
+          intentId: intent.id,
+          oldStatus: 'EXPIRED',
+          newStatus: 'RECLAIMED',
+          timestamp: Date.now(),
+        });
         return;
       }
       throw err;
@@ -250,6 +258,13 @@ export class ReclaimKeeperCron {
 
     // Only update DB after confirmed on-chain
     await this.intentRepo.updateStatus(intent.id, 'RECLAIMED');
+    getEventBus().emit('intent.statusChanged', {
+      intentId: intent.id,
+      oldStatus: 'EXPIRED',
+      newStatus: 'RECLAIMED',
+      settlementTxHash: submittedHash,
+      timestamp: Date.now(),
+    });
 
     this.logger.info(
       { intentId: intent.id, txHash: submittedHash },
@@ -330,6 +345,12 @@ export class ReclaimKeeperCron {
           'Order UTxO already spent on-chain — marking CANCELLED in DB',
         );
         await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+        getEventBus().emit('order.statusChanged', {
+          orderId: order.id,
+          oldStatus: 'EXPIRED',
+          newStatus: 'CANCELLED',
+          timestamp: Date.now(),
+        });
         return;
       }
       throw err;
@@ -359,6 +380,12 @@ export class ReclaimKeeperCron {
 
     // Only update DB after confirmed on-chain — mark CANCELLED since funds are returned
     await this.orderRepo.updateStatus(order.id, 'CANCELLED');
+    getEventBus().emit('order.statusChanged', {
+      orderId: order.id,
+      oldStatus: 'EXPIRED',
+      newStatus: 'CANCELLED',
+      timestamp: Date.now(),
+    });
 
     this.logger.info(
       { orderId: order.id, txHash: submittedHash },

@@ -24,6 +24,7 @@ import type { IChainProvider } from '../domain/ports/IChainProvider.js';
 import type { WsServer } from '../interface/ws/WsServer.js';
 import type { CandlestickService } from '../application/services/CandlestickService.js';
 import { getPrisma } from '../infrastructure/database/prisma-client.js';
+import { getEventBus } from '../domain/events/index.js';
 import { Lucid, Blockfrost, type LucidEvolution } from '@lucid-evolution/lucid';
 
 export interface SolverConfig {
@@ -228,7 +229,12 @@ export class SolverEngine {
         );
         // Chỉ gọi API update xuống Database, không cần modify object dbIntent
         await this.intentRepo.updateStatus(dbIntent.id, 'ACTIVE');
-        
+        getEventBus().emit('intent.statusChanged', {
+          intentId: dbIntent.id,
+          oldStatus: 'CREATED',
+          newStatus: 'ACTIVE',
+          timestamp: Date.now(),
+        });
       } 
       // Chuyển thành "else if" để nếu nó đã là CREATED ở trên thì không lọt vào đây nữa
       else if (dbIntent.status !== 'ACTIVE' && dbIntent.status !== 'FILLING' && dbIntent.status !== 'PARTIALLY_FILLED') {
@@ -665,6 +671,13 @@ export class SolverEngine {
           );
           if (intentId) {
             await this.intentRepo.updateStatus(intentId, 'FILLING');
+            // Emit domain event so frontend knows intent is being processed
+            getEventBus().emit('intent.statusChanged', {
+              intentId,
+              oldStatus: 'ACTIVE',
+              newStatus: 'FILLING',
+              timestamp: Date.now(),
+            });
           }
         }
 
@@ -701,6 +714,12 @@ export class SolverEngine {
                   );
                   if (intentId) {
                     await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+                    getEventBus().emit('intent.statusChanged', {
+                      intentId,
+                      oldStatus: 'FILLING',
+                      newStatus: 'ACTIVE',
+                      timestamp: Date.now(),
+                    });
                   }
                 }
                 throw new Error(`TX sign/submit failed: ${signMsg}`);
@@ -908,6 +927,18 @@ export class SolverEngine {
                 lastTxHash: submittedTxHash,
                 timestamp: Date.now(),
               });
+
+              // Also emit domain event for any additional listeners
+              getEventBus().emit('pool.updated', {
+                poolId: pool.id,
+                action: 'reserves_updated',
+                reserveA: pool.reserveA.toString(),
+                reserveB: pool.reserveB.toString(),
+                price: newPrice.toString(),
+                tvlAda: pool.tvlAda.toString(),
+                lastTxHash: submittedTxHash,
+                timestamp: Date.now(),
+              });
           } catch (err) {
             this.logger.warn({ err }, 'Failed to update pool reserves after settlement');
           }
@@ -934,6 +965,12 @@ export class SolverEngine {
               );
               if (intentId) {
                 await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+                getEventBus().emit('intent.statusChanged', {
+                  intentId,
+                  oldStatus: 'FILLING',
+                  newStatus: 'ACTIVE',
+                  timestamp: Date.now(),
+                });
               }
             } catch { /* best-effort */ }
           }
@@ -961,6 +998,12 @@ export class SolverEngine {
               );
               if (intentId) {
                 await this.intentRepo.updateStatus(intentId, 'ACTIVE');
+                getEventBus().emit('intent.statusChanged', {
+                  intentId,
+                  oldStatus: 'FILLING',
+                  newStatus: 'ACTIVE',
+                  timestamp: Date.now(),
+                });
               }
             } catch {
               // Best-effort revert

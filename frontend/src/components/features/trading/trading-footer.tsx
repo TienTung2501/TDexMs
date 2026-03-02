@@ -12,6 +12,7 @@ import { useWallet } from "@/providers/wallet-provider";
 import { cancelIntent } from "@/lib/api";
 import { useTransaction } from "@/lib/hooks/use-transaction";
 import type { Token } from "@/lib/mock-data";
+import { useQueryClient } from "@tanstack/react-query";
 
 type TabId = "trades" | "intents";
 
@@ -59,6 +60,7 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
   const [tab, setTab] = useState<TabId>("trades");
   const { isConnected, address } = useWallet();
   const { execute: executeTx, TxToastContainer } = useTransaction();
+  const queryClient = useQueryClient();
   // Track which specific intent is being cancelled (per-row), not a global flag
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
@@ -127,6 +129,10 @@ export function TradingFooter({ poolId, inputToken, outputToken }: TradingFooter
         onSuccess: () => {
           setCancellingId(null);
           refetchIntents();
+          queryClient.invalidateQueries({ queryKey: ["intents"] });
+          queryClient.invalidateQueries({ queryKey: ["intents-paginated"] });
+          queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+          queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
         },
         onError: () => {
           // Wallet rejected or TX failed — clear lock and refetch to pick up

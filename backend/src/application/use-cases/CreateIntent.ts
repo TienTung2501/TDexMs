@@ -9,6 +9,7 @@ import type { ITxBuilder, BuildTxResult } from '../../domain/ports/ITxBuilder.js
 import { InvalidSwapParamsError } from '../../domain/errors/index.js';
 import { AssetId } from '../../domain/value-objects/Asset.js';
 import { MAX_DEADLINE_MS } from '../../shared/index.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export interface CreateIntentInput {
   quoteId?: string;
@@ -80,6 +81,15 @@ export class CreateIntent {
 
     // Persist
     await this.intentRepo.save(intent);
+
+    // Emit domain event for real-time broadcast
+    getEventBus().emit('intent.statusChanged', {
+      intentId,
+      oldStatus: null,
+      newStatus: 'CREATED',
+      creator: input.senderAddress,
+      timestamp: Date.now(),
+    });
 
     return {
       intentId,

@@ -13,7 +13,7 @@ const logger = getLogger().child({ service: 'websocket' });
 
 interface SubscribeMsg {
   type: 'subscribe';
-  channel: 'prices' | 'intent' | 'pool';
+  channel: 'prices' | 'intent' | 'pool' | 'order';
   params: Record<string, unknown>;
 }
 
@@ -47,6 +47,13 @@ export interface PoolUpdate {
   price: string;
   tvlAda: string;
   lastTxHash?: string;
+  timestamp: number;
+}
+
+export interface OrderUpdate {
+  orderId: string;
+  status: string;
+  executedIntervals?: number;
   timestamp: number;
 }
 
@@ -154,6 +161,16 @@ export class WsServer {
     }
   }
 
+  /** Send order update to subscribers */
+  broadcastOrder(update: OrderUpdate): void {
+    for (const client of this.clients.values()) {
+      const orders = client.subscriptions.get('order');
+      if (orders?.has(update.orderId) || orders?.has('*')) {
+        this.send(client.ws, { type: 'orderUpdate', data: update });
+      }
+    }
+  }
+
   /** Graceful shutdown */
   close(): void {
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
@@ -191,7 +208,7 @@ export class WsServer {
   private handleSubscribe(client: WsClient, msg: SubscribeMsg): void {
     const { channel, params } = msg;
 
-    if (!['prices', 'intent', 'pool'].includes(channel)) {
+    if (!['prices', 'intent', 'pool', 'order'].includes(channel)) {
       this.sendError(client.ws, `Unknown channel: ${channel}`);
       return;
     }
@@ -214,6 +231,9 @@ export class WsServer {
     } else if (channel === 'pool') {
       const poolId = (params.poolId as string) ?? '*';
       keys.add(poolId);
+    } else if (channel === 'order') {
+      const orderId = (params.orderId as string) ?? '*';
+      keys.add(orderId);
     }
 
     this.send(client.ws, {

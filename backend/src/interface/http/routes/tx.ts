@@ -9,6 +9,7 @@ import type { BlockfrostClient } from '../../../infrastructure/cardano/Blockfros
 import type { IIntentRepository } from '../../../domain/ports/IIntentRepository.js';
 import type { IOrderRepository } from '../../../domain/ports/IOrderRepository.js';
 import type { IPoolRepository } from '../../../domain/ports/IPoolRepository.js';
+import { getEventBus } from '../../../domain/events/index.js';
 
 export function createTxRouter(
   blockfrost: BlockfrostClient,
@@ -101,30 +102,55 @@ export function createTxRouter(
             const current = await intentRepo.findById(intentId);
             if (current && current.status === 'CANCELLING') {
               await intentRepo.updateStatus(intentId, 'CANCELLED');
+              getEventBus().emit('intent.statusChanged', {
+                intentId,
+                oldStatus: 'CANCELLING',
+                newStatus: 'CANCELLED',
+                creator: current.creator,
+                timestamp: Date.now(),
+              });
             }
           } else {
             const current = await intentRepo.findById(intentId);
             if (current && ['CREATED', 'PENDING'].includes(current.status)) {
+              const oldStatus = current.status;
               await intentRepo.updateStatus(intentId, 'ACTIVE');
+              getEventBus().emit('intent.statusChanged', {
+                intentId,
+                oldStatus: oldStatus as 'CREATED' | 'PENDING',
+                newStatus: 'ACTIVE',
+                creator: current.creator,
+                timestamp: Date.now(),
+              });
             }
           }
         }
 
-        // If an orderId was provided, update its status
-        // GUARD: Only promote to ACTIVE from CREATED/PENDING states.
         if (orderId && orderRepo) {
           const isCancel = action === 'cancel' || action === 'cancel_order';
           if (isCancel) {
-            // Guard: only confirm CANCELLED if the order hasn't already transitioned
-            // to a terminal state (FILLED, EXPIRED). Idempotent if already CANCELLED.
             const current = await orderRepo.findById(orderId);
             if (current && !['FILLED', 'EXPIRED'].includes(current.status)) {
+              const oldStatus = current.status;
               await orderRepo.updateStatus(orderId, 'CANCELLED');
+              getEventBus().emit('order.statusChanged', {
+                orderId,
+                oldStatus: oldStatus as any,
+                newStatus: 'CANCELLED',
+                timestamp: Date.now(),
+              });
             }
           } else {
             const current = await orderRepo.findById(orderId);
             if (current && ['CREATED', 'PENDING'].includes(current.status)) {
+              const oldStatus = current.status;
               await orderRepo.updateStatus(orderId, 'ACTIVE');
+              getEventBus().emit('order.statusChanged', {
+                orderId,
+                oldStatus: oldStatus as any,
+                newStatus: 'ACTIVE',
+                timestamp: Date.now(),
+              });
             }
           }
         }
@@ -135,9 +161,15 @@ export function createTxRouter(
         }
 
         // If a poolId was provided with create_pool action, promote CREATING → ACTIVE
-        // (pool was saved as CREATING when TX was built; confirm on-chain success here)
         if (poolId && action === 'create_pool' && poolRepo) {
           await poolRepo.updateState(poolId, 'ACTIVE');
+          getEventBus().emit('pool.updated', {
+            poolId,
+            action: 'created',
+            newState: 'ACTIVE',
+            lastTxHash: txHash,
+            timestamp: Date.now(),
+          });
         }
 
         // If a poolId was provided with deposit/withdraw, apply the deferred reserve update.
@@ -159,6 +191,16 @@ export function createTxRouter(
               volume: pool.volume24h,
               fees: pool.fees24h,
               price,
+            });
+            getEventBus().emit('pool.updated', {
+              poolId,
+              action: action as 'deposit' | 'withdraw',
+              reserveA: rA.toString(),
+              reserveB: rB.toString(),
+              price: price.toString(),
+              tvlAda: pool.tvlAda.toString(),
+              lastTxHash: txHash,
+              timestamp: Date.now(),
             });
           }
         }

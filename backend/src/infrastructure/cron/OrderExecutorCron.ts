@@ -29,6 +29,7 @@ import type { IPoolRepository } from '../../domain/ports/IPoolRepository.js';
 import type { ITxBuilder } from '../../domain/ports/ITxBuilder.js';
 import type { Order } from '../../domain/entities/Order.js';
 import type { Pool } from '../../domain/entities/Pool.js';
+import { getEventBus } from '../../domain/events/index.js';
 
 export class OrderExecutorCron {
   private readonly logger;
@@ -371,6 +372,12 @@ export class OrderExecutorCron {
     await this.orderRepo.save(order);
 
     const updatedProps = order.toProps();
+    getEventBus().emit('order.statusChanged', {
+      orderId: order.id,
+      oldStatus: 'ACTIVE',
+      newStatus: updatedProps.status as any,
+      timestamp: Date.now(),
+    });
     this.logger.info(
       {
         orderId: order.id,

@@ -50,6 +50,10 @@ import { UpdateSettingsUseCase } from './application/use-cases/UpdateSettingsUse
 import { createApp } from './interface/http/app.js';
 import { WsServer } from './interface/ws/WsServer.js';
 
+// Domain Events
+import { getEventBus } from './domain/events/index.js';
+import { registerWsEventHandlers } from './infrastructure/events/WsEventHandlers.js';
+
 // Solver
 import { SolverEngine } from './solver/SolverEngine.js';
 import { IntentCollector } from './solver/IntentCollector.js';
@@ -152,6 +156,10 @@ async function main(): Promise<void> {
   // 3. Interface Layer — HTTP + WebSocket
   // ──────────────────────────────────────────────
   const wsServer = new WsServer();
+
+  // Wire Domain Event Bus → WebSocket broadcasts
+  const eventBus = getEventBus();
+  registerWsEventHandlers(eventBus, wsServer);
 
   // Task 4: inject WsServer into liquidity use-cases so pool updates are broadcast in real-time
   const depositLiquidity = new DepositLiquidity(poolRepo, txBuilder, wsServer);

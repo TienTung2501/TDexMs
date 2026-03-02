@@ -29,6 +29,7 @@ import type { NormalizedPool } from "@/lib/hooks";
 import { createIntent, getQuote, type QuoteResponse } from "@/lib/api";
 import { cn, formatAmount } from "@/lib/utils";
 import { useTransaction } from "@/lib/hooks/use-transaction";
+import { useQueryClient } from "@tanstack/react-query";
 
 interface SwapCardProps {
   inputToken?: Token;
@@ -46,8 +47,7 @@ export function SwapCard({
   pools: externalPools,
 }: SwapCardProps = {}) {
   const { isConnected, address, changeAddress, balances } = useWallet();
-  const { execute, busy, TxToastContainer } = useTransaction();
-
+  const { execute, busy, TxToastContainer } = useTransaction();  const queryClient = useQueryClient();
   const [internalInputToken, setInternalInputToken] = useState<Token>(TOKENS.ADA);
   const [internalOutputToken, setInternalOutputToken] = useState<Token>(TOKENS.HOSKY);
   
@@ -251,7 +251,13 @@ export function SwapCard({
         successMsg: `Swap submitted! ${inputAmount} ${inputToken.ticker} → ${outputToken.ticker}`,
         action: "create_intent",
         extractId: (res) => ({ intentId: res.intentId }),
-        onSuccess: () => setInputAmount(""),
+        onSuccess: () => {
+          setInputAmount("");
+          queryClient.invalidateQueries({ queryKey: ["intents"] });
+          queryClient.invalidateQueries({ queryKey: ["intents-paginated"] });
+          queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+          queryClient.invalidateQueries({ queryKey: ["portfolio-summary"] });
+        },
       },
     );
   }, [pool, address, changeAddress, inputToken, outputToken, inputAmount, quote, serverQuote, slippage, execute]);

@@ -1,10 +1,12 @@
 // ═══════════════════════════════════════════
 // React Hooks — Data fetching from backend API
-// Uses SWR-like pattern with useState/useEffect
+// Powered by TanStack React Query for global cache,
+// deduplication, and automatic background refetching.
 // ═══════════════════════════════════════════
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
 import {
   listPools,
   getPool,
@@ -34,77 +36,6 @@ import {
   type CandleData,
 } from "@/lib/api";
 import { TOKENS, type Token } from "@/lib/mock-data";
-
-// ─── Generic fetch hook ─────────────────────
-// Implements stale-while-revalidate: shows cached data while background
-// fetching, never unmounts content for periodic refreshes.
-function useApi<T>(
-  fetcher: () => Promise<T>,
-  deps: unknown[] = [],
-  options?: { enabled?: boolean; fallback?: T; refetchInterval?: number }
-) {
-  const [data, setData] = useState<T | undefined>(options?.fallback);
-  const [error, setError] = useState<Error | null>(null);
-  // `initialLoading` is true ONLY until the first successful fetch completes.
-  // Background refetches never flip this back to true → no spinner flicker.
-  const [initialLoading, setInitialLoading] = useState(true);
-  // `isRefetching` signals a background refetch is in progress (optional UI indicator).
-  const [isRefetching, setIsRefetching] = useState(false);
-  const hasFetchedRef = useRef(false);
-  // Keep a stable ref to fallback so the reset effect below doesn't recreate on every render
-  const fallbackRef = useRef(options?.fallback);
-
-  const fetchData = useCallback(async () => {
-    if (options?.enabled === false) {
-      setInitialLoading(false);
-      return;
-    }
-    // Only mark as background refetch if we already have data
-    if (hasFetchedRef.current) {
-      setIsRefetching(true);
-    }
-    try {
-      const result = await fetcher();
-      setData(result);
-      setError(null);
-      hasFetchedRef.current = true;
-    } catch (err) {
-      setError(err as Error);
-    } finally {
-      setInitialLoading(false);
-      setIsRefetching(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // When the hook is disabled (e.g. wallet disconnected, poolId removed),
-  // reset data back to the fallback so stale results never persist.
-  const enabled = options?.enabled;
-  useEffect(() => {
-    if (enabled === false) {
-      setData(fallbackRef.current);
-      setError(null);
-      setInitialLoading(true);
-      hasFetchedRef.current = false;
-    }
-  }, [enabled]);
-
-  // Auto-refetch interval
-  useEffect(() => {
-    if (!options?.refetchInterval) return;
-    const id = setInterval(fetchData, options.refetchInterval);
-    return () => clearInterval(id);
-  }, [fetchData, options?.refetchInterval]);
-
-  // `loading` is now only true on the very first fetch (before any data arrives).
-  // Components should use `loading` for skeleton/spinner guards, and `isRefetching`
-  // for subtle background indicators (e.g. a small spinner in a corner).
-  return { data, loading: initialLoading, isRefetching, error, refetch: fetchData };
-}
 
 // ─── Pool Helpers ───────────────────────────
 export interface NormalizedPool {
@@ -212,18 +143,17 @@ export function usePools(params?: {
   search?: string;
   state?: string;
 }) {
-  const { data, loading, isRefetching, error, refetch } = useApi<PoolListResponse>(
-    () =>
-      listPools({
-        sortBy: params?.sortBy,
-        order: params?.order,
-        search: params?.search,
-        state: params?.state || "ACTIVE",
-        limit: "50",
-      }),
-    [params?.sortBy, params?.order, params?.search, params?.state],
-    { refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PoolListResponse>({
+    queryKey: ['pools', params?.sortBy, params?.order, params?.search, params?.state],
+    queryFn: () => listPools({
+      sortBy: params?.sortBy,
+      order: params?.order,
+      search: params?.search,
+      state: params?.state || "ACTIVE",
+      limit: "50",
+    }),
+    refetchInterval: 30_000
+  });
 
   const pools: NormalizedPool[] = (data?.data || []).map(normalizePool);
 
@@ -232,11 +162,12 @@ export function usePools(params?: {
 
 // ─── Single Pool Hook ───────────────────────
 export function usePool(poolId: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<PoolResponse>(
-    () => getPool(poolId!),
-    [poolId],
-    { enabled: !!poolId, refetchInterval: 15_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PoolResponse>({
+    queryKey: ['pool', poolId],
+    queryFn: () => getPool(poolId!),
+    enabled: !!poolId,
+    refetchInterval: 15_000
+  });
 
   const pool = data ? normalizePool(data) : undefined;
   return { pool, loading, isRefetching, error, refetch };
@@ -256,11 +187,11 @@ export interface NormalizedAnalytics {
 }
 
 export function useAnalytics() {
-  const { data, loading, isRefetching, error, refetch } = useApi<AnalyticsOverview>(
-    () => getAnalyticsOverview(),
-    [],
-    { refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<AnalyticsOverview>({
+    queryKey: ['analytics'],
+    queryFn: () => getAnalyticsOverview(),
+    refetchInterval: 30_000
+  });
 
   const analytics: NormalizedAnalytics | undefined = data
     ? {
@@ -338,16 +269,16 @@ export function useIntents(params?: { address?: string; status?: string; enabled
   // "user intents".
   const addressEnabled = params?.address !== undefined ? !!params.address : true;
   const hookEnabled = params?.enabled !== false && addressEnabled;
-  const { data, loading, isRefetching, error, refetch } = useApi<IntentListResponse>(
-    () =>
-      listIntents({
-        address: params?.address,
-        status: params?.status,
-        limit: "50",
-      }),
-    [params?.address, params?.status],
-    { enabled: hookEnabled, refetchInterval: hookEnabled ? 15_000 : undefined }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<IntentListResponse>({
+    queryKey: ['intents', params?.address, params?.status],
+    queryFn: () => listIntents({
+      address: params?.address,
+      status: params?.status,
+      limit: "50",
+    }),
+    enabled: hookEnabled,
+    refetchInterval: hookEnabled ? 15_000 : false
+  });
 
   const intents: NormalizedIntent[] = (data?.data || []).map((i) => {
     const inToken = assetToToken(i.inputAsset);
@@ -390,8 +321,9 @@ export function useCandles(
   decimalsA: number = 0,
   decimalsB: number = 0,
 ) {
-  const { data, loading, isRefetching, error, refetch } = useApi<CandleData[]>(
-    async () => {
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<CandleData[]>({
+    queryKey: ['getChartCandles', poolId, interval, decimalsA, decimalsB],
+    queryFn: async () => {
       if (!poolId) return [];
       const res = await getChartCandles({
         poolId,
@@ -409,9 +341,10 @@ export function useCandles(
         volume: Number(c.volume) / volFactor,
       }));
     },
-    [poolId, interval, decimalsA, decimalsB],
-    { enabled: !!poolId, fallback: [] }
-  );
+    enabled: !!poolId,
+    initialData: [],
+    refetchInterval: 60_000, // Safety net: refresh candles every 60s if WS is down
+  });
 
   // When poolId is absent (pair has no pool), always return [] so the chart
   // never shows stale candles from the previously selected pool.
@@ -420,15 +353,17 @@ export function useCandles(
 
 // ─── Price Hook ─────────────────────────────
 export function usePrice(poolId: string | undefined) {
-  const { data, loading, isRefetching, error } = useApi<string>(
-    async () => {
+  const { data, isLoading: loading, isFetching: isRefetching, error } = useQuery<string>({
+    queryKey: ['getChartPrice', poolId],
+    queryFn: async () => {
       if (!poolId) return "0";
       const res = await getChartPrice(poolId);
       return res.price;
     },
-    [poolId],
-    { enabled: !!poolId, refetchInterval: 10_000, fallback: "0" }
-  );
+    enabled: !!poolId,
+    refetchInterval: 10_000,
+    initialData: "0"
+  });
 
   return { price: data || "0", loading, isRefetching, error };
 }
@@ -520,17 +455,18 @@ export function useOrders(params?: {
   status?: string;
   type?: string;
 }) {
-  const { data, loading, isRefetching, error, refetch } = useApi<OrderListResponse>(
-    () =>
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<OrderListResponse>({
+    queryKey: ['orders', params?.creator, params?.status, params?.type],
+    queryFn: () =>
       listOrders({
         creator: params?.creator,
         status: params?.status,
         type: params?.type,
         limit: "50",
       }),
-    [params?.creator, params?.status, params?.type],
-    { enabled: true, refetchInterval: 15_000 }
-  );
+    enabled: true,
+    refetchInterval: 15_000 
+  });
 
   const orders: NormalizedOrder[] = (data?.items || []).map(normalizeOrder);
 
@@ -562,11 +498,12 @@ export function usePaginatedIntents(params: {
   const hookEnabled = params.enabled !== false && addressEnabled;
   const cursor = cursors[pageIndex];
 
-  const { data, loading, error, refetch } = useApi<IntentListResponse>(
-    () => listIntents({ address: params.address, status: params.status, cursor, limit: String(pageSize) }),
-    [params.address, params.status, cursor],
-    { enabled: hookEnabled }
-  );
+  const { data, isLoading: loading, error, refetch } = useQuery<IntentListResponse>({
+    queryKey: ['intents-paginated', params.address, params.status, cursor],
+    queryFn: () => listIntents({ address: params.address, status: params.status, cursor, limit: String(pageSize) }),
+    enabled: hookEnabled,
+    refetchInterval: hookEnabled ? 30_000 : false, // Safety net polling
+  });
 
   // Capture the next-page cursor returned by the backend
   useEffect(() => {
@@ -627,11 +564,12 @@ export function usePaginatedOrders(params: {
   const hookEnabled = params.enabled !== false;
   const cursor = cursors[pageIndex];
 
-  const { data, loading, error, refetch } = useApi<OrderListResponse>(
-    () => listOrders({ creator: params.creator, status: params.status, type: params.type, cursor, limit: String(pageSize) }),
-    [params.creator, params.status, params.type, cursor],
-    { enabled: hookEnabled }
-  );
+  const { data, isLoading: loading, error, refetch } = useQuery<OrderListResponse>({
+    queryKey: ['orders-paginated', params.creator, params.status, params.type, cursor],
+    queryFn: () => listOrders({ creator: params.creator, status: params.status, type: params.type, cursor, limit: String(pageSize) }),
+    enabled: hookEnabled,
+    refetchInterval: hookEnabled ? 30_000 : false, // Safety net polling
+  });
 
   useEffect(() => {
     const nextCursor = data?.cursor ?? undefined;
@@ -675,11 +613,11 @@ export function usePaginatedPools(params?: {
 
   const cursor = cursors[pageIndex];
 
-  const { data, loading, isRefetching, error, refetch } = useApi<PoolListResponse>(
-    () => listPools({ sortBy: params?.sortBy, order: params?.order, search: params?.search, state: params?.state || "ACTIVE", cursor, limit: String(pageSize) }),
-    [params?.sortBy, params?.order, params?.search, params?.state, cursor],
-    { refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PoolListResponse>({
+    queryKey: ['pools-paginated', params?.sortBy, params?.order, params?.search, params?.state, cursor],
+    queryFn: () => listPools({ sortBy: params?.sortBy, order: params?.order, search: params?.search, state: params?.state || "ACTIVE", cursor, limit: String(pageSize) }),
+    refetchInterval: 30_000 
+  });
 
   useEffect(() => {
     const nextCursor = data?.pagination?.cursor;
@@ -705,33 +643,36 @@ export function usePaginatedPools(params?: {
 
 // ─── Portfolio Hook ─────────────────────────
 export function usePortfolio(address: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioResponse>(
-    () => getPortfolio(address!),
-    [address],
-    { enabled: !!address, refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PortfolioResponse>({
+    queryKey: ['portfolio', address],
+    queryFn: () => getPortfolio(address!),
+    enabled: !!address,
+    refetchInterval: 30_000 
+  });
 
   return { portfolio: data, loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio Summary Hook ─────────────────
 export function usePortfolioSummary(address: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioSummary>(
-    () => getPortfolioSummary(address!),
-    [address],
-    { enabled: !!address, refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PortfolioSummary>({
+    queryKey: ['portfolio-summary', address],
+    queryFn: () => getPortfolioSummary(address!),
+    enabled: !!address,
+    refetchInterval: 30_000 
+  });
 
   return { summary: data, loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio Open Orders Hook ─────────────
 export function usePortfolioOpenOrders(address: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<OpenOrderEntry[]>(
-    () => getPortfolioOpenOrders(address!),
-    [address],
-    { enabled: !!address, refetchInterval: 15_000, fallback: [] }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<OpenOrderEntry[]>({
+    queryKey: ['portfolio-open-orders', address],
+    queryFn: () => getPortfolioOpenOrders(address!),
+    enabled: !!address,
+    refetchInterval: 15_000
+  });
 
   return { openOrders: data || [], loading, isRefetching, error, refetch };
 }
@@ -741,22 +682,25 @@ export function usePortfolioHistory(
   address: string | undefined,
   statusFilter?: string
 ) {
-  const { data, loading, isRefetching, error, refetch } = useApi<OrderHistoryEntry[]>(
-    () => getPortfolioHistory(address!, { status: statusFilter }),
-    [address, statusFilter],
-    { enabled: !!address, refetchInterval: 30_000, fallback: [] }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<OrderHistoryEntry[]>({
+    queryKey: ['portfolio-history', address, statusFilter],
+    queryFn: () => getPortfolioHistory(address!, { status: statusFilter }),
+    enabled: !!address,
+    refetchInterval: 30_000,
+    initialData: []
+  });
 
   return { history: data || [], loading, isRefetching, error, refetch };
 }
 
 // ─── Portfolio LP Positions Hook ────────────
 export function usePortfolioLiquidity(address: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<LpPositionEntry[]>(
-    () => getPortfolioLiquidity(address!),
-    [address],
-    { enabled: !!address, refetchInterval: 30_000, fallback: [] }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<LpPositionEntry[]>({
+    queryKey: ['portfolio-liquidity', address],
+    queryFn: () => getPortfolioLiquidity(address!),
+    enabled: !!address,
+    refetchInterval: 30_000
+  });
 
   return { positions: data || [], loading, isRefetching, error, refetch };
 }
@@ -765,11 +709,12 @@ export function usePortfolioLiquidity(address: string | undefined) {
  * GET /portfolio/:address endpoint (which uses IChainProvider to scan UTxOs).
  */
 export function usePortfolioLpPositions(address: string | undefined) {
-  const { data, loading, isRefetching, error, refetch } = useApi<PortfolioResponse>(
-    () => getPortfolio(address!),
-    [address],
-    { enabled: !!address, refetchInterval: 30_000 }
-  );
+  const { data, isLoading: loading, isFetching: isRefetching, error, refetch } = useQuery<PortfolioResponse>({
+    queryKey: ['portfolio-lp-positions', address],
+    queryFn: () => getPortfolio(address!),
+    enabled: !!address,
+    refetchInterval: 30_000 
+  });
 
   const lpPositions: LpPosition[] = data?.lpPositions ?? [];
   return { lpPositions, loading, isRefetching, error, refetch };

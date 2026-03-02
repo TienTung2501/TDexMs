@@ -13,6 +13,7 @@ import { getLogger } from '../../config/logger.js';
 import type { PrismaClient } from '@prisma/client';
 import { BlockfrostClient } from './BlockfrostClient.js';
 import { Data, type Constr } from '@lucid-evolution/lucid';
+import { getEventBus } from '../../domain/events/index.js';
 
 export class ChainSync {
   private readonly logger;
@@ -150,6 +151,18 @@ export class ChainSync {
           data,
         });
 
+        // Emit pool.updated event for WS broadcast
+        if (changed) {
+          getEventBus().emit('pool.updated', {
+            poolId: pool.id,
+            action: 'reserves_updated',
+            reserveA: physicalA.toString(),
+            reserveB: physicalB.toString(),
+            lastTxHash: poolUtxo.txHash,
+            timestamp: Date.now(),
+          });
+        }
+
         // Log reserves at debug level (reduced from info to avoid log noise)
         this.logger.debug(
           {
@@ -194,6 +207,12 @@ export class ChainSync {
             data: { status: 'ACTIVE' },
           });
           promotedCount++;
+          getEventBus().emit('intent.statusChanged', {
+            intentId: intent.id,
+            oldStatus: 'CREATED',
+            newStatus: 'ACTIVE',
+            timestamp: Date.now(),
+          });
           this.logger.info(
             { intentId: intent.id, txHash: intent.escrowTxHash },
             'Auto-promoted intent CREATED/PENDING → ACTIVE (on-chain TX confirmed)',
@@ -237,6 +256,12 @@ export class ChainSync {
             data: { status: 'ACTIVE' },
           });
           promotedCount++;
+          getEventBus().emit('order.statusChanged', {
+            orderId: order.id,
+            oldStatus: 'CREATED',
+            newStatus: 'ACTIVE',
+            timestamp: Date.now(),
+          });
           this.logger.info(
             { orderId: order.id, txHash: order.escrowTxHash },
             'Auto-promoted order CREATED/PENDING → ACTIVE (on-chain TX confirmed)',
@@ -258,13 +283,32 @@ export class ChainSync {
   /** Check and mark expired intents (including CREATED/PENDING that passed deadline) */
   private async checkExpiredIntents(): Promise<void> {
     const now = BigInt(Date.now());
-    const result = await this.prisma.intent.updateMany({
+
+    // Find IDs before bulk update so we can emit events per intent
+    const expiringIntents = await this.prisma.intent.findMany({
       where: {
         status: { in: ['CREATED', 'PENDING', 'ACTIVE', 'FILLING'] },
         deadline: { lte: now },
       },
+      select: { id: true, status: true },
+    });
+
+    if (expiringIntents.length === 0) return;
+
+    const result = await this.prisma.intent.updateMany({
+      where: { id: { in: expiringIntents.map((i) => i.id) } },
       data: { status: 'EXPIRED' },
     });
+
+    const eventBus = getEventBus();
+    for (const intent of expiringIntents) {
+      eventBus.emit('intent.statusChanged', {
+        intentId: intent.id,
+        oldStatus: intent.status as any,
+        newStatus: 'EXPIRED',
+        timestamp: Date.now(),
+      });
+    }
 
     if (result.count > 0) {
       this.logger.info({ count: result.count }, 'Marked intents expired');
@@ -274,13 +318,32 @@ export class ChainSync {
   /** Check and mark expired orders (including CREATED/PENDING that passed deadline) */
   private async checkExpiredOrders(): Promise<void> {
     const now = BigInt(Date.now());
-    const result = await this.prisma.order.updateMany({
+
+    // Find IDs before bulk update so we can emit events per order
+    const expiringOrders = await this.prisma.order.findMany({
       where: {
         status: { in: ['CREATED', 'PENDING', 'ACTIVE', 'PARTIALLY_FILLED'] },
         deadline: { lte: now },
       },
+      select: { id: true, status: true },
+    });
+
+    if (expiringOrders.length === 0) return;
+
+    const result = await this.prisma.order.updateMany({
+      where: { id: { in: expiringOrders.map((o) => o.id) } },
       data: { status: 'EXPIRED' },
     });
+
+    const eventBus = getEventBus();
+    for (const order of expiringOrders) {
+      eventBus.emit('order.statusChanged', {
+        orderId: order.id,
+        oldStatus: order.status as any,
+        newStatus: 'EXPIRED',
+        timestamp: Date.now(),
+      });
+    }
 
     if (result.count > 0) {
       this.logger.info({ count: result.count }, 'Marked orders expired');
