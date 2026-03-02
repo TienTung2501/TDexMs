@@ -56,6 +56,11 @@ export class IntentCollector {
     this.logger = getLogger().child({ service: 'intent-collector' });
   }
 
+  /** Get the escrow script address used for collecting intents */
+  getEscrowAddress(): string {
+    return this.escrowAddress;
+  }
+
   /** Collect all active, unexpired escrow intents from chain */
   async getActiveIntents(): Promise<EscrowIntent[]> {
     const utxos = await this.blockfrost.getUtxos(this.escrowAddress);

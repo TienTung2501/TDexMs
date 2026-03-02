@@ -79,10 +79,17 @@ export class SolverEngine {
    * Key: "{txHash}#{outputIndex}" — incremented each time the on-chain
    * Plutus script simulation rejects a solo settlement for that specific escrow.
    * After MAX_VALIDATOR_CRASHES solo failures we stop retrying the intent permanently
-   * for this process lifetime (avoids infinite loop on structurally bad intents).
+   * until the crash TTL expires (avoids infinite loop on structurally bad intents
+   * while still allowing recovery after transient issues resolve).
    */
   private readonly validatorCrashCounts = new Map<string, number>();
+  /** Timestamp when each escrow key was first crash-counted — expires after TTL */
+  private readonly validatorCrashTimestamps = new Map<string, number>();
   private static readonly MAX_VALIDATOR_CRASHES = 3;
+  /** How long before validator crash blacklist expires (30 minutes) */
+  private static readonly VALIDATOR_CRASH_TTL_MS = 30 * 60_000;
+  /** How long to keep a FILLING intent before reverting to ACTIVE (10 minutes) */
+  private static readonly FILLING_TIMEOUT_MS = 10 * 60_000;
 
   /** Get current solver status (thread-safe read) */
   getStatus(): SolverStatus {
@@ -248,12 +255,53 @@ export class SolverEngine {
       // Recovery check: if intent is FILLING with a pending settlementTxHash,
       // a previous iteration submitted a TX but timed out waiting for confirmation.
       // Don't re-settle — the TX may still confirm and consume the escrow UTxO.
+      // BUT: after FILLING_TIMEOUT_MS, check if the escrow UTxO is still on-chain.
+      // If it is, the TX failed and we can safely revert to ACTIVE for retry.
       if (dbIntent.status === 'FILLING' && dbIntent.settlementTxHash) {
-        this.logger.debug(
-          { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash },
-          'Skipping FILLING intent with pending settlement TX — awaiting on-chain confirmation',
-        );
-        continue;
+        const timeSinceUpdate = Date.now() - dbIntent.updatedAt.getTime();
+        if (timeSinceUpdate > SolverEngine.FILLING_TIMEOUT_MS) {
+          // Timeout elapsed — check if escrow UTxO is still available on-chain
+          try {
+            const escrowAddr = this.collector.getEscrowAddress();
+            if (escrowAddr && dbIntent.escrowTxHash) {
+              const utxos = await this.blockfrost.getUtxos(escrowAddr);
+              const stillOnChain = utxos.some(
+                (u) =>
+                  u.txHash === dbIntent.escrowTxHash &&
+                  u.outputIndex === dbIntent.escrowOutputIndex,
+              );
+              if (stillOnChain) {
+                this.logger.info(
+                  { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash, elapsedMs: timeSinceUpdate },
+                  'FILLING intent timed out — escrow UTxO still on-chain, reverting to ACTIVE for retry',
+                );
+                dbIntent.markActive();
+                await this.intentRepo.save(dbIntent);
+                // Don't skip — let it be re-processed this iteration
+              } else {
+                this.logger.info(
+                  { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash },
+                  'FILLING intent timed out — escrow UTxO consumed, TX likely confirmed (will be synced by ChainSync)',
+                );
+                continue;
+              }
+            } else {
+              continue; // No escrow address configured or no escrow TX hash — skip
+            }
+          } catch (err) {
+            this.logger.warn(
+              { intentId: dbIntent.id, err },
+              'Failed to check escrow UTxO for FILLING timeout — skipping this iteration',
+            );
+            continue;
+          }
+        } else {
+          this.logger.debug(
+            { intentId: dbIntent.id, txHash: dbIntent.settlementTxHash, elapsedMs: timeSinceUpdate },
+            'Skipping FILLING intent with pending settlement TX — awaiting on-chain confirmation',
+          );
+          continue;
+        }
       }
       // Skip intents whose deadline has already passed — the on-chain validator
       // will reject settlement TXs for expired intents.
@@ -266,13 +314,27 @@ export class SolverEngine {
       }
       // Skip intents whose escrow UTxO has caused repeated validator crashes —
       // they are structurally unsettleable (e.g. minOutput can never be satisfied).
+      // Crash blacklist expires after VALIDATOR_CRASH_TTL_MS to allow retry after
+      // transient issues (stale pool reserves, race conditions) resolve.
       const escrowKey = `${intent.utxoRef.txHash}#${intent.utxoRef.outputIndex}`;
-      if ((this.validatorCrashCounts.get(escrowKey) ?? 0) >= SolverEngine.MAX_VALIDATOR_CRASHES) {
-        this.logger.debug(
-          { escrowKey, intentId: dbIntent.id },
-          'Skipping escrow permanently blacklisted after validator crashes',
-        );
-        continue;
+      const crashCount = this.validatorCrashCounts.get(escrowKey) ?? 0;
+      const crashTimestamp = this.validatorCrashTimestamps.get(escrowKey) ?? 0;
+      if (crashCount >= SolverEngine.MAX_VALIDATOR_CRASHES) {
+        if (Date.now() - crashTimestamp > SolverEngine.VALIDATOR_CRASH_TTL_MS) {
+          // TTL expired — clear crash count and allow retry
+          this.validatorCrashCounts.delete(escrowKey);
+          this.validatorCrashTimestamps.delete(escrowKey);
+          this.logger.info(
+            { escrowKey, intentId: dbIntent.id },
+            'Validator crash blacklist expired — allowing retry',
+          );
+        } else {
+          this.logger.debug(
+            { escrowKey, intentId: dbIntent.id },
+            'Skipping escrow blacklisted after validator crashes (TTL not expired)',
+          );
+          continue;
+        }
       }
       intents.push(intent);
     }
@@ -404,8 +466,8 @@ export class SolverEngine {
       // Check profitability
       const surplus = this.batchBuilder.calculateSurplus(batch);
       if (surplus < this.config.minProfitLovelace) {
-        this.logger.debug(
-          { poolId: batch.poolId, surplus: surplus.toString() },
+        this.logger.info(
+          { poolId: batch.poolId, surplus: surplus.toString(), minRequired: this.config.minProfitLovelace.toString() },
           'Batch not profitable enough, skipping',
         );
         continue;
@@ -524,10 +586,13 @@ export class SolverEngine {
                   if (isSoloCrash) {
                     const newCount = crashCount + 1;
                     this.validatorCrashCounts.set(escrowKey, newCount);
+                    if (!this.validatorCrashTimestamps.has(escrowKey)) {
+                      this.validatorCrashTimestamps.set(escrowKey, Date.now());
+                    }
                     this.logger.error(
                       { escrowKey, crashCount: newCount, max: SolverEngine.MAX_VALIDATOR_CRASHES },
                       newCount >= SolverEngine.MAX_VALIDATOR_CRASHES
-                        ? 'Escrow permanently skipped after repeated validator crashes'
+                        ? 'Escrow blacklisted after repeated validator crashes (TTL: 30min)'
                         : 'Solo validator crash — will retry next iteration',
                     );
                   } else {
@@ -581,8 +646,8 @@ export class SolverEngine {
           // ⚡ VÁ LỖ HỔNG 2: Kiểm tra lợi nhuận cho Single Intent ⚡
           const singleSurplus = this.batchBuilder.calculateSurplus(singleBatch);
           if (singleSurplus < this.config.minProfitLovelace) {
-            this.logger.debug(
-              { utxoRef: intentKey, surplus: singleSurplus.toString() },
+            this.logger.info(
+              { utxoRef: intentKey, surplus: singleSurplus.toString(), minRequired: this.config.minProfitLovelace.toString() },
               'Single intent not profitable enough to settle individually, skipping',
             );
             this.collector.clearProcessing(refs); // Nhớ clearProcessing trước khi thoát
@@ -600,10 +665,13 @@ export class SolverEngine {
             if (isValidatorCrash) {
               const crashCount = (this.validatorCrashCounts.get(escrowKey) ?? 0) + 1;
               this.validatorCrashCounts.set(escrowKey, crashCount);
+              if (!this.validatorCrashTimestamps.has(escrowKey)) {
+                this.validatorCrashTimestamps.set(escrowKey, Date.now());
+              }
               this.logger.error(
                 { escrowKey, crashCount, max: SolverEngine.MAX_VALIDATOR_CRASHES, poolId: batch.poolId },
                 crashCount >= SolverEngine.MAX_VALIDATOR_CRASHES
-                  ? 'Escrow permanently skipped after repeated validator crashes'
+                  ? 'Escrow blacklisted after repeated validator crashes (TTL: 30min)'
                   : 'Solo intent validator crash — will retry next iteration',
               );
             } else {

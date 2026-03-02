@@ -164,7 +164,7 @@ export class ReclaimKeeperCron {
     // Find intents marked EXPIRED that still have an escrow UTxO reference
     const { items: expiredIntents } = await this.intentRepo.findMany({
       status: 'EXPIRED',
-      limit: 10,
+      limit: 50,
     });
 
     const reclaimable = expiredIntents.filter(
@@ -280,7 +280,7 @@ export class ReclaimKeeperCron {
   private async reclaimExpiredOrders(): Promise<void> {
     const { items: expiredOrders } = await this.orderRepo.findMany({
       status: 'EXPIRED',
-      limit: 10,
+      limit: 50,
     });
 
     const reclaimable = expiredOrders.filter(

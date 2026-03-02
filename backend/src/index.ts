@@ -264,7 +264,7 @@ async function main(): Promise<void> {
     env.BLOCKFROST_URL,
     env.BLOCKFROST_PROJECT_ID,
     env.CARDANO_NETWORK === 'mainnet' ? 'Mainnet' : 'Preprod',
-    3 * 60 * 60_000,
+    5 * 60_000, // Check every 5 minutes (was 3 hours — too slow for real-time UX)
     env.ORDER_ROUTES_ENABLED, // Only process orders if enabled
   );
 
@@ -289,7 +289,7 @@ async function main(): Promise<void> {
   const ghostCleanupCron = new GhostCleanupCron(
     prisma,
     blockfrost,
-    3 * 60 * 60_000,  // Check 6 tiếng / lần
+    30 * 60_000,          // Check every 30 minutes (was 3 hours)
     60 * 60_000,      // Xóa các record rác tồn tại quá 1 tiếng
     env.ORDER_ROUTES_ENABLED,
   );
