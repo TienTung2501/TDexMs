@@ -16,7 +16,7 @@ RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
 
 # Layer A – workspace manifests only  (invalidates on lockfile/package.json changes)
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml .npmrc ./
 COPY backend/package.json  ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
 COPY patches ./patches
@@ -33,16 +33,16 @@ COPY tsconfig.base.json ./
 COPY smartcontract/plutus.json ./smartcontract/plutus.json
 
 # Generate Prisma client, then compile with esbuild (replaces slow tsc)
-RUN cd backend && npx prisma generate && pnpm build:bundle
+RUN cd backend && pnpm build:bundle
 
 # Create self-contained production directory (resolves pnpm symlinks)
 RUN pnpm deploy --filter backend --prod /app/pruned
 
-# Copy compiled JS + Prisma schema, then copy the already-generated client
-# instead of running prisma generate a second time.
-RUN cp -r /app/backend/dist               /app/pruned/dist   \
- && cp -r /app/backend/prisma             /app/pruned/prisma \
- && cp -r /app/backend/node_modules/.prisma /app/pruned/node_modules/.prisma
+# Copy compiled JS + Prisma schema into pruned dir, then generate Prisma client
+# once in the pruned context (prisma generate is fast, ~3s)
+RUN cp -r /app/backend/dist   /app/pruned/dist   \
+ && cp -r /app/backend/prisma /app/pruned/prisma \
+ && cd /app/pruned && npx prisma generate
 
 # ── Stage 2: Production image ─────────────────────────
 FROM node:20-alpine AS runner
