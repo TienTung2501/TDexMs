@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "node esbuild.config.mjs",
+    "build:tsc": "tsc",
     "build:bundle": "node esbuild.config.mjs",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",

@@ -6,6 +6,24 @@ dist
 .prettierrc
 .eslintrc*
 *.log
+*.ps1
+build-output.txt
+prompttest.md
+
+# Documentation — not needed in Docker build context
+docs/
+docs-debug/
+docs-report/
+docs-site/
+
+# Root-level scripts (dev utilities)
+scripts/
+
+# Backend: dev/test artefacts
+backend/scripts/
+backend/test-pruned/
+backend/dist/
+
 cardano-data
 kupo-data
 .next

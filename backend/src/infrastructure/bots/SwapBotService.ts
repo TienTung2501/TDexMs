@@ -1,35 +1,24 @@
 /**
  * Swap Bot Service — Automated Trading Activity Bot
- *
- * Integrated service version of scripts/bot-swap.ts.
- * Creates swap intents at randomized intervals to simulate trading activity.
- * Uses MNEMONIC0, MNEMONIC1, MNEMONIC2 wallets — rotates between them.
- *
- * BEHAVIOR:
- *   - Picks a random pool and random direction (A→B or B→A)
- *   - Picks a small random amount (1–5% of the input reserve)
- *   - Submits an intent with 5% slippage tolerance
- *   - Waits 5–30 minutes before the next trade
- *   - If a wallet is low on tADA (<10 ADA), skips it
- *
- * Controlled by env: BOT_SWAP_ENABLED (default: false)
+ * Tối ưu hóa: Sử dụng khối lượng cố định (Fixed Range) thay vì % Pool
  */
 import {
   Lucid,
   Blockfrost,
   type LucidEvolution,
-  type Network,
 } from '@lucid-evolution/lucid';
 import { getLogger } from '../../config/logger.js';
 
 // ─── Config ────────────────────────────────────────────────────────
-const MIN_INTERVAL_MS = 30 * 60 * 1000;    // 30 minutes
-const MAX_INTERVAL_MS = 60 * 60 * 1000;   // 90 minutes
-const MIN_ADA_BALANCE = 10_000_000n;       // 10 ADA minimum
-const SLIPPAGE_BPS    = 500n;              // 5% slippage tolerance
-const INTENT_DEADLINE_MS = 4 * 3600 * 1000; // 4 hour deadline
-const SWAP_PERCENT_MIN = 1;
-const SWAP_PERCENT_MAX = 5;
+const MIN_INTERVAL_MS = 60 * 60 * 1000;     // 30 phút
+const MAX_INTERVAL_MS = 120 * 60 * 1000;     // 60 phút
+const MIN_ADA_BALANCE = 15_000_000n;        // Nâng lên 15 ADA để an toàn
+const SLIPPAGE_BPS    = 500n;               // 5% slippage
+const INTENT_DEADLINE_MS = 4 * 3600 * 1000; // 4 giờ
+
+// Ngưỡng Swap "nhỏ nhỏ" cố định (Lovelace)
+const MIN_ADA_SWAP = 3_000_000n;   // 5 ADA
+const MAX_ADA_SWAP = 8_000_000n;  // 30 ADA
 
 // ─── Types ─────────────────────────────────────────────────────────
 interface PoolInfo {
@@ -79,7 +68,6 @@ export class SwapBotService {
     this.running = true;
     this.logger.info('Swap bot service starting...');
 
-    // Initialize wallets
     for (let i = 0; i < this.config.walletSeeds.length; i++) {
       try {
         const lucid = await Lucid(
@@ -106,7 +94,6 @@ export class SwapBotService {
       return;
     }
 
-    // Run bot loop (non-blocking)
     this.loop().catch((err) => {
       this.logger.error({ err }, 'Swap bot loop crashed');
     });
@@ -127,7 +114,6 @@ export class SwapBotService {
         this.logger.error({ round, err }, 'Swap round failed');
       }
 
-      // Random wait between trades
       const waitMs = randomBetween(MIN_INTERVAL_MS, MAX_INTERVAL_MS);
       this.logger.info({ nextInMinutes: Math.round(waitMs / 60000) }, 'Next swap trade scheduled');
 
@@ -168,9 +154,19 @@ export class SwapBotService {
     const inputTicker = isBuyA ? (pool.assetB.ticker ?? 'B') : (pool.assetA.ticker ?? 'A');
     const outputTicker = isBuyA ? (pool.assetA.ticker ?? 'A') : (pool.assetB.ticker ?? 'B');
 
-    // 3. Compute swap amount
-    const pct = randomBetween(SWAP_PERCENT_MIN, SWAP_PERCENT_MAX);
-    const inputAmount = (reserveIn * BigInt(pct)) / 100n;
+    // 3. Compute swap amount (FIXED ADA RANGE)
+    let inputAmount: bigint;
+    if (inputAsset === 'lovelace') {
+      inputAmount = BigInt(randomBetween(Number(MIN_ADA_SWAP), Number(MAX_ADA_SWAP)));
+    } else if (outputAsset === 'lovelace') {
+      // Tính lượng Token tương đương ~5-30 ADA dựa trên tỷ giá pool hiện tại
+      const desiredAda = BigInt(randomBetween(Number(MIN_ADA_SWAP), Number(MAX_ADA_SWAP)));
+      inputAmount = (desiredAda * reserveIn) / reserveOut;
+    } else {
+      // Cặp Token/Token: dùng 0.2% reserve
+      inputAmount = (reserveIn * 2n) / 1000n;
+    }
+
     if (inputAmount <= 0n) {
       this.logger.info({ poolId: pool.poolId }, 'Input amount too small — skipping');
       return;
@@ -186,8 +182,10 @@ export class SwapBotService {
         const bal = aggregateBalances(utxos);
         const ada = bal['lovelace'] ?? 0n;
         if (ada < MIN_ADA_BALANCE) continue;
+
         const inputUnit = inputAsset === 'lovelace' ? 'lovelace' : inputAsset.replace('.', '');
         if ((bal[inputUnit] ?? 0n) < inputAmount) continue;
+
         selectedWallet = w;
         break;
       } catch {
@@ -196,19 +194,16 @@ export class SwapBotService {
     }
 
     if (!selectedWallet) {
-      this.logger.info('No wallet with sufficient balance — skipping round');
+      this.logger.info({ inputTicker, inputAmount: inputAmount.toString() }, 'No wallet with sufficient balance — skipping');
       return;
     }
 
     // 5. Compute min output with slippage
     const expectedOut = ammExpectedOutput(inputAmount, reserveIn, reserveOut, feeNum, feeDenom);
     const minOutput = (expectedOut * (10000n - SLIPPAGE_BPS)) / 10000n;
-    if (minOutput <= 0n) {
-      this.logger.info('Min output is 0 — skipping');
-      return;
-    }
-
-    const deadline = Date.now() + INTENT_DEADLINE_MS;
+    
+    // Tỷ lệ phần trăm thực tế so với reserve để logging
+    const actualPct = Number((inputAmount * 10000n) / reserveIn) / 100;
 
     this.logger.info(
       {
@@ -217,7 +212,7 @@ export class SwapBotService {
         inputTicker,
         outputTicker,
         poolId: pool.poolId.slice(0, 8),
-        pct,
+        pctOfReserve: actualPct + '%',
       },
       'Executing swap',
     );
@@ -230,7 +225,7 @@ export class SwapBotService {
       outputAsset,
       inputAmount: inputAmount.toString(),
       minOutput: minOutput.toString(),
-      deadline,
+      deadline: Date.now() + INTENT_DEADLINE_MS,
       partialFill: true,
     });
 
@@ -240,14 +235,12 @@ export class SwapBotService {
       '/tx/submit',
       { signedTx: signed.toCBOR() },
     );
+    
     if (submitResult.status !== 'accepted') {
       throw new Error(`TX rejected: ${submitResult.error ?? 'unknown'}`);
     }
 
-    this.logger.info(
-      { intentId: res.intentId, txHash: submitResult.txHash.slice(0, 16) },
-      'Swap intent submitted',
-    );
+    this.logger.info({ intentId: res.intentId, txHash: submitResult.txHash.slice(0, 16) }, 'Swap intent submitted');
 
     // 8. Wait for confirmation
     try {
@@ -260,17 +253,17 @@ export class SwapBotService {
             intentId: res.intentId,
             action: 'create_intent',
           });
-        } catch { /* ChainSync will handle */ }
+        } catch { /* ChainSync handles if fail */ }
       }
     } catch {
-      this.logger.warn('awaitTx error — continuing');
+      this.logger.warn('awaitTx timeout — continuing');
     }
   }
 
   private async apiGet<T>(path: string): Promise<T> {
     const r = await fetch(`${this.apiBase}${path}`);
     const body = (await r.json()) as T;
-    if (!r.ok) throw new Error(`GET ${path} → ${r.status}: ${JSON.stringify(body)}`);
+    if (!r.ok) throw new Error(`GET ${path} → ${r.status}`);
     return body;
   }
 
@@ -281,12 +274,12 @@ export class SwapBotService {
       body: JSON.stringify(payload),
     });
     const body = (await r.json()) as T;
-    if (!r.ok) throw new Error(`POST ${path} → ${r.status}: ${JSON.stringify(body)}`);
+    if (!r.ok) throw new Error(`POST ${path} → ${r.status}`);
     return body;
   }
 }
 
-// ─── Utility functions ─────────────────────────────────────────────
+// ─── Utilities ─────────────────────────────────────────────────────
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -313,11 +306,11 @@ function ammExpectedOutput(
   return numerator / denominator;
 }
 
-function aggregateBalances(utxos: { assets: Record<string, bigint> }[]): Record<string, bigint> {
+function aggregateBalances(utxos: any[]): Record<string, bigint> {
   const totals: Record<string, bigint> = {};
   for (const utxo of utxos) {
     for (const [unit, qty] of Object.entries(utxo.assets)) {
-      totals[unit] = (totals[unit] ?? 0n) + qty;
+      totals[unit] = (totals[unit] as bigint ?? 0n) + (qty as bigint);
     }
   }
   return totals;
