@@ -119,15 +119,15 @@ const TECHNICAL_SKILLS = {
     "Solidity / EVM (Basic)",
   ],
   fullstack: [
-    "React / Next.js",
     "TypeScript",
+    "React / Next.js",
     "TailwindCSS / ShadCN UI",
     "Figma",
     "Node.js / Express",
     "Python / FastAPI",
     "PostgreSQL / MySQL",
     "Redis (Basic)",
-    "REST APIs / IPFS",
+    "REST APIs",
     "Wallet Integrations",
   ],
   ai_devops: [
@@ -135,7 +135,6 @@ const TECHNICAL_SKILLS = {
     "Rapid MVP → Production Pipelines",
     "Smart Contract Simulation & Optimization",
     "Docker / CI/CD / GitHub Actions",
-    "Automated Testing & Debugging",
   ],
 };
 
