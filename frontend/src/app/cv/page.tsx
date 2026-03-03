@@ -75,8 +75,8 @@ const ALL_IMAGES = [
   { src: IPFS.top1_maintrack, title: "Giải Nhất Main Track - Cardano Hackathon 2025" },
   { src: IPFS.top5_student_01, title: "Top 5 Student Track - Aptos Hackathon" },
   { src: IPFS.top5_student_02, title: "Certificate - Vietnam Aptos Hackathon" },
-  { src: IPFS.giai3_nckh_nam2, title: "Giải Ba NCKH - Năm 2" },
-  { src: IPFS.giai2_nckh_nam3, title: "Giải Nhì NCKH - Năm 3" },
+  // { src: IPFS.giai3_nckh_nam2, title: "Giải Ba NCKH - Năm 2" },
+  // { src: IPFS.giai2_nckh_nam3, title: "Giải Nhì NCKH - Năm 3" },
   { src: IPFS.anh_luu_niem_01, title: "Ảnh lưu niệm NCKH" },
   { src: IPFS.anh_luu_niem_02, title: "Ảnh lưu niệm NCKH (2)" },
 ];
@@ -150,11 +150,11 @@ const SOFT_SKILLS = [
 ];
 
 const STRENGTHS = [
+  { label: "Tư duy logic, thích nghi tốt", icon: Cpu },
   { label: "Khả năng làm việc nhóm", icon: Users },
   { label: "Khả năng giao tiếp kết nối", icon: Globe },
   { label: "Khả năng giải quyết vấn đề", icon: Target },
   { label: "Khả năng tự học, nghiên cứu", icon: BookOpen },
-  { label: "Tư duy logic", icon: Cpu },
   { label: "Chịu đựng áp lực", icon: Sparkles },
 ];
 
@@ -220,20 +220,25 @@ const PROJECTS = [
   {
     title: "SolverNet DEX",
     subtitle: "Intent-Based Decentralized Exchange on Cardano",
-    period: "2024 – Present",
+    period: "2026 – Present",
     description:
-      "Dự án solo xây dựng từ đầu để chứng minh năng lực full-stack và smart contract. Sàn DEX thế hệ mới sử dụng kiến trúc solver-based intent thay thế AMM truyền thống.",
+      "Dự án solo xây dựng sàn DEX thế hệ mới sử dụng kiến trúc solver-based intent. Cung cấp cho mọi người nền tảng để tạo liquidity pool, đặt lệnh, swap, theo dõi phân tích và quản lý danh mục tài sản trên Cardano một cách tối ưu và thân thiện. Cung cấp module quản trịcho admin và người dùng để điều chỉnh tham số, quản lý pool, theo dõi hiệu suất.",
     tech: [
       "Aiken",
       "Plutus V3",
+      "Lucid",
+      "CIP 30 Wallet Integrations",
       "TypeScript",
-      "Next.js",
+      "Nextjs",
+      "Nodejs",
       "Express",
       "Prisma",
       "PostgreSQL",
+      "Redis",
+      "Docker",
     ],
     highlights: [
-      "7 Plutus V3 validators (Escrow, Pool, Order, Factory, Settings, LP/NFT policies)",
+      "Smartcontract (Escrow, Pool, Order, Factory, Settings, LP/NFT policies)",
       "Solver engine: NettingEngine → RouteOptimizer → BatchBuilder pipeline",
       "Full-stack: REST API, WebSocket real-time, Next.js 16 trading UI",
       "Clean Architecture (DDD) với hexagonal backend",
@@ -700,14 +705,14 @@ export default function CVPage() {
                       ))}
                     </div>
                     <div className="flex gap-3 text-xs">
-                      <a
+                      {/* <a
                         href={p.links.github}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
                       >
                         <Github className="h-3.5 w-3.5" /> GitHub
-                      </a>
+                      </a> */}
                       <a
                         href={p.links.live}
                         target="_blank"
@@ -733,11 +738,17 @@ export default function CVPage() {
             {/* - Catalyst Funded Projects - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
+                 <div className="flex items-start justify-between gap-3">
+
                 <SectionTitle
                   icon={Rocket}
                   title="Dự án gọi vốn - Project Catalyst"
                   subtitle="Cardano community-funded projects"
                 />
+                <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> 2023-2025
+                </span>
+                 </div>
                 <div className="space-y-4">
                   {CATALYST_PROJECTS.map((p) => (
                     <div key={p.fund} className="flex gap-3">
@@ -767,11 +778,18 @@ export default function CVPage() {
             {/* - Competitions - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
+                <div className="flex items-start justify-between gap-3">
+
                 <SectionTitle
                   icon={Trophy}
                   title="Cuộc thi"
                   subtitle="Hackathons & competitions"
                 />
+                <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> 2025
+                </span>
+                 </div>
+                
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {COMPETITIONS.map((c, i) => (
                     <button
@@ -802,11 +820,18 @@ export default function CVPage() {
             {/* - Scientific Research - */}
             <Card className="border-border/50 bg-card/50 backdrop-blur">
               <CardContent className="pt-5 pb-5">
+                 <div className="flex items-start justify-between gap-3">
+
                 <SectionTitle
                   icon={FlaskConical}
                   title="Nghiên cứu Khoa học"
                   subtitle="Nghiên cứu sinh viên cấp trường"
                 />
+                <span className="text-xs text-muted-foreground whitespace-nowrap flex items-center gap-1">
+                        <Calendar className="h-3 w-3" /> 2022-2024
+                </span>
+                 </div>
+                
                 <div className="space-y-3">
                   {RESEARCH.map((r, i) => (
                     <button

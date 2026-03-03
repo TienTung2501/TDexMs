@@ -370,4 +370,4 @@ Quy trình chuẩn để bảo vệ ví của bạn như sau:
 * **`ENV` trong Dockerfile** = Dán mật khẩu lên vỏ hộp (Ai cũng thấy).
 * **`--env` lúc Docker Run** = Chỉ nói thầm mật khẩu vào tai Bot khi nó bắt đầu làm việc (An toàn).
 
-**Bạn có muốn tôi kiểm tra lại file `Dockerfile` và `.dockerignore` của bạn để đảm bảo không có sơ hở nào khiến ví 70k ADA của bạn bị đe dọa không?**
+**Bạn có muốn tôi kiểm tra lại file `Dockerfile` và `.dockerignore` của bạn để đảm bảo không có sơ hở nào khiến ví 0 ADA của bạn bị đe dọa không?**
